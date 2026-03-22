@@ -2,7 +2,8 @@
 ### Microservices · Multi-Cloud (AWS + OpenStack) · SIEM · SOAR · AI
 
 > **Đồ án chuyên ngành — UIT**  
-> Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)  
+> Author: Hoàng Bảo Phước
+> Co-Author: Phạm Võ Khánh Hà
 > GVHD: Đỗ Thị Phương Uyên · 05/02/2026 → 30/05/2026
 
 ---
@@ -18,6 +19,110 @@ Internet → [DMZ: WireGuard + API Gateway + Keycloak]
          ← [Management: Bastion + Terraform + Ansible]
 
 OpenStack (Private Cloud) ←→ AWS (Public Cloud) via WireGuard tunnel
+```
+
+## Sơ đồ hệ thống chi tiết
+
+```mermaid
+flowchart LR
+    U[Users and Clients]
+    I[Internet]
+
+    subgraph AWS[AWS Public Cloud]
+        direction TB
+        subgraph AWS_DMZ[DMZ Zone]
+            WG_AWS[WireGuard Gateway AWS]
+            APIGW[API Gateway]
+            KC[Keycloak]
+        end
+
+        subgraph AWS_PRIVATE[Private Zone - AWS K3s]
+            direction LR
+            PAY[payment-service]
+            FRAUD[fraud-detection]
+            NOTI[notification-service]
+        end
+    end
+
+    subgraph OS[OpenStack Private Cloud]
+        direction TB
+        subgraph OS_DMZ[DMZ Zone]
+            WG_OS[WireGuard Gateway OpenStack]
+        end
+
+        subgraph OS_PRIVATE[Private Zone - OpenStack K3s]
+            direction LR
+            CORE[core-banking]
+            ACC[account-service]
+            TXN[transaction-service]
+            IDN[Identity Services]
+        end
+
+        SPIRE[SPIRE Server and Agent]
+        OPA[OPA Policy Engine]
+        ENVOY[Envoy Sidecars]
+    end
+
+    subgraph RESTRICTED[Restricted and Security Analytics Zone]
+        direction TB
+        WAZUH[Wazuh]
+        LOGSTASH[Logstash]
+        ELASTIC[Elasticsearch]
+        KIBANA[Kibana]
+        KAFKA[Kafka]
+        OPENSEARCH[OpenSearch]
+        AI[AI Engine and RAG]
+        SOAR[SOAR TheHive Cortex n8n]
+    end
+
+    subgraph MGMT[Management Zone]
+        BASTION[Bastion]
+        TF[Terraform]
+        ANS[Ansible]
+        KCTL[kubectl]
+    end
+
+    U --> I --> APIGW
+    APIGW --> KC
+    APIGW --> PAY
+    PAY --> FRAUD
+    PAY --> CORE
+    CORE --> ACC
+    CORE --> TXN
+
+    WG_AWS <-- WireGuard Tunnel --> WG_OS
+    APIGW --> WG_AWS
+    WG_OS --> CORE
+
+    PAY -. service identity .-> SPIRE
+    CORE -. service identity .-> SPIRE
+    PAY -. policy check .-> OPA
+    CORE -. policy check .-> OPA
+    ENVOY -. mTLS and authz .- PAY
+    ENVOY -. mTLS and authz .- CORE
+
+    PAY --> LOGSTASH
+    CORE --> LOGSTASH
+    WG_AWS --> WAZUH
+    WG_OS --> WAZUH
+    LOGSTASH --> ELASTIC
+    LOGSTASH --> KAFKA
+    WAZUH --> ELASTIC
+    KAFKA --> OPENSEARCH
+    ELASTIC --> KIBANA
+    ELASTIC --> AI
+    OPENSEARCH --> AI
+    AI --> SOAR
+    WAZUH --> SOAR
+
+    TF --> AWS
+    TF --> OS
+    ANS --> AWS
+    ANS --> OS
+    KCTL --> AWS_PRIVATE
+    KCTL --> OS_PRIVATE
+    BASTION --> TF
+    BASTION --> ANS
 ```
 
 ---

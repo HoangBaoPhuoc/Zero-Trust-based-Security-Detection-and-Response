@@ -1,0 +1,7 @@
+os_auth_url: "{{ lookup('env', 'OS_AUTH_URL') }}"
+os_username: "{{ lookup('env', 'OS_USERNAME') }}"
+os_password: "{{ lookup('env', 'OS_PASSWORD') }}"
+os_project_name: "{{ lookup('env', 'OS_PROJECT_NAME') }}"
+os_region_name: "{{ lookup('env', 'OS_REGION_NAME') }}"
+
+# TODO: populate from IMPLEMENTATION.md §3 and §13.3

@@ -1,0 +1,8 @@
+---
+- name: os-buffer setup
+  hosts: all
+  become: true
+  tasks:
+    - name: TODO
+      ansible.builtin.debug:
+        msg: "TODO: populate from IMPLEMENTATION.md"

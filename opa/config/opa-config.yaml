@@ -1,0 +1,11 @@
+services:
+  - name: opa-server
+
+decision_logs:
+  plugin: file
+
+plugins:
+  file:
+    path: /var/log/opa/decisions.log
+
+# TODO: populate from IMPLEMENTATION.md §5.2

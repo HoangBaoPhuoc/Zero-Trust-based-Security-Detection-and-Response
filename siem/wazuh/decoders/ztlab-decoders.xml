@@ -1,0 +1,6 @@
+<decoders>
+  <decoder name="ztlab-envoy">
+    <prematch>{"timestamp"</prematch>
+  </decoder>
+  <!-- TODO: populate from IMPLEMENTATION.md §7.1 -->
+</decoders>

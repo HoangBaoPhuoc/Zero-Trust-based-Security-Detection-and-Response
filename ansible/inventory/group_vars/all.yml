@@ -1,0 +1,4 @@
+trust_domain: ztlab.local
+siem_ip: 10.10.2.10
+wg_server_ip: 10.10.0.1
+# TODO: populate from IMPLEMENTATION.md §13.3
