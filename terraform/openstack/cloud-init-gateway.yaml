@@ -1,0 +1,60 @@
+#cloud-config
+users:
+  - name: ubuntu
+    groups: sudo
+    shell: /bin/bash
+    sudo:
+      - ALL=(ALL) NOPASSWD:ALL
+    ssh-authorized-keys:
+      - ${public_key}
+
+write_files:
+  - path: /etc/netplan/60-os-gateway-routes.yaml
+    owner: root:root
+    permissions: "0644"
+    content: |
+      network:
+        version: 2
+        ethernets:
+          ens3:
+            dhcp4: true
+            dhcp4-overrides:
+              route-metric: 100
+          ens4:
+            dhcp4: true
+            dhcp4-overrides:
+              use-routes: false
+          ens5:
+            dhcp4: true
+            dhcp4-overrides:
+              use-routes: false
+
+bootcmd:
+  - echo "os-gateway bootcmd at $(date)" >> /var/log/boot-commands.log
+  - ip route del default via 192.168.101.1 dev ens4 || true
+  - ip route del default via 192.168.102.1 dev ens5 || true
+  - ip route del 8.8.8.8 dev ens4 || true
+  - ip route del 8.8.4.4 dev ens4 || true
+  - ip route del 8.8.8.8 dev ens5 || true
+  - ip route del 8.8.4.4 dev ens5 || true
+  - ip route replace default via 192.168.100.1 dev ens3 metric 100 || true
+  - ip route replace 8.8.8.8 via 192.168.100.1 dev ens3 metric 10 || true
+  - ip route replace 8.8.4.4 via 192.168.100.1 dev ens3 metric 10 || true
+  - netplan generate || true
+  - netplan apply || true
+
+runcmd:
+  - echo "os-gateway runcmd started at $(date)" >> /var/log/cloud-init.log
+  - netplan apply || echo "netplan apply failed" >> /var/log/cloud-init.log
+  - ip route del default via 192.168.101.1 dev ens4 || true
+  - ip route del default via 192.168.102.1 dev ens5 || true
+  - ip route del 8.8.8.8 dev ens4 || true
+  - ip route del 8.8.4.4 dev ens4 || true
+  - ip route del 8.8.8.8 dev ens5 || true
+  - ip route del 8.8.4.4 dev ens5 || true
+  - ip route replace default via 192.168.100.1 dev ens3 metric 100 || true
+  - ip route replace 8.8.8.8 via 192.168.100.1 dev ens3 metric 10 || true
+  - ip route replace 8.8.4.4 via 192.168.100.1 dev ens3 metric 10 || true
+  - ip route show >> /var/log/cloud-init.log
+  - systemctl restart ssh || echo "SSH restart failed" >> /var/log/cloud-init.log
+  - echo "os-gateway completed at $(date)" >> /var/log/cloud-init.log

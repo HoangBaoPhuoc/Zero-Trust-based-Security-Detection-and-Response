@@ -27,6 +27,14 @@ resource "aws_security_group" "sg_dmz" {
     description = "SSH admin"
   }
 
+  ingress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [var.vpc_cidr]
+    description = "Forwarded traffic from internal subnets"
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -75,6 +83,14 @@ resource "aws_security_group" "sg_private" {
   }
 
   ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["10.10.4.10/32"]
+    description = "SSH from bastion"
+  }
+
+  ingress {
     from_port   = 9090
     to_port     = 9090
     protocol    = "tcp"
@@ -102,63 +118,23 @@ resource "aws_security_group" "sg_private" {
 
 resource "aws_security_group" "sg_restricted" {
   name        = "ztlab-sg-restricted"
-  description = "Restricted zone security group"
+  description = "Restricted zone security group for PLG Stack (Loki + Grafana)"
   vpc_id      = aws_vpc.ztlab.id
 
   ingress {
-    from_port   = 5044
-    to_port     = 5044
+    from_port   = 3100
+    to_port     = 3100
     protocol    = "tcp"
-    cidr_blocks = [var.private_subnet_cidr, var.management_subnet_cidr]
-    description = "Filebeat"
+    cidr_blocks = [var.private_subnet_cidr, var.management_subnet_cidr, "10.10.4.0/24"]
+    description = "Loki - log collection from all nodes"
   }
 
   ingress {
-    from_port   = 1514
-    to_port     = 1514
-    protocol    = "tcp"
-    cidr_blocks = [var.private_subnet_cidr, var.management_subnet_cidr]
-    description = "Wazuh"
-  }
-
-  ingress {
-    from_port   = 9092
-    to_port     = 9092
-    protocol    = "tcp"
-    cidr_blocks = [var.private_subnet_cidr]
-    description = "Kafka producers"
-  }
-
-  ingress {
-    from_port   = 9200
-    to_port     = 9200
-    protocol    = "tcp"
-    cidr_blocks = [var.restricted_b_subnet_cidr]
-    description = "Elasticsearch"
-  }
-
-  ingress {
-    from_port   = 9000
-    to_port     = 9000
-    protocol    = "tcp"
-    cidr_blocks = [var.restricted_b_subnet_cidr]
-    description = "TheHive"
-  }
-
-  ingress {
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = [var.restricted_b_subnet_cidr]
-    description = "AI engine"
-  }
-
-  ingress {
-    from_port   = 5601
-    to_port     = 5601
+    from_port   = 3000
+    to_port     = 3000
     protocol    = "tcp"
     cidr_blocks = ["10.10.4.10/32"]
-    description = "Kibana from bastion"
+    description = "Grafana web UI - from bastion only"
   }
 
   ingress {

@@ -1,8 +1,335 @@
 ---
-- name: k3s setup
-  hosts: all
+- name: Install AWS K3s server
+  hosts: aws_k3s_master
   become: true
+  gather_facts: true
+  vars:
+    k3s_server_args: "server --write-kubeconfig-mode 644"
+    k3s_install_script: /tmp/install-k3s.sh
+    k3s_service_start_retries: 24
+    k3s_service_start_delay: 5
   tasks:
-    - name: TODO
-      ansible.builtin.debug:
-        msg: "TODO: populate from IMPLEMENTATION.md"
+    - name: Ensure required packages are present
+      ansible.builtin.apt:
+        name:
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Download K3s install script (AWS)
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: "{{ k3s_install_script }}"
+        mode: "0755"
+        timeout: 60
+
+    - name: Install K3s server (AWS)
+      ansible.builtin.command: /usr/bin/timeout 900 /bin/sh {{ k3s_install_script }}
+      args:
+        creates: /etc/systemd/system/k3s.service
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: "{{ k3s_server_args }}"
+
+    - name: Start K3s server and fail fast with logs if unhealthy (AWS)
+      block:
+        - name: Ensure K3s server is enabled and start in non-blocking mode (AWS)
+          ansible.builtin.systemd:
+            name: k3s
+            enabled: true
+            state: started
+            no_block: true
+
+        - name: Wait until K3s server service is active (AWS)
+          ansible.builtin.command: systemctl is-active k3s
+          register: aws_k3s_service_state
+          changed_when: false
+          retries: "{{ k3s_service_start_retries }}"
+          delay: "{{ k3s_service_start_delay }}"
+          until: aws_k3s_service_state.stdout == 'active'
+      rescue:
+        - name: Capture K3s server logs on startup failure (AWS)
+          ansible.builtin.command: journalctl -u k3s -n 80 --no-pager
+          register: aws_k3s_server_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with K3s server diagnostics (AWS)
+          ansible.builtin.fail:
+            msg: |
+              K3s server failed to become active within {{ k3s_service_start_retries | int * k3s_service_start_delay | int }}s on {{ inventory_hostname }}.
+              Recent journal:
+              {{ aws_k3s_server_journal.stdout | default('No journal output available') }}
+
+    - name: Wait for K3s API server (AWS)
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6443
+        delay: 2
+        timeout: 180
+
+    - name: Read K3s cluster token (AWS)
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: aws_k3s_node_token_raw
+
+    - name: Save K3s cluster token as fact (AWS)
+      ansible.builtin.set_fact:
+        aws_k3s_node_token: "{{ aws_k3s_node_token_raw.content | b64decode | trim }}"
+
+- name: Install AWS K3s agents
+  hosts: aws_k3s_worker_1:aws_k3s_worker_2
+  become: true
+  gather_facts: true
+  vars:
+    k3s_service_start_retries: 24
+    k3s_service_start_delay: 5
+    k3s_install_script: /tmp/install-k3s.sh
+  pre_tasks:
+    - name: Fetch AWS K3s cluster token if missing
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      delegate_to: aws_k3s_master
+      run_once: true
+      register: aws_k3s_node_token_raw
+      when: hostvars['aws_k3s_master'].get('aws_k3s_node_token') is not defined
+
+    - name: Save AWS K3s cluster token on master host
+      ansible.builtin.set_fact:
+        aws_k3s_node_token: "{{ aws_k3s_node_token_raw.content | b64decode | trim }}"
+      delegate_to: aws_k3s_master
+      delegate_facts: true
+      run_once: true
+      when: hostvars['aws_k3s_master'].get('aws_k3s_node_token') is not defined
+  tasks:
+    - name: Ensure required packages are present
+      ansible.builtin.apt:
+        name:
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Download K3s install script (AWS agents)
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: "{{ k3s_install_script }}"
+        mode: "0755"
+        timeout: 60
+
+    - name: Install K3s agent (AWS)
+      ansible.builtin.command: /usr/bin/timeout 900 /bin/sh {{ k3s_install_script }}
+      args:
+        creates: /etc/systemd/system/k3s-agent.service
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_SKIP_START: "true"
+        K3S_URL: "https://{{ hostvars['aws_k3s_master'].ansible_host }}:6443"
+        K3S_TOKEN: "{{ hostvars['aws_k3s_master'].get('aws_k3s_node_token', '') }}"
+
+    - name: Start K3s agent and fail fast with logs if unhealthy (AWS)
+      block:
+        - name: Ensure K3s agent is enabled and start in non-blocking mode (AWS)
+          ansible.builtin.systemd:
+            name: k3s-agent
+            enabled: true
+            state: started
+            no_block: true
+
+        - name: Wait until K3s agent service is active (AWS)
+          ansible.builtin.command: systemctl is-active k3s-agent
+          register: aws_k3s_agent_state
+          changed_when: false
+          retries: "{{ k3s_service_start_retries }}"
+          delay: "{{ k3s_service_start_delay }}"
+          until: aws_k3s_agent_state.stdout == 'active'
+      rescue:
+        - name: Capture K3s agent logs on startup failure (AWS)
+          ansible.builtin.command: journalctl -u k3s-agent -n 80 --no-pager
+          register: aws_k3s_agent_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with K3s agent diagnostics (AWS)
+          ansible.builtin.fail:
+            msg: |
+              K3s agent failed to become active within {{ k3s_service_start_retries | int * k3s_service_start_delay | int }}s on {{ inventory_hostname }}.
+              Recent journal:
+              {{ aws_k3s_agent_journal.stdout | default('No journal output available') }}
+
+- name: Install OpenStack K3s server
+  hosts: os_k3s_master
+  become: true
+  gather_facts: true
+  vars:
+    k3s_server_args: "server --write-kubeconfig-mode 644"
+    k3s_install_script: /tmp/install-k3s.sh
+    k3s_service_start_retries: 24
+    k3s_service_start_delay: 5
+  tasks:
+    - name: Ensure required packages are present
+      ansible.builtin.apt:
+        name:
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Download K3s install script (OpenStack)
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: "{{ k3s_install_script }}"
+        mode: "0755"
+        timeout: 60
+
+    - name: Install K3s server (OpenStack)
+      ansible.builtin.command: /usr/bin/timeout 900 /bin/sh {{ k3s_install_script }}
+      args:
+        creates: /etc/systemd/system/k3s.service
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_EXEC: "{{ k3s_server_args }}"
+
+    - name: Start K3s server and fail fast with logs if unhealthy (OpenStack)
+      block:
+        - name: Ensure K3s server is enabled and start in non-blocking mode (OpenStack)
+          ansible.builtin.systemd:
+            name: k3s
+            enabled: true
+            state: started
+            no_block: true
+
+        - name: Wait until K3s server service is active (OpenStack)
+          ansible.builtin.command: systemctl is-active k3s
+          register: os_k3s_service_state
+          changed_when: false
+          retries: "{{ k3s_service_start_retries }}"
+          delay: "{{ k3s_service_start_delay }}"
+          until: os_k3s_service_state.stdout == 'active'
+      rescue:
+        - name: Capture K3s server logs on startup failure (OpenStack)
+          ansible.builtin.command: journalctl -u k3s -n 80 --no-pager
+          register: os_k3s_server_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with K3s server diagnostics (OpenStack)
+          ansible.builtin.fail:
+            msg: |
+              K3s server failed to become active within {{ k3s_service_start_retries | int * k3s_service_start_delay | int }}s on {{ inventory_hostname }}.
+              Recent journal:
+              {{ os_k3s_server_journal.stdout | default('No journal output available') }}
+
+    - name: Wait for K3s API server (OpenStack)
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 6443
+        delay: 2
+        timeout: 180
+
+    - name: Read K3s cluster token (OpenStack)
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: os_k3s_node_token_raw
+
+    - name: Save K3s cluster token as fact (OpenStack)
+      ansible.builtin.set_fact:
+        os_k3s_node_token: "{{ os_k3s_node_token_raw.content | b64decode | trim }}"
+
+- name: Install OpenStack K3s agents
+  hosts: os_k3s_worker_1:os_k3s_worker_2
+  become: true
+  gather_facts: true
+  vars:
+    k3s_service_start_retries: 24
+    k3s_service_start_delay: 5
+    k3s_install_script: /tmp/install-k3s.sh
+  pre_tasks:
+    - name: Fetch OpenStack K3s cluster token if missing
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      delegate_to: os_k3s_master
+      run_once: true
+      register: os_k3s_node_token_raw
+      when: hostvars['os_k3s_master'].get('os_k3s_node_token') is not defined
+
+    - name: Save OpenStack K3s cluster token on master host
+      ansible.builtin.set_fact:
+        os_k3s_node_token: "{{ os_k3s_node_token_raw.content | b64decode | trim }}"
+      delegate_to: os_k3s_master
+      delegate_facts: true
+      run_once: true
+      when: hostvars['os_k3s_master'].get('os_k3s_node_token') is not defined
+  tasks:
+    - name: Ensure required packages are present
+      ansible.builtin.apt:
+        name:
+          - curl
+        state: present
+        update_cache: true
+
+    - name: Download K3s install script (OpenStack agents)
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: "{{ k3s_install_script }}"
+        mode: "0755"
+        timeout: 60
+
+    - name: Install K3s agent (OpenStack)
+      ansible.builtin.command: /usr/bin/timeout 900 /bin/sh {{ k3s_install_script }}
+      args:
+        creates: /etc/systemd/system/k3s-agent.service
+      environment:
+        INSTALL_K3S_VERSION: "{{ k3s_version }}"
+        INSTALL_K3S_SKIP_START: "true"
+        K3S_URL: "https://{{ hostvars['os_k3s_master'].ansible_host }}:6443"
+        K3S_TOKEN: "{{ hostvars['os_k3s_master'].get('os_k3s_node_token', '') }}"
+
+    - name: Start K3s agent and fail fast with logs if unhealthy (OpenStack)
+      block:
+        - name: Ensure K3s agent is enabled and start in non-blocking mode (OpenStack)
+          ansible.builtin.systemd:
+            name: k3s-agent
+            enabled: true
+            state: started
+            no_block: true
+
+        - name: Wait until K3s agent service is active (OpenStack)
+          ansible.builtin.command: systemctl is-active k3s-agent
+          register: os_k3s_agent_state
+          changed_when: false
+          retries: "{{ k3s_service_start_retries }}"
+          delay: "{{ k3s_service_start_delay }}"
+          until: os_k3s_agent_state.stdout == 'active'
+      rescue:
+        - name: Capture K3s agent logs on startup failure (OpenStack)
+          ansible.builtin.command: journalctl -u k3s-agent -n 80 --no-pager
+          register: os_k3s_agent_journal
+          changed_when: false
+          failed_when: false
+
+        - name: Fail with K3s agent diagnostics (OpenStack)
+          ansible.builtin.fail:
+            msg: |
+              K3s agent failed to become active within {{ k3s_service_start_retries | int * k3s_service_start_delay | int }}s on {{ inventory_hostname }}.
+              Recent journal:
+              {{ os_k3s_agent_journal.stdout | default('No journal output available') }}
+
+- name: Verify K3s services after deployment
+  hosts: aws_k3s_master:aws_k3s_worker_1:aws_k3s_worker_2:os_k3s_master:os_k3s_worker_1:os_k3s_worker_2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Check K3s service state on each node
+      ansible.builtin.shell: |
+        if systemctl list-unit-files | grep -q '^k3s\.service'; then
+          systemctl is-active k3s
+        else
+          systemctl is-active k3s-agent
+        fi
+      register: k3s_state
+      changed_when: false
+
+    - name: Assert K3s service is active
+      ansible.builtin.assert:
+        that:
+          - k3s_state.stdout == 'active'
+        fail_msg: "K3s service is not active on {{ inventory_hostname }}"

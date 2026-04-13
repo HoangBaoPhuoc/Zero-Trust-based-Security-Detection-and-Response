@@ -1,1 +1,192 @@
-# TODO: populate from IMPLEMENTATION.md
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: core-banking
+  namespace: financial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: account-service
+  namespace: financial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: transaction-service
+  namespace: financial
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core-banking
+  namespace: financial
+  labels:
+    app: core-banking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core-banking
+  template:
+    metadata:
+      labels:
+        app: core-banking
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
+    spec:
+      serviceAccountName: core-banking
+      containers:
+        - name: core-banking
+          image: ztlab/core-banking:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: MAX_ALLOWED_FRAUD_SCORE
+              value: "74"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: core-banking
+  namespace: financial
+spec:
+  selector:
+    app: core-banking
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  namespace: financial
+  labels:
+    app: account-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-service
+  template:
+    metadata:
+      labels:
+        app: account-service
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
+    spec:
+      serviceAccountName: account-service
+      containers:
+        - name: account-service
+          image: ztlab/account-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: ACCOUNTS_DB_HOST
+              value: "postgres-accounts.financial.svc.cluster.local"
+            - name: ACCOUNTS_DB_PORT
+              value: "5432"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service
+  namespace: financial
+spec:
+  selector:
+    app: account-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  namespace: financial
+  labels:
+    app: transaction-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-service
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
+    spec:
+      serviceAccountName: transaction-service
+      containers:
+        - name: transaction-service
+          image: ztlab/transaction-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TXN_DB_HOST
+              value: "postgres-txn.financial.svc.cluster.local"
+            - name: TXN_DB_PORT
+              value: "5432"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  namespace: financial
+spec:
+  selector:
+    app: transaction-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

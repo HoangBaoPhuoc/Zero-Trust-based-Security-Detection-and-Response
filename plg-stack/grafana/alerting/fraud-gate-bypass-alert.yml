@@ -1,0 +1,16 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: fraud-gate-bypass
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: fraud-gate-bypass
+        title: Fraud Gate Bypass
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: Loki
+            model:
+              expr: '{job="opa"} |= "fraud_gate_bypass"'

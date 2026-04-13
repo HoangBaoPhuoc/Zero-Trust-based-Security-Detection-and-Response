@@ -7,4 +7,24 @@ allow_cross_cloud {
   input.destination.principal == "spiffe://ztlab.local/os/core-banking"
 }
 
-# TODO: populate from IMPLEMENTATION.md §5.2
+package zta.crosscloud
+
+import future.keywords.if
+import future.keywords.in
+
+default allow = false
+
+allow if {
+  startswith(input.source.principal, "spiffe://ztlab.local/aws/")
+  input.attributes.request.http.method in ["GET", "POST"]
+  not denied_path
+}
+
+allow if {
+  startswith(input.source.principal, "spiffe://ztlab.local/os/")
+  input.attributes.request.http.method in ["GET", "OPTIONS"]
+}
+
+denied_path if {
+  startswith(input.attributes.request.http.path, "/admin")
+}
