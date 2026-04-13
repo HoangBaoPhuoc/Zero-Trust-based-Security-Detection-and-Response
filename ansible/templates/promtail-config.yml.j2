@@ -1,0 +1,37 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://{{ loki_ip }}:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: system
+    static_configs:
+      - targets: [localhost]
+        labels:
+          cluster: {{ cluster }}
+          job: system
+          host: {{ node_name }}
+          __path__: /var/log/syslog
+
+  - job_name: envoy
+    static_configs:
+      - targets: [localhost]
+        labels:
+          cluster: {{ cluster }}
+          job: envoy
+          host: {{ node_name }}
+          __path__: /var/log/envoy/access.log
+
+  - job_name: opa
+    static_configs:
+      - targets: [localhost]
+        labels:
+          cluster: {{ cluster }}
+          job: opa
+          host: {{ node_name }}
+          __path__: /var/log/opa/decisions.json

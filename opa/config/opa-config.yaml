@@ -8,4 +8,16 @@ plugins:
   file:
     path: /var/log/opa/decisions.log
 
-# TODO: populate from IMPLEMENTATION.md §5.2
+services:
+  - name: opa-server
+    url: http://127.0.0.1:8181
+
+decision_logs:
+  plugin: file
+  file:
+    path: /var/log/opa/decisions.log
+    partition_name: opa-decisions
+
+plugins:
+  file:
+    path: /var/log/opa/decisions.log

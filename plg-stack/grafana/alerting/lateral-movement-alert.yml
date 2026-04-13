@@ -1,0 +1,16 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: lateral-movement
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: lateral-movement-deny
+        title: Lateral Movement Blocked
+        condition: A
+        data:
+          - refId: A
+            datasourceUid: Loki
+            model:
+              expr: '{job="opa"} |= "lateral"'

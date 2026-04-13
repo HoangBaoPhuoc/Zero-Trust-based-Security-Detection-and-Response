@@ -1,1 +1,61 @@
-# TODO: populate from IMPLEMENTATION.md
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spire-server
+  namespace: spire
+  labels:
+    app: spire-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spire-server
+  template:
+    metadata:
+      labels:
+        app: spire-server
+    spec:
+      nodeSelector:
+        spire-server: "true"
+      serviceAccountName: spire-server
+      containers:
+        - name: spire-server
+          image: ghcr.io/spiffe/spire-server:1.9.4
+          args:
+            - "-config"
+            - "/run/spire/config/server.conf"
+          ports:
+            - name: api
+              containerPort: 8081
+          volumeMounts:
+            - name: server-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: server-data
+              mountPath: /opt/spire/data/server
+      volumes:
+        - name: server-config
+          hostPath:
+            path: /opt/spire/conf/server
+            type: DirectoryOrCreate
+        - name: server-data
+          hostPath:
+            path: /opt/spire/data/server
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: spire
+  labels:
+    app: spire-server
+spec:
+  type: ClusterIP
+  selector:
+    app: spire-server
+  ports:
+    - name: api
+      port: 8081
+      targetPort: 8081
+

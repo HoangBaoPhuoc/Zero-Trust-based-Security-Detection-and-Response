@@ -1,213 +1,202 @@
 # ZTLab — Zero Trust Security Detection & Response System
-### Microservices · Multi-Cloud (AWS + OpenStack) · SIEM · SOAR · AI
 
-> **Đồ án chuyên ngành — UIT**  
-> Author: Hoàng Bảo Phước
-> Co-Author: Phạm Võ Khánh Hà
-> GVHD: Đỗ Thị Phương Uyên · 05/02/2026 → 30/05/2026
+ZTLab hiện đã chuyển sang kiến trúc gọn nhẹ hơn: **PLG Stack** gồm Promtail, Loki và Grafana cho SIEM, chạy song song với hạ tầng Zero Trust, WireGuard, SPIRE, OPA, Envoy và Keycloak. ELK, Wazuh, Kafka, SOAR và AI Engine không còn nằm trong luồng deploy hiện tại.
 
----
+## Kiến trúc hiện tại
 
-## Mô tả ngắn
+```text
+Internet
+  -> DMZ: WireGuard gateway, API gateway, Keycloak
+  -> Private: K3s workloads, SPIRE, OPA, Envoy sidecars
+  -> Restricted: Loki + Grafana
+  -> Management: Bastion, Terraform, Ansible
 
-Hệ thống triển khai kiến trúc **Zero Trust** cho ứng dụng tài chính microservices phân tán trên hai nền tảng cloud (AWS Public + OpenStack Private), tích hợp SIEM/SOAR hỗ trợ AI để phát hiện và phản ứng sự cố bảo mật tự động.
-
-```
-Internet → [DMZ: WireGuard + API Gateway + Keycloak]
-         → [Private: K3s Microservices + SPIRE + OPA + Envoy]
-         → [Restricted: ELK + Kafka + OpenSearch + AI + SOAR]
-         ← [Management: Bastion + Terraform + Ansible]
-
-OpenStack (Private Cloud) ←→ AWS (Public Cloud) via WireGuard tunnel
+OpenStack <-> AWS qua WireGuard tunnel
+Promtail chạy trên mọi node và đẩy log về Loki
 ```
 
-## Sơ đồ hệ thống chi tiết
+## Repo Layout
 
-```mermaid
-flowchart LR
-    U[Users and Clients]
-    I[Internet]
-
-    subgraph AWS[AWS Public Cloud]
-        direction TB
-        subgraph AWS_DMZ[DMZ Zone]
-            WG_AWS[WireGuard Gateway AWS]
-            APIGW[API Gateway]
-            KC[Keycloak]
-        end
-
-        subgraph AWS_PRIVATE[Private Zone - AWS K3s]
-            direction LR
-            PAY[payment-service]
-            FRAUD[fraud-detection]
-            NOTI[notification-service]
-        end
-    end
-
-    subgraph OS[OpenStack Private Cloud]
-        direction TB
-        subgraph OS_DMZ[DMZ Zone]
-            WG_OS[WireGuard Gateway OpenStack]
-        end
-
-        subgraph OS_PRIVATE[Private Zone - OpenStack K3s]
-            direction LR
-            CORE[core-banking]
-            ACC[account-service]
-            TXN[transaction-service]
-            IDN[Identity Services]
-        end
-
-        SPIRE[SPIRE Server and Agent]
-        OPA[OPA Policy Engine]
-        ENVOY[Envoy Sidecars]
-    end
-
-    subgraph RESTRICTED[Restricted and Security Analytics Zone]
-        direction TB
-        WAZUH[Wazuh]
-        LOGSTASH[Logstash]
-        ELASTIC[Elasticsearch]
-        KIBANA[Kibana]
-        KAFKA[Kafka]
-        OPENSEARCH[OpenSearch]
-        AI[AI Engine and RAG]
-        SOAR[SOAR TheHive Cortex n8n]
-    end
-
-    subgraph MGMT[Management Zone]
-        BASTION[Bastion]
-        TF[Terraform]
-        ANS[Ansible]
-        KCTL[kubectl]
-    end
-
-    U --> I --> APIGW
-    APIGW --> KC
-    APIGW --> PAY
-    PAY --> FRAUD
-    PAY --> CORE
-    CORE --> ACC
-    CORE --> TXN
-
-    WG_AWS <-- WireGuard Tunnel --> WG_OS
-    APIGW --> WG_AWS
-    WG_OS --> CORE
-
-    PAY -. service identity .-> SPIRE
-    CORE -. service identity .-> SPIRE
-    PAY -. policy check .-> OPA
-    CORE -. policy check .-> OPA
-    ENVOY -. mTLS and authz .- PAY
-    ENVOY -. mTLS and authz .- CORE
-
-    PAY --> LOGSTASH
-    CORE --> LOGSTASH
-    WG_AWS --> WAZUH
-    WG_OS --> WAZUH
-    LOGSTASH --> ELASTIC
-    LOGSTASH --> KAFKA
-    WAZUH --> ELASTIC
-    KAFKA --> OPENSEARCH
-    ELASTIC --> KIBANA
-    ELASTIC --> AI
-    OPENSEARCH --> AI
-    AI --> SOAR
-    WAZUH --> SOAR
-
-    TF --> AWS
-    TF --> OS
-    ANS --> AWS
-    ANS --> OS
-    KCTL --> AWS_PRIVATE
-    KCTL --> OS_PRIVATE
-    BASTION --> TF
-    BASTION --> ANS
-```
-
----
-
-## Tài liệu chính
-
-| File | Nội dung |
+| Path | Mục đích |
 |------|----------|
-| `IMPLEMENTATION.md` | Toàn bộ hướng dẫn triển khai chi tiết (config, code, script) |
-| `MAP.md` | Ánh xạ logic → thư mục → file → section trong IMPLEMENTATION.md |
-| `README.md` | File này |
+| [terraform/](terraform/) | Provision AWS và OpenStack |
+| [ansible/](ansible/) | Baseline, WireGuard, K3s, Promtail |
+| [k8s/](k8s/) | Kubernetes manifests |
+| [spire/](spire/) | SPIRE server, agent, registration |
+| [envoy/](envoy/) | Envoy sidecar config |
+| [opa/](opa/) | Policy engine config và Rego policies |
+| [plg-stack/](plg-stack/) | Docker Compose cho Loki, Grafana, Promtail |
+| [scripts/](scripts/) | Hỗ trợ deploy, tunnel, health check |
+| [services/](services/) | Microservices tài chính |
+| [shared/](shared/) | Shared Python modules |
 
----
+## Deploy Flow Hiện Tại
 
-## Cấu trúc repo (tóm tắt)
-
-```
-ztlab/
-├── README.md
-├── MAP.md
-├── IMPLEMENTATION.md
-│
-├── terraform/          # IaC — provision AWS + OpenStack nodes
-├── ansible/            # Configuration management — baseline + install
-├── k8s/                # Kubernetes manifests cho cả 2 cluster
-├── services/           # Source code 7 financial microservices (FastAPI)
-├── shared/             # Python modules dùng chung giữa services
-├── opa/                # OPA Rego policies (ZTA enforcement)
-├── envoy/              # Envoy sidecar config templates
-├── spire/              # SPIRE server/agent config + registration scripts
-├── siem/               # ELK config, Wazuh rules/decoders, Logstash pipelines
-├── kafka/              # Kafka + Zookeeper config, topic definitions
-├── opensearch/         # OpenSearch anomaly detectors
-├── ai-engine/          # ML models (IF, LSTM), RAG pipeline, MCP server
-├── soar/               # TheHive + Cortex + n8n configs + Cortex Responders
-├── wireguard/          # WireGuard VPN config (server + client)
-├── monitoring/         # Kibana dashboards, Prometheus rules
-├── tests/              # Attack simulation scripts + metrics collection
-└── scripts/            # Utility scripts (seed DB, health check, cert gen)
-```
-
----
-
-## Quick Start
+### 1. Chuẩn bị biến môi trường
 
 ```bash
-# 1. Clone và setup môi trường
-git clone https://github.com/ztlab/ztlab.git && cd ztlab
-cp .env.template .env   # điền đầy đủ secrets trước khi tiếp tục
+git clone 
+cp .env.template .env
+set -a && source .env && set +a
 
-# 2. Provision hạ tầng
-cd terraform/aws && terraform init && terraform apply
-cd ../openstack && terraform init && terraform apply
-
-# 3. Cấu hình nodes
-cd ../../ansible
-ansible-playbook -i inventory/hosts.yml playbooks/baseline.yml
-ansible-playbook -i inventory/hosts.yml playbooks/wireguard.yml
-ansible-playbook -i inventory/hosts.yml playbooks/k3s.yml
-
-# 4. Deploy security stack
-kubectl apply -f k8s/spire/
-kubectl apply -f k8s/keycloak/
-kubectl apply -f k8s/financial/
-
-# 5. Deploy SIEM + SOAR
-cd ../soar && docker compose up -d
-cd ../siem && docker compose up -d
-
-# 6. Local test (không cần cloud)
-docker compose -f services/docker-compose.local.yml up -d
-curl http://localhost:8080/health
+# If conflict version
+source .venv/bin/activate
+export PYTHONNOUSERSITE=1
 ```
 
-> Xem `MAP.md` để biết chính xác file nào cần chỉnh sửa cho từng tác vụ.
+### 2. Provision hạ tầng
 
----
+```bash
+cd /etc/zta-siem-soar/terraform/aws
+terraform init
+terraform apply --auto-approve
 
-## Phân công
+cd ../openstack
+terraform init
+terraform apply --auto-approve
+```
 
-| Hạng mục | Thực hiện |
-|----------|-----------|
-| Kiến trúc hệ thống, Threat Model (STRIDE), SIEM design | Khánh Hà |
-| Hạ tầng OpenStack, K3s, ELK Stack, Kafka, Kibana | Bảo Phước |
-| AI Detection Engine, RAG pipeline, ML models | Khánh Hà |
-| SOAR (TheHive, Cortex, n8n), HITL workflow | Bảo Phước |
-| Financial microservices (application code) | Cả hai |
-| Testing, đánh giá metrics, báo cáo | Khánh Hà |
+### 3. Cập nhật inventory Ansible
+
+Điều chỉnh [ansible/inventory/hosts.yml](ansible/inventory/hosts.yml) theo output Terraform, tối thiểu phải có:
+- `aws_gateway`
+- `aws_bastion`
+- `aws_k3s_master`
+- `aws_k3s_worker_1`
+- `aws_k3s_worker_2`
+- `aws_security`
+- `aws_siem`
+- `os_gateway`
+- `os_k3s_master`
+- `os_k3s_worker_1`
+- `os_k3s_worker_2`
+- `os_identity`
+
+#### Trích output để sửa IP cho lần đầu deploy
+
+```bash
+cd /etc/zta-siem-soar/terraform
+
+# AWS
+terraform -chdir=aws output aws_gateway_eip
+terraform -chdir=aws output aws_bastion_pip
+terraform -chdir=aws output aws_instances
+
+# OpenStack
+terraform -chdir=openstack output os_gateway_floating_ip
+terraform -chdir=openstack output openstack_instances
+```
+
+Map output -> host trong [ansible/inventory/hosts.yml](ansible/inventory/hosts.yml):
+
+| Host trong inventory | Nguồn output |
+|---|---|
+| `aws_gateway.ansible_host` | `aws_gateway_eip` hoặc `aws_instances.aws_gateway.elastic_ip` |
+| `aws_bastion.ansible_host` | `aws_bastion_pip` hoặc `aws_instances.aws_bastion.public_ip` |
+| `aws_k3s_master.ansible_host` | `aws_instances.aws_k3s_master.private_ip` |
+| `aws_k3s_worker_1.ansible_host` | `aws_instances.aws_k3s_worker_1.private_ip` |
+| `aws_k3s_worker_2.ansible_host` | `aws_instances.aws_k3s_worker_2.private_ip` |
+| `aws_security.ansible_host` | `aws_instances.aws_security.private_ip` |
+| `aws_siem.ansible_host` | `aws_instances.aws_siem.private_ip` |
+| `os_gateway.ansible_host` | `os_gateway_floating_ip` hoặc `openstack_instances.os_gateway.public_ip` |
+| `openstack.vars.os_gateway_floating_ip` | `os_gateway_floating_ip` |
+| `os_k3s_master.ansible_host` | `openstack_instances.os_k3s_master.private_ip` |
+| `os_k3s_worker_1.ansible_host` | `openstack_instances.os_k3s_worker_1.private_ip` |
+| `os_k3s_worker_2.ansible_host` | `openstack_instances.os_k3s_worker_2.private_ip` |
+| `os_identity.ansible_host` | `openstack_instances.os_identity.identity_ip` |
+
+Sau khi sửa IP, chạy kiểm tra nhanh:
+
+```bash
+cd /etc/zta-siem-soar/ansible
+ansible ssh_entrypoints -i inventory/hosts.yml -m ping
+ansible aws_private -i inventory/hosts.yml -m ping
+ansible openstack -i inventory/hosts.yml -m ping
+```
+
+### 4. Baseline và WireGuard
+
+```bash
+cd /etc/zta-siem-soar/ansible
+ansible-playbook -i inventory/hosts.yml playbooks/baseline.yml
+ansible-playbook -i inventory/hosts.yml playbooks/wireguard.yml
+```
+
+### 5. Triển khai K3s
+
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/k3s.yml
+```
+
+### 6. Mở tunnel kubectl
+
+```bash
+cd /etc/zta-siem-soar
+./scripts/k8s-tunnel.sh up
+./scripts/k8s-tunnel.sh verify
+```
+
+### 7. Deploy security stack
+
+```bash
+./scripts/deploy-security-stack.sh
+```
+
+Script này deploy SPIRE, Keycloak, OPA và Envoy ConfigMap cho cả hai cluster.
+
+### 8. Deploy financial workloads
+
+```bash
+# AWS cluster
+kubectl --context ctx-aws apply -f k8s/financial/aws-services.yaml
+
+# OpenStack cluster
+kubectl --context ctx-openstack apply -f k8s/financial/os-services.yaml
+```
+
+Lưu ý: hiện các file trong `k8s/financial/*.yaml` vẫn là placeholder TODO. Nếu chưa điền manifest thật, `kubectl apply` sẽ báo `error: no objects passed to apply`.
+
+Nếu bạn dùng bộ manifest tổng hợp, có thể chạy:
+
+```bash
+kubectl --context ctx-aws apply -f k8s/financial/
+kubectl --context ctx-openstack apply -f k8s/financial/
+```
+
+### 9. Deploy PLG Stack
+
+```bash
+./scripts/deploy-plg-stack.sh
+```
+
+Hoặc chạy trực tiếp:
+
+```bash
+cd /etc/zta-siem-soar
+docker compose -f plg-stack/docker-compose.plg.yml up -d
+```
+
+## Verify Sau Deploy
+
+```bash
+cd /etc/zta-siem-soar/ansible
+ansible ssh_entrypoints -i inventory/hosts.yml -m ping
+ansible aws_private -i inventory/hosts.yml -m ping
+ansible openstack -i inventory/hosts.yml -m ping
+
+cd /etc/zta-siem-soar
+./scripts/k8s-tunnel.sh status
+kubectl --context ctx-aws get pods -A
+kubectl --context ctx-openstack get pods -A
+```
+
+## Ghi chú
+
+- SIEM hiện dùng Loki làm backend log trung tâm, Grafana cho dashboard và alerting, Promtail làm collector trên mọi node.
+- Các file và thư mục cũ của ELK, Wazuh, Kafka, SOAR và AI Engine đã được loại bỏ khỏi luồng deploy hiện tại.
+- Nếu đổi IP sau khi `terraform apply`, cập nhật lại [ansible/inventory/hosts.yml](ansible/inventory/hosts.yml) trước khi chạy Ansible.
+
+## Tài liệu tham khảo
+
+- [IMPLEMENTATION.md](IMPLEMENTATION.md)
+- [MAP.md](MAP.md)
