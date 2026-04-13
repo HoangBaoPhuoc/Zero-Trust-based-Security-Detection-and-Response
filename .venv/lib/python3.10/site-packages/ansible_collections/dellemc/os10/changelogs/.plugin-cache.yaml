@@ -1,0 +1,66 @@
+plugins:
+  become: {}
+  cache: {}
+  callback: {}
+  cliconf:
+    os10:
+      description: Use os10 cliconf to run command on Dell OS10 platform
+      name: os10
+      version_added: null
+  connection: {}
+  httpapi: {}
+  inventory: {}
+  lookup: {}
+  module:
+    base_xml_to_dict:
+      description: Operations for show command output convertion from xml to json
+        format.
+      name: base_xml_to_dict
+      namespace: ''
+      version_added: null
+    bgp_validate:
+      description: Validate the bgp neighbor state,raise error if it is not in established
+        state
+      name: bgp_validate
+      namespace: ''
+      version_added: null
+    mtu_validate:
+      description: Validate the MTU value for lldp neighbors
+      name: mtu_validate
+      namespace: ''
+      version_added: null
+    os10_command:
+      description: Run commands on devices running Dell EMC SmartFabric OS10
+      name: os10_command
+      namespace: ''
+      version_added: null
+    os10_config:
+      description: Manage Dell EMC SmartFabric OS10 configuration sections
+      name: os10_config
+      namespace: ''
+      version_added: null
+    os10_facts:
+      description: Collect facts from devices running Dell EMC SmartFabric OS10
+      name: os10_facts
+      namespace: ''
+      version_added: null
+    show_system_network_summary:
+      description: Operations for show_system_network output in json/yaml format.
+      name: show_system_network_summary
+      namespace: ''
+      version_added: null
+    vlt_validate:
+      description: Validate the vlt info, raise an error if peer is not in up state
+      name: vlt_validate
+      namespace: ''
+      version_added: null
+    wiring_validate:
+      description: Validate the wiring based on the planned wiring details
+      name: wiring_validate
+      namespace: ''
+      version_added: null
+  netconf: {}
+  shell: {}
+  strategy: {}
+  vars: {}
+version: 1.0.2

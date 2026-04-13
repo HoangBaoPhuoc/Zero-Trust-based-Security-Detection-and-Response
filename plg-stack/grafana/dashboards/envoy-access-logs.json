@@ -1,0 +1,7 @@
+{
+  "title": "Envoy Access Logs",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": []
+}

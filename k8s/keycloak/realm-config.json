@@ -1,3 +1,37 @@
 {
-  "todo": "populate from IMPLEMENTATION.md"
+  "realm": "ztlab",
+  "enabled": true,
+  "displayName": "ZTLab",
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionMaxLifespan": 36000,
+  "clients": [
+    {
+      "clientId": "api-gateway",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "authorizationServicesEnabled": true,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["https://api-gateway.ztlab.local/*"],
+      "webOrigins": ["+"]
+    },
+    {
+      "clientId": "siem-backend",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "roles": {
+    "realm": [
+      { "name": "financial-read" },
+      { "name": "financial-write" },
+      { "name": "security-analyst" },
+      { "name": "security-admin" }
+    ]
+  }
 }

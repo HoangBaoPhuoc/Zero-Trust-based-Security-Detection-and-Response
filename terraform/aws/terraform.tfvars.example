@@ -1,0 +1,19 @@
+# Copy to terraform.tfvars and adjust values for your environment.
+
+aws_region    = "ap-southeast-1"
+aws_profile   = null
+admin_ip      = "x.x.x.x/32"
+aws_primary_az = null
+
+# Option A: use existing EC2 key pair
+create_key_pair = false
+key_pair_name   = "ztlab-key"
+
+# Option B: let Terraform create/import EC2 key pair from local public key
+# create_key_pair = true
+# key_pair_name   = "ztlab-key"
+# public_key_path = "~/.ssh/id_rsa.pub"
+
+# Optional AMI override (Ubuntu 22.04 by default)
+ami_owner       = "099720109477"
+ami_name_filter = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"

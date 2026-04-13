@@ -1,1 +1,61 @@
-# TODO: populate from IMPLEMENTATION.md
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: spire
+  labels:
+    app: spire-agent
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: spire-agent
+      tolerations:
+        - operator: Exists
+      initContainers:
+        - name: wait-for-server
+          image: cgr.dev/chainguard/wait-for-it:latest
+          args:
+            - "spire-server.spire.svc.cluster.local:8081"
+            - "--"
+            - "echo"
+            - "SPIRE Server ready"
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.9.4
+          args:
+            - "-config"
+            - "/run/spire/config/agent.conf"
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+            - name: spire-token
+              mountPath: /var/run/secrets/tokens
+      volumes:
+        - name: spire-config
+          hostPath:
+            path: /opt/spire/conf/agent
+            type: DirectoryOrCreate
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+        - name: spire-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: spire-agent
+                  expirationSeconds: 7200
+                  audience: spire-server
+

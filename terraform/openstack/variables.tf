@@ -1,37 +1,44 @@
-// Mapped from OpenRC: OS_AUTH_URL
 variable "os_auth_url" {
-  description = "OpenStack auth URL"
+  description = "OpenStack auth URL (from OS_AUTH_URL environment)"
   type        = string
-  default     = "http://192.168.1.254:5000/v3"
+  default     = ""
 }
 
-// Mapped from OpenRC: OS_PROJECT_NAME
-variable "os_project_name" {
-  description = "OpenStack project name"
-  type        = string
-  default     = "ZTA-SIEM-SOAR"
-}
-
-// Mapped from OpenRC: OS_USERNAME
 variable "os_username" {
-  description = "OpenStack username"
+  description = "OpenStack username (from OS_USERNAME environment)"
   type        = string
-  default     = "adminZTA"
+  default     = ""
 }
 
-// Mapped from OpenRC: OS_PASSWORD
 variable "os_password" {
-  description = "OpenStack password"
+  description = "OpenStack password (from OS_PASSWORD environment)"
   type        = string
   sensitive   = true
-  default     = "ZTA123"
+  default     = ""
 }
 
-// Mapped from OpenRC: OS_REGION_NAME
-variable "os_region" {
-  description = "OpenStack region"
+variable "os_project_name" {
+  description = "OpenStack project/tenant name (from OS_PROJECT_NAME environment)"
   type        = string
-  default     = "RegionOne"
+  default     = ""
+}
+
+variable "os_region" {
+  description = "OpenStack region (from OS_REGION_NAME environment)"
+  type        = string
+  default     = ""
+}
+
+variable "os_project_domain_name" {
+  description = "OpenStack project domain name (from OS_PROJECT_DOMAIN_NAME environment)"
+  type        = string
+  default     = "Default"
+}
+
+variable "os_user_domain_name" {
+  description = "OpenStack user domain name (from OS_USER_DOMAIN_NAME environment)"
+  type        = string
+  default     = "Default"
 }
 
 variable "image_name" {
@@ -80,4 +87,16 @@ variable "identity_subnet_cidr" {
   description = "Dedicated identity subnet CIDR"
   type        = string
   default     = "192.168.102.0/24"
+}
+
+variable "management_cidr" {
+  description = "Trusted management CIDR allowed to SSH into os-gateway floating IP"
+  type        = string
+  default     = "172.10.10.1/32"
+}
+
+variable "aio_provider_cidr" {
+  description = "AIO/provider bridge CIDR allowed to bootstrap SSH into OpenStack private/identity nodes"
+  type        = string
+  default     = "172.10.10.1/32"
 }

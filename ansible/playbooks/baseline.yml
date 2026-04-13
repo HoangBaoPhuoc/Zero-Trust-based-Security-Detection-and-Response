@@ -2,7 +2,320 @@
 - name: baseline setup
   hosts: all
   become: true
+  vars:
+    apt_cache_valid_time: 21600
+    baseline_packages:
+      - curl
+      - wget
+      - git
+      - jq
+      - vim
+      - net-tools
+      - htop
+      - nftables
+      - auditd
+      - iptables-persistent
+
   tasks:
-    - name: TODO
-      ansible.builtin.debug:
-        msg: "TODO: populate from IMPLEMENTATION.md"
+    - name: Disable background apt services on Debian hosts
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: false
+        masked: true
+        state: stopped
+      loop:
+        - unattended-upgrades.service
+        - apt-daily.service
+        - apt-daily.timer
+        - apt-daily-upgrade.service
+        - apt-daily-upgrade.timer
+      failed_when: false
+      when: ansible_os_family == "Debian"
+
+    - name: Enable Ubuntu universe repository
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }} universe"
+        state: present
+        filename: ubuntu-universe
+        update_cache: false
+      when:
+        - ansible_os_family == "Debian"
+        - ansible_distribution == "Ubuntu"
+
+    - name: Enable Ubuntu backports repository for wireguard
+      ansible.builtin.apt_repository:
+        repo: "deb http://archive.ubuntu.com/ubuntu {{ ansible_distribution_release }}-backports main universe"
+        state: present
+        filename: ubuntu-backports
+        update_cache: false
+      when:
+        - ansible_os_family == "Debian"
+        - ansible_distribution == "Ubuntu"
+
+    - name: Update apt cache with retries (force IPv4)
+      ansible.builtin.shell: apt-get update -o Acquire::ForceIPv4=true
+      args:
+        executable: /bin/bash
+      register: apt_update_ipv4
+      changed_when: false
+      retries: 4
+      delay: 15
+      until: apt_update_ipv4.rc == 0
+      when: ansible_os_family == "Debian"
+
+    - name: Enable IPv4 forwarding on gateway nodes early
+      ansible.builtin.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+      when: inventory_hostname in ["aws_gateway", "os_gateway"]
+
+    - name: Check os_gateway forward rule from private subnet
+      ansible.builtin.command: iptables -C FORWARD -s 192.168.101.0/24 -j ACCEPT
+      register: osgw_forward_private_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Add os_gateway forward rule from private subnet
+      ansible.builtin.command: iptables -A FORWARD -s 192.168.101.0/24 -j ACCEPT
+      when:
+        - inventory_hostname == "os_gateway"
+        - osgw_forward_private_check.rc != 0
+
+    - name: Check os_gateway forward rule from identity subnet
+      ansible.builtin.command: iptables -C FORWARD -s 192.168.102.0/24 -j ACCEPT
+      register: osgw_forward_identity_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Add os_gateway forward rule from identity subnet
+      ansible.builtin.command: iptables -A FORWARD -s 192.168.102.0/24 -j ACCEPT
+      when:
+        - inventory_hostname == "os_gateway"
+        - osgw_forward_identity_check.rc != 0
+
+    - name: Check os_gateway return rule to private subnet
+      ansible.builtin.command: >-
+        iptables -C FORWARD -d 192.168.101.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      register: osgw_return_private_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Add os_gateway return rule to private subnet
+      ansible.builtin.command: >-
+        iptables -A FORWARD -d 192.168.101.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      when:
+        - inventory_hostname == "os_gateway"
+        - osgw_return_private_check.rc != 0
+
+    - name: Check os_gateway return rule to identity subnet
+      ansible.builtin.command: >-
+        iptables -C FORWARD -d 192.168.102.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      register: osgw_return_identity_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Add os_gateway return rule to identity subnet
+      ansible.builtin.command: >-
+        iptables -A FORWARD -d 192.168.102.0/24 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      when:
+        - inventory_hostname == "os_gateway"
+        - osgw_return_identity_check.rc != 0
+
+    - name: Check NAT masquerade rule on gateway nodes
+      ansible.builtin.command: >-
+        iptables -t nat -C POSTROUTING -o {{ 'ens3' if inventory_hostname == 'os_gateway' else ansible_default_ipv4.interface }} -j MASQUERADE
+      register: gateway_nat_rule_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname in ["aws_gateway", "os_gateway"]
+
+    - name: Remove stale os_gateway NAT rule on private interface
+      ansible.builtin.command: iptables -t nat -D POSTROUTING -o ens4 -j MASQUERADE
+      register: osgw_nat_stale_private
+      changed_when: osgw_nat_stale_private.rc == 0
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Remove stale os_gateway NAT rule on identity interface
+      ansible.builtin.command: iptables -t nat -D POSTROUTING -o ens5 -j MASQUERADE
+      register: osgw_nat_stale_identity
+      changed_when: osgw_nat_stale_identity.rc == 0
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Add NAT masquerade rule on gateway nodes
+      ansible.builtin.command: >-
+        iptables -t nat -A POSTROUTING -o {{ 'ens3' if inventory_hostname == 'os_gateway' else ansible_default_ipv4.interface }} -j MASQUERADE
+      when:
+        - inventory_hostname in ["aws_gateway", "os_gateway"]
+        - gateway_nat_rule_check.rc != 0
+
+    - name: Remove stale DNS host routes from os_gateway private interfaces
+      ansible.builtin.command: ip route del {{ item.ip }} dev {{ item.dev }}
+      loop:
+        - { ip: "8.8.8.8", dev: "ens4" }
+        - { ip: "8.8.4.4", dev: "ens4" }
+        - { ip: "8.8.8.8", dev: "ens5" }
+        - { ip: "8.8.4.4", dev: "ens5" }
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Force DNS upstream routes via DMZ on os_gateway
+      ansible.builtin.command: ip route replace {{ item }} via 192.168.100.1 dev ens3 metric 10
+      loop:
+        - "8.8.8.8"
+        - "8.8.4.4"
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname == "os_gateway"
+
+    - name: Ensure iptables persistence directory exists on gateway nodes
+      ansible.builtin.file:
+        path: /etc/iptables
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: inventory_hostname in ["aws_gateway", "os_gateway"]
+
+    - name: Check iptables-save availability on gateway nodes
+      ansible.builtin.command: command -v iptables-save
+      register: iptables_save_check
+      changed_when: false
+      failed_when: false
+      when: inventory_hostname in ["aws_gateway", "os_gateway"]
+
+    - name: Persist iptables rules on gateway nodes
+      ansible.builtin.shell: iptables-save > /etc/iptables/rules.v4
+      args:
+        executable: /bin/bash
+      when:
+        - inventory_hostname in ["aws_gateway", "os_gateway"]
+        - iptables_save_check.rc == 0
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: "{{ apt_cache_valid_time }}"
+      register: apt_cache_update
+      changed_when: false
+      failed_when: apt_cache_update is failed
+      when: ansible_os_family == "Debian"
+
+    - name: Install baseline packages
+      ansible.builtin.apt:
+        name: "{{ baseline_packages }}"
+        state: present
+      register: baseline_install_result
+      failed_when: baseline_install_result is failed
+      when: ansible_os_family == "Debian"
+
+    - name: Check fail2ban availability in apt cache
+      ansible.builtin.command: apt-cache policy fail2ban
+      register: fail2ban_policy
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "Debian"
+
+    - name: Install fail2ban when available
+      ansible.builtin.apt:
+        name: fail2ban
+        state: present
+      register: fail2ban_install_result
+      failed_when: fail2ban_install_result is failed
+      when:
+        - ansible_os_family == "Debian"
+        - fail2ban_policy.stdout is search('Candidate: (?!\(none\))')
+
+    - name: Check wireguard availability in apt cache
+      ansible.builtin.command: apt-cache policy wireguard
+      register: wireguard_policy
+      changed_when: false
+      failed_when: false
+      when: ansible_os_family == "Debian"
+
+    - name: Install wireguard and wireguard-tools when available
+      ansible.builtin.apt:
+        name:
+          - wireguard
+          - wireguard-tools
+        state: present
+      register: wireguard_install_result
+      failed_when: wireguard_install_result is failed
+      when:
+        - ansible_os_family == "Debian"
+        - wireguard_policy.stdout is search('Candidate: (?!\(none\))')
+
+    - name: Gather installed package facts
+      ansible.builtin.package_facts:
+        manager: auto
+
+    - name: Enable IPv4 forwarding
+      ansible.builtin.sysctl:
+        name: net.ipv4.ip_forward
+        value: "1"
+        sysctl_set: true
+        state: present
+        reload: true
+
+    - name: Ensure baseline workspace exists
+      ansible.builtin.file:
+        path: /opt/ztlab
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure audit rules directory exists
+      ansible.builtin.file:
+        path: /etc/audit/rules.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+      when: "'auditd' in ansible_facts.packages"
+
+    - name: Deploy baseline audit rules
+      ansible.builtin.copy:
+        dest: /etc/audit/rules.d/ztlab.rules
+        owner: root
+        group: root
+        mode: "0640"
+        content: |
+          ## Monitor privileged command execution
+          -a always,exit -F arch=b64 -S execve -F euid=0 -k root_cmd
+          ## Monitor login and SSH configuration changes
+          -w /etc/passwd -p wa -k identity
+          -w /etc/group -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/ssh/sshd_config -p wa -k ssh_config
+      notify: restart auditd
+      when: "'auditd' in ansible_facts.packages"
+
+    - name: Ensure fail2ban service is enabled and started
+      ansible.builtin.systemd:
+        name: fail2ban
+        enabled: true
+        state: started
+      when: "'fail2ban' in ansible_facts.packages"
+
+    - name: Ensure auditd service is enabled and started
+      ansible.builtin.systemd:
+        name: auditd
+        enabled: true
+        state: started
+      when: "'auditd' in ansible_facts.packages"
+
+  handlers:
+    - name: restart auditd
+      ansible.builtin.systemd:
+        name: auditd
+        state: restarted

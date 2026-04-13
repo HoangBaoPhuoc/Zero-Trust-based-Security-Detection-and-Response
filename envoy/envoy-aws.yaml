@@ -1,1 +1,14 @@
-# TODO: populate from IMPLEMENTATION.md
+static_resources:
+  clusters:
+    - name: upstream_service
+      connect_timeout: 1s
+      type: STATIC
+      load_assignment:
+        cluster_name: upstream_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: payment-service.financial.svc.cluster.local
+                      port_value: 8080

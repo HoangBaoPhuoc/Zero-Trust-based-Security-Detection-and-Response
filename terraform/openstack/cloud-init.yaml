@@ -1,0 +1,34 @@
+#cloud-config
+users:
+  - name: ubuntu
+    groups: sudo
+    shell: /bin/bash
+    sudo:
+      - ALL=(ALL) NOPASSWD:ALL
+    ssh-authorized-keys:
+      - ${public_key}
+
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - wget
+  - net-tools
+  - htop
+  - vim
+  - python3-pip
+  - iproute2
+
+bootcmd:
+  - echo "Networking init bootcmd at $(date)" >> /var/log/boot-commands.log
+  - ip link show >> /var/log/boot-commands.log
+
+runcmd:
+  - echo "Cloud-init runcmd started at $(date)" >> /var/log/cloud-init.log
+  - ip link show >> /var/log/cloud-init.log
+  - ip route show >> /var/log/cloud-init.log
+  - netplan apply || echo "netplan apply failed" >> /var/log/cloud-init.log
+  - sleep 2
+  - ip route show >> /var/log/cloud-init.log
+  - systemctl restart ssh || echo "SSH restart failed" >> /var/log/cloud-init.log
+  - echo "Cloud-init completed at $(date)" >> /var/log/cloud-init.log

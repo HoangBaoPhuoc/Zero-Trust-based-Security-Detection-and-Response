@@ -1,1 +1,19 @@
-# TODO: populate from IMPLEMENTATION.md
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-financial-allow-baseline
+  namespace: financial
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
