@@ -35,9 +35,11 @@ spec:
               mountPath: /opt/spire/data/server
       volumes:
         - name: server-config
-          hostPath:
-            path: /opt/spire/conf/server
-            type: DirectoryOrCreate
+          configMap:
+            name: spire-server-config
+            items:
+              - key: server.conf
+                path: server.conf
         - name: server-data
           hostPath:
             path: /opt/spire/data/server
