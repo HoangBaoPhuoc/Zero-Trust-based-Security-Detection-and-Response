@@ -516,6 +516,7 @@ Promtail gán labels khi scrape log. Labels này được dùng để filter tro
 
 | File | Scenario | ATT&CK | IMPL.md |
 |------|----------|--------|---------|
+| `tests/scenario_00_full_suite.py` | End-to-end runner for scenarios 1-11, baseline warm-up, Loki metrics | — | §10 |
 | `tests/baseline_traffic.py` | Normal traffic generator — chạy 10 min trước khi test | — | §15.2 |
 | `tests/seed_db.py` | Tạo test accounts + 90-day transaction history | — | §15.2 |
 | `tests/scenario_01_brute_force.sh` | 20 failed logins, measure MTTD | T1110.001 | §15.3 |

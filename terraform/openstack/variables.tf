@@ -60,21 +60,21 @@ variable "flavor_gateway" {
 }
 
 variable "flavor_k3s_master" {
-  description = "Flavor for os-k3s-master"
+  description = "Flavor for os-k3s-master (lab-safe baseline)"
   type        = string
   default     = "m1.medium"
 }
 
 variable "flavor_k3s_worker" {
-  description = "Flavor for os-k3s-worker nodes"
+  description = "Flavor for os-k3s-worker nodes (lab-safe baseline)"
   type        = string
-  default     = "nano"
+  default     = "m1.medium"
 }
 
 variable "flavor_identity" {
-  description = "Flavor for os-identity"
+  description = "Flavor for os-identity (lab-safe baseline)"
   type        = string
-  default     = "nano"
+  default     = "nano-plus"
 }
 
 variable "external_network_name" {

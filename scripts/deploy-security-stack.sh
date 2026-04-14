@@ -9,6 +9,7 @@ AWS_CONTEXT="ctx-aws"
 OS_CONTEXT="ctx-openstack"
 TIMEOUT_WAIT=180
 TIMEOUT_KEYCLOAK=300  # Keycloak can take longer to start on first deployment
+VERIFY_FAILED=0
 
 log_info() {
   echo "[INFO] $*"
@@ -23,6 +24,60 @@ log_step() {
   echo "================================"
   echo "STEP: $*"
   echo "================================"
+}
+
+check_rollout() {
+  local ctx="$1"
+  local ns="$2"
+  local kind="$3"
+  local name="$4"
+  local timeout="$5"
+  local critical="$6"
+
+  log_info "Checking rollout: ${kind}/${name} in ${ctx}/${ns} (timeout ${timeout})"
+  if kubectl --context "$ctx" -n "$ns" rollout status "${kind}/${name}" --timeout="$timeout" >/dev/null 2>&1; then
+    log_info "✓ ${kind}/${name} is ready in ${ctx}/${ns}"
+  else
+    log_error "${kind}/${name} is not ready in ${ctx}/${ns}"
+    if [ "$critical" = "true" ]; then
+      VERIFY_FAILED=1
+    fi
+  fi
+}
+
+check_daemonset_ready() {
+  local ctx="$1"
+  local ns="$2"
+  local name="$3"
+  local critical="$4"
+  local desired ready
+
+  kubectl --context "$ctx" -n "$ns" rollout status "daemonset/${name}" --timeout="${TIMEOUT_WAIT}s" >/dev/null 2>&1 || true
+
+  desired=$(kubectl --context "$ctx" -n "$ns" get ds "$name" -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo "0")
+  ready=$(kubectl --context "$ctx" -n "$ns" get ds "$name" -o jsonpath='{.status.numberReady}' 2>/dev/null || echo "0")
+
+  if [ "$desired" -gt 0 ] && [ "$desired" = "$ready" ]; then
+    log_info "✓ daemonset/${name} ready ${ready}/${desired} in ${ctx}/${ns}"
+  else
+    log_error "daemonset/${name} not ready ${ready}/${desired} in ${ctx}/${ns}"
+    if [ "$critical" = "true" ]; then
+      VERIFY_FAILED=1
+    fi
+  fi
+}
+
+check_configmap() {
+  local ctx="$1"
+  local ns="$2"
+  local name="$3"
+
+  if kubectl --context "$ctx" -n "$ns" get cm "$name" >/dev/null 2>&1; then
+    log_info "✓ configmap/${name} exists in ${ctx}/${ns}"
+  else
+    log_error "configmap/${name} missing in ${ctx}/${ns}"
+    VERIFY_FAILED=1
+  fi
 }
 
 check_kctl_context() {
@@ -103,6 +158,14 @@ deploy_step_3_spire_aws() {
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/namespace.yaml"
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/rbac.yaml"
 
+  log_info "Creating SPIRE configmaps on AWS..."
+  kubectl --context $AWS_CONTEXT -n spire create configmap spire-server-config \
+    --from-file=server.conf="$REPO_ROOT/spire/server/aws-server.conf" \
+    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
+  kubectl --context $AWS_CONTEXT -n spire create configmap spire-agent-config \
+    --from-file=agent.conf="$REPO_ROOT/spire/agent/aws-agent.conf" \
+    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
+
   log_info "Labeling nodes for SPIRE server on AWS..."
   SECURITY_NODE=$(kubectl --context $AWS_CONTEXT get nodes --no-headers \
     -o custom-columns=NAME:.metadata.name | head -1)
@@ -114,6 +177,7 @@ deploy_step_3_spire_aws() {
 
   log_info "Deploying SPIRE server..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
+  kubectl --context $AWS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
 
   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
   kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
@@ -123,6 +187,7 @@ deploy_step_3_spire_aws() {
 
   log_info "Deploying SPIRE agents..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
+  kubectl --context $AWS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
 
   log_info "SPIRE agents deployment initiated (may take time - skipping strict wait for lab stability)"
 
@@ -136,6 +201,14 @@ deploy_step_3_spire_os() {
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/namespace.yaml"
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/rbac.yaml"
 
+  log_info "Creating SPIRE configmaps on OpenStack..."
+  kubectl --context $OS_CONTEXT -n spire create configmap spire-server-config \
+    --from-file=server.conf="$REPO_ROOT/spire/server/os-server.conf" \
+    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
+  kubectl --context $OS_CONTEXT -n spire create configmap spire-agent-config \
+    --from-file=agent.conf="$REPO_ROOT/spire/agent/os-agent.conf" \
+    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
+
   log_info "Labeling nodes for SPIRE server on OpenStack..."
   IDENTITY_NODE=$(kubectl --context $OS_CONTEXT get nodes --no-headers \
     -o custom-columns=NAME:.metadata.name | head -1)
@@ -147,6 +220,7 @@ deploy_step_3_spire_os() {
 
   log_info "Deploying SPIRE server..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
+  kubectl --context $OS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
 
   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
   kubectl --context $OS_CONTEXT wait --for=condition=Ready pod \
@@ -156,6 +230,7 @@ deploy_step_3_spire_os() {
 
   log_info "Deploying SPIRE agents..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
+  kubectl --context $OS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
 
   log_info "SPIRE agents deployment initiated on OpenStack"
 
@@ -164,6 +239,14 @@ deploy_step_3_spire_os() {
 
 deploy_step_4_opa() {
   log_step "4. Deploy OPA (Open Policy Agent)"
+
+  log_info "Creating OPA config/policy configmaps on AWS..."
+  kubectl --context $AWS_CONTEXT -n financial create configmap opa-config \
+    --from-file=opa-config.yaml="$REPO_ROOT/opa/config/opa-config.yaml" \
+    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
+  kubectl --context $AWS_CONTEXT -n financial create configmap opa-policies \
+    --from-file="$REPO_ROOT/opa/policies" \
+    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
 
   log_info "Deploying OPA on AWS..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
@@ -210,6 +293,22 @@ verify_deployment() {
   kubectl --context $AWS_CONTEXT get cm -n financial
 
   log_info ""
+
+  log_step "6.1 Readiness checks"
+  check_rollout "$AWS_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
+  check_rollout "$AWS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
+  check_daemonset_ready "$AWS_CONTEXT" "spire" "spire-agent" "true"
+  check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
+  check_daemonset_ready "$OS_CONTEXT" "spire" "spire-agent" "true"
+  check_rollout "$AWS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
+  check_configmap "$AWS_CONTEXT" "financial" "envoy-config"
+  check_configmap "$OS_CONTEXT" "financial" "envoy-config"
+
+  if [ "$VERIFY_FAILED" -ne 0 ]; then
+    log_error "Security stack verification failed. Check pods/events/logs before continuing."
+    exit 1
+  fi
+
   log_info "✓ Security stack deployment verification completed"
 }
 
