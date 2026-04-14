@@ -55,20 +55,20 @@ spec:
               subPath: realm-config.json
           startupProbe:
             httpGet:
-              path: /health/ready
+              path: /
               port: 8080
             initialDelaySeconds: 10
             failureThreshold: 60
             periodSeconds: 5
           readinessProbe:
             httpGet:
-              path: /health/ready
+              path: /realms/master
               port: 8080
             initialDelaySeconds: 60
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /health/live
+              path: /
               port: 8080
             initialDelaySeconds: 90
             periodSeconds: 20

@@ -39,7 +39,7 @@ git clone
 cp .env.template .env
 set -a && source .env && set +a
 
-# If conflict version
+# If conflict version jinja
 source .venv/bin/activate
 export PYTHONNOUSERSITE=1
 ```
@@ -144,23 +144,44 @@ cd /etc/zta-siem-soar
 
 Script này deploy SPIRE, Keycloak, OPA và Envoy ConfigMap cho cả hai cluster.
 
+Khi có thành phần chưa ready, verify nhanh:
+
+```bash
+kubectl --context ctx-aws get pods -n spire -o wide
+kubectl --context ctx-openstack get pods -n spire -o wide
+kubectl --context ctx-aws logs -n spire deploy/spire-server --tail=100
+kubectl --context ctx-openstack logs -n spire deploy/spire-server --tail=100
+kubectl --context ctx-aws get events -A --sort-by=.lastTimestamp | tail -n 50
+kubectl --context ctx-openstack get events -A --sort-by=.lastTimestamp | tail -n 50
+```
+
 ### 8. Deploy financial workloads
 
 ```bash
-# AWS cluster
-kubectl --context ctx-aws apply -f k8s/financial/aws-services.yaml
+cd /etc/zta-siem-soar
 
-# OpenStack cluster
-kubectl --context ctx-openstack apply -f k8s/financial/os-services.yaml
-```
+# Neu may aio bi đơ khi build image, tăng swap trước:
+./scripts/increase-swap.sh
 
-Lưu ý: hiện các file trong `k8s/financial/*.yaml` vẫn là placeholder TODO. Nếu chưa điền manifest thật, `kubectl apply` sẽ báo `error: no objects passed to apply`.
+# Bat buoc cho lab: dong bo image local len tat ca K3s nodes
+./scripts/sync-financial-images.sh
 
-Nếu bạn dùng bộ manifest tổng hợp, có thể chạy:
-
-```bash
 kubectl --context ctx-aws apply -f k8s/financial/
 kubectl --context ctx-openstack apply -f k8s/financial/
+kubectl --context ctx-aws apply -f k8s/financial/network-policies/aws-allow-list.yaml
+kubectl --context ctx-openstack apply -f k8s/financial/network-policies/os-allow-list.yaml
+```
+
+Neu chi can dong bo lai image (khong rebuild):
+
+```bash
+SKIP_BUILD=true ./scripts/sync-financial-images.sh
+```
+
+Neu may van con nang, chay sync theo mode an toan hon:
+
+```bash
+AUTO_INCREASE_SWAP=true ./scripts/sync-financial-images.sh
 ```
 
 ### 9. Deploy PLG Stack

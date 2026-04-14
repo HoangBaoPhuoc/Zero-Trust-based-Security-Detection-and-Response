@@ -44,9 +44,11 @@ spec:
               mountPath: /var/run/secrets/tokens
       volumes:
         - name: spire-config
-          hostPath:
-            path: /opt/spire/conf/agent
-            type: DirectoryOrCreate
+          configMap:
+            name: spire-agent-config
+            items:
+              - key: agent.conf
+                path: agent.conf
         - name: spire-sockets
           hostPath:
             path: /run/spire/sockets
