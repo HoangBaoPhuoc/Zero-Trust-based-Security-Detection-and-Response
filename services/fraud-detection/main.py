@@ -2,10 +2,12 @@
 
 import os
 import time
-from collections import defaultdict, deque
+import uuid
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
+import redis.asyncio as aioredis
 
 from shared.logging import ZTLabLogger, trace_middleware
 from shared.metrics import FRAUD_SCORE, SERVICE_UP
@@ -16,14 +18,26 @@ VELOCITY_WINDOW_SECONDS = int(os.getenv("FRAUD_VELOCITY_WINDOW_SECONDS", "60"))
 VELOCITY_SOFT_LIMIT = int(os.getenv("FRAUD_VELOCITY_SOFT_LIMIT", "10"))
 HIGH_AMOUNT_VND = float(os.getenv("FRAUD_HIGH_AMOUNT_VND", "100000000"))
 CRITICAL_AMOUNT_VND = float(os.getenv("FRAUD_CRITICAL_AMOUNT_VND", "500000000"))
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-app = FastAPI(title="ZTLab Fraud Detection")
+redis_client: aioredis.Redis | None = None
+
+logger = ZTLabLogger(SERVICE, CLOUD)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global redis_client
+    redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
+    await redis_client.ping()
+    SERVICE_UP.labels(service=SERVICE, cloud=CLOUD).set(1)
+    yield
+    await redis_client.aclose()
+
+
+app = FastAPI(title="ZTLab Fraud Detection", lifespan=lifespan)
 app.add_middleware(trace_middleware(SERVICE, CLOUD))
 app.mount("/metrics", make_asgi_app())
-logger = ZTLabLogger(SERVICE, CLOUD)
-SERVICE_UP.labels(service=SERVICE, cloud=CLOUD).set(1)
-
-_recent_by_account: dict[str, deque[float]] = defaultdict(deque)
 
 
 class FraudRequest(BaseModel):
@@ -42,13 +56,16 @@ class FraudResponse(BaseModel):
     gate: str
 
 
-def _velocity_score(account: str) -> tuple[int, int]:
+async def _velocity_score(account: str) -> tuple[int, int]:
     now = time.time()
-    bucket = _recent_by_account[account]
-    while bucket and now - bucket[0] > VELOCITY_WINDOW_SECONDS:
-        bucket.popleft()
-    bucket.append(now)
-    count = len(bucket)
+    key = f"fraud:velocity:{account}"
+    pipe = redis_client.pipeline()
+    pipe.zremrangebyscore(key, 0, now - VELOCITY_WINDOW_SECONDS)
+    pipe.zadd(key, {str(uuid.uuid4()): now})
+    pipe.zcard(key)
+    pipe.expire(key, VELOCITY_WINDOW_SECONDS * 2)
+    results = await pipe.execute()
+    count = int(results[2])
     if count > VELOCITY_SOFT_LIMIT * 3:
         return 40, count
     if count > VELOCITY_SOFT_LIMIT:
@@ -58,11 +75,11 @@ def _velocity_score(account: str) -> tuple[int, int]:
     return 0, count
 
 
-def _score(body: FraudRequest) -> FraudResponse:
+async def _score(body: FraudRequest) -> FraudResponse:
     reasons: list[str] = []
     score = 5
 
-    velocity, velocity_count = _velocity_score(body.from_account)
+    velocity, velocity_count = await _velocity_score(body.from_account)
     if velocity:
         score += velocity
         reasons.append(f"velocity={velocity_count}/{VELOCITY_WINDOW_SECONDS}s")
@@ -97,7 +114,7 @@ def _score(body: FraudRequest) -> FraudResponse:
 
 @app.post("/score", response_model=FraudResponse)
 async def score(body: FraudRequest) -> FraudResponse:
-    result = _score(body)
+    result = await _score(body)
     FRAUD_SCORE.labels(service=SERVICE, cloud=CLOUD, verdict=result.verdict).observe(result.score)
     logger.audit(
         "fraud_score_computed",

@@ -80,7 +80,7 @@ Triển khai SOAR Engine với các playbook có kiểm soát (isolate_workload,
 - Môi trường lab: 3 EC2 instance t3.medium (AWS) + 1 node tương đương (OpenStack); không mô phỏng traffic thực tế quy mô lớn
 - SOAR mặc định chạy `dry_run=true` để bảo vệ cluster lab; cần bật live mode thủ công khi muốn thực thi
 - Prometheus scrape được 9/9 active targets; ba service OpenStack được scrape qua NodePort HTTP có kiểm soát thay vì pod network liên cluster
-- SPIRE hiện sử dụng k8s_psat NodeAttestor; workload attestation đầy đủ chưa được kích hoạt cho OpenStack cluster
+- SPIRE Server (AWS) dùng `k8s_psat` NodeAttestor; SPIRE Agent (OpenStack) dùng `join_token` attestation. Core-banking đã có Envoy sidecar; account-service và transaction-service trên OpenStack vẫn chạy plain HTTP nội bộ (chưa có Envoy sidecar)
 
 ---
 
@@ -137,7 +137,7 @@ Promtail-Loki-Grafana là bộ ba công cụ mã nguồn mở thay thế ELK Sta
 - **Loki:** Log aggregation backend, tương thích LogQL, không index toàn văn bản mà chỉ index nhãn (hiệu quả hơn Elasticsearch ~10x về bộ nhớ)
 - **Grafana:** Visualization và alerting, hỗ trợ datasource Loki và Prometheus
 
-Log từ OpenStack cluster (core-banking, account-service, transaction-service) được Promtail đẩy trực tiếp về Loki trên AWS qua NodePort `10.10.1.10:31000`, đảm bảo tập trung log trên một backend duy nhất.
+Log từ OpenStack cluster (core-banking, account-service, transaction-service) được Promtail đẩy về Loki trên AWS qua socat relay `10.10.1.11:31100` (port 31100 trên AWS worker-1, node đang host Loki pod), đảm bảo tập trung log trên một backend duy nhất. Socat được cấu hình như systemd service (`loki-proxy.service`) để tự khởi động khi reboot.
 
 ### 2.7 AI Analyzer
 
@@ -225,17 +225,17 @@ Phân bố workload được thiết kế theo nguyên tắc **Data Classificati
 - `fraud-detection` — Tính toán fraud score theo velocity, amount, channel
 - `notification-service` — Thông báo kết quả giao dịch
 - `opa-server` — Policy engine ext_authz
-- `redis` — Velocity cache cho fraud detection
+- `redis` — Velocity store cho fraud detection; fraud-detection kết nối qua **redis.asyncio**, dùng Redis Sorted Set (`fraud:velocity:{account}`) để track tần suất giao dịch theo sliding window 60 giây
 - `loki`, `grafana`, `ai-analyzer`, `soar-engine`, `prometheus` — SIEM/SOAR stack
 - `keycloak`, `keycloak-db` — Identity Provider
 - `spire-server`, `spire-agent` — Certificate authority
 
 **OpenStack Cluster — Core Banking Layer:**
-- `core-banking` — Thực thi giao dịch (validate fraud gate, ghi transaction)
-- `account-service` — Quản lý tài khoản khách hàng
-- `transaction-service` — Lịch sử và truy vấn giao dịch
-- `postgres-accounts` — Database tài khoản
-- `postgres-txn` — Database giao dịch
+- `core-banking` — Thực thi giao dịch (validate fraud gate, ghi transaction_id)
+- `account-service` — Quản lý tài khoản khách hàng; kết nối **PostgreSQL** (`accounts_db`) qua asyncpg, tự tạo table khi startup và seed dữ liệu mẫu (ACC-1001, ACC-2001)
+- `transaction-service` — Lịch sử giao dịch; kết nối **PostgreSQL** (`transactions_db`) qua asyncpg, lưu ledger persist qua pod restart
+- `postgres-accounts` — PostgreSQL 16, lưu bảng `accounts` (PVC 8Gi)
+- `postgres-txn` — PostgreSQL 16, lưu bảng `ledger` (PVC 8Gi)
 - `promtail` — Log collector, đẩy về Loki trên AWS
 
 ### 3.4 Luồng thanh toán cross-cloud (Payment Flow)
@@ -299,6 +299,8 @@ Fraud detection sử dụng scoring model đơn giản, minh bạch để dễ m
 
 Ngưỡng quyết định: `score < 40` → allow, `40 ≤ score < 75` → review, `score ≥ 75` → **block**.
 
+Dữ liệu velocity được lưu trong **Redis Sorted Set** với key `fraud:velocity:{account_id}`: mỗi request tạo một entry (UUID, score=Unix timestamp), `ZREMRANGEBYSCORE` tự xóa entries ngoài cửa sổ 60 giây, `ZCARD` đếm số request còn lại. Dữ liệu persist qua pod restart, đảm bảo velocity counter không bị reset khi fraud-detection khởi động lại.
+
 Header `X-Fraud-Gate=passed` và `X-Fraud-Score=<n>` được forward đến core-banking; OPA policy `fraud_gate.rego` xác nhận thêm một lần nữa tại boundary OpenStack để chống fraud gate bypass.
 
 ---
@@ -322,7 +324,7 @@ Toàn bộ hạ tầng được quản lý theo phương pháp Infrastructure as
 
 ### 4.2 Lớp định danh — SPIRE
 
-SPIRE Server được deploy trên AWS cluster, nhận attestation từ cả hai cluster qua `k8s_psat` NodeAttestor:
+SPIRE Server được deploy trên AWS cluster. AWS cluster sử dụng `k8s_psat` NodeAttestor; OpenStack cluster sử dụng `join_token` attestation (SPIRE Agent kết nối về Server qua NodePort 30900 trên AWS master):
 
 ```hcl
 # spire/server/server.conf
@@ -387,7 +389,19 @@ Tất cả microservice được viết bằng Python/FastAPI với các đặc 
 - **Trace propagation**: `X-Trace-ID` header được tạo tại api-gateway và truyền xuyên suốt pipeline
 - **Cloud identity**: mỗi service khai báo `CLOUD = "aws"` hoặc `CLOUD = "openstack"` trong log
 
-Image được build từ `services/Dockerfile` (multi-stage) và sync vào containerd của K3s nodes bằng `scripts/sync-financial-images.sh`, không phụ thuộc vào Docker Hub hay private registry.
+**Tích hợp cơ sở dữ liệu:**
+
+Các service lưu trữ dữ liệu nghiệp vụ vào database persist, không dùng in-memory:
+
+| Service | Database | Công nghệ | Chi tiết |
+|---------|----------|-----------|----------|
+| `account-service` | PostgreSQL `accounts_db` | asyncpg connection pool | Table `accounts`; startup tự tạo table và seed ACC-1001, ACC-2001 |
+| `transaction-service` | PostgreSQL `transactions_db` | asyncpg connection pool | Table `ledger`; ghi mỗi giao dịch với UUID, timestamp, status |
+| `fraud-detection` | Redis | redis.asyncio | Sorted Set `fraud:velocity:{account}`; sliding window 60 giây |
+
+Tất cả database dùng PersistentVolumeClaim trên K3s local-path provisioner: data không mất khi pod restart. Các service kết nối DB tại `startup_event` (FastAPI lifespan), tự tạo schema nếu chưa tồn tại.
+
+Image được build từ `services/Dockerfile` và sync vào containerd của K3s nodes bằng `scripts/sync-financial-images.sh`, không phụ thuộc vào Docker Hub hay private registry.
 
 ### 4.5 NetworkPolicy
 
@@ -477,27 +491,27 @@ Tại thời điểm báo cáo, hệ thống hoàn toàn hoạt động trên c�
 
 **OpenStack Cluster (8 pods Running):**
 
-| Namespace | Service | Trạng thái |
-|-----------|---------|------------|
-| financial | core-banking | Running |
-| financial | account-service | Running |
-| financial | transaction-service | Running |
-| financial | opa-server | Running |
-| financial | postgres-accounts | Running |
-| financial | postgres-txn | Running |
-| plg-stack | promtail | Running |
-| spire | spire-agent | Running |
+| Namespace | Service | Trạng thái | Ghi chú |
+|-----------|---------|------------|---------|
+| financial | core-banking | Running | 2/2 containers (app + Envoy sidecar) |
+| financial | account-service | Running | Kết nối postgres-accounts |
+| financial | transaction-service | Running | Kết nối postgres-txn |
+| financial | opa-server | Running | |
+| financial | postgres-accounts | Running | PVC 8Gi, accounts_db |
+| financial | postgres-txn | Running | PVC 8Gi, transactions_db |
+| plg-stack | promtail | Running | Push log → socat relay 10.10.1.11:31100 |
+| spire | spire-agent | Running | join_token attestation |
 
 ### 5.2 Kịch bản kiểm thử và kết quả
 
 #### 5.2.1 Payment Flow bình thường (Baseline)
 
-Giao dịch 100.000 VND từ `acc001` đến `acc002`:
+Giao dịch 100.000 VND từ `ACC-1001` đến `ACC-2001`:
 
 ```bash
 TOKEN=$(bash scripts/gen-dev-token.sh testuser01 financial-write 2>/dev/null | head -1)
 curl -s -H "Authorization: Bearer $TOKEN" -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000,"currency":"VND"}' \
   -X POST http://127.0.0.1:8080/payments
 ```
 
@@ -517,7 +531,7 @@ Cùng `trace_id` xuất hiện trong log của `payment-service` (cloud: aws) v�
 
 ```bash
 curl -s -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000}' \
   -X POST http://127.0.0.1:8080/payments
 ```
 
@@ -584,13 +598,14 @@ Ba service OpenStack không được scrape qua pod network liên cluster; thay 
 | Tiêu chí | Kết quả | Ghi chú |
 |----------|---------|---------|
 | Zero Trust enforcement | Đạt | OPA block 100% request không có JWT/SVID hợp lệ |
-| mTLS giữa services | Đạt (partial) | Envoy sidecar + SPIRE trên AWS; OpenStack core-banking cũng có Envoy sidecar, account/transaction còn plain HTTP nội bộ |
-| Cross-cloud routing | Đạt | payment→core-banking qua Envoy STATIC cluster, trace_id xuyên suốt |
+| mTLS giữa services | Đạt (partial) | Envoy sidecar + SPIRE trên AWS; core-banking (OpenStack) có Envoy sidecar; account/transaction-service vẫn plain HTTP nội bộ |
+| Cross-cloud routing | Đạt | payment→core-banking qua Envoy STATIC cluster (10.10.1.12:30081), trace_id xuyên suốt |
 | Log tập trung | Đạt | Loki nhận log từ cả hai cluster với nhãn cloud rõ ràng |
 | AI detection | Đạt | Phát hiện đúng 6 attack scenarios, confidence 0.7–0.9 |
 | SOAR automation | Đạt (dry_run) | Cases tạo tự động, playbook mapping đúng; `case_count` tăng theo số lần chạy demo |
 | Grafana alerting | Đạt | 6 alert rules active, brute-force alert firing đúng |
 | Prometheus metrics | Đạt (9/9) | AWS services, OpenStack NodePorts, Loki và Prometheus đều UP |
+| Database persistence | Đạt | account-service (PostgreSQL), transaction-service (PostgreSQL), fraud-detection (Redis) — data không mất khi pod restart |
 | Infrastructure as Code | Đạt | Terraform + Ansible + K8s manifests đầy đủ |
 
 ---
@@ -623,7 +638,7 @@ Ba service OpenStack không được scrape qua pod network liên cluster; thay 
 
 ### 6.2 Hạn chế
 
-- **SPIRE trên OpenStack:** Agent đã deploy và cấp SVID cho core-banking, account-service, transaction-service. Core-banking đã có Envoy sidecar; account-service và transaction-service vẫn chạy plain HTTP nội bộ
+- **mTLS partial trên OpenStack:** Core-banking có Envoy sidecar + SPIRE SVID (mTLS inbound từ payment-service qua 30081). Account-service và transaction-service chưa có Envoy sidecar, vẫn plain HTTP trong nội bộ cluster OpenStack. SPIRE Agent OpenStack dùng `join_token` attestation thay vì `k8s_psat` do OpenStack cluster không có Service Account Projected Token đầy đủ
 - **Prometheus cross-cluster:** Hiện scrape OpenStack qua NodePort tĩnh; về lâu dài nên dùng Prometheus Federation, remote_write hoặc Thanos để chuẩn hóa hơn
 - **AI cost:** GPT-4o-mini có cost per API call; với traffic lớn cần cân nhắc fine-tuned open-source model (Mistral, LLaMA) để giảm chi phí
 - **SOAR playbook:** Hiện chỉ có 3 playbook cơ bản; cần mở rộng thêm (block IP tại firewall, tạo ticket incident, notify Slack)
@@ -631,7 +646,7 @@ Ba service OpenStack không được scrape qua pod network liên cluster; thay 
 
 ### 6.3 Hướng phát triển
 
-1. **Hoàn thiện SPIRE cho OpenStack:** Chuẩn hóa workload attestation qua k8s_psat và bổ sung Envoy sidecar cho account-service, transaction-service
+1. **Hoàn thiện mTLS cho OpenStack:** Bổ sung Envoy sidecar cho account-service, transaction-service trên OpenStack; chuẩn hóa SPIRE attestation từ join_token sang k8s_psat
 2. **Cross-cluster Prometheus:** Nâng cấp từ scrape NodePort tĩnh sang Prometheus Federation, remote_write hoặc Thanos Sidecar
 3. **Open-source LLM:** Thay thế OpenAI bằng Mistral 7B self-hosted để demo offline và giảm chi phí
 4. **SOAR playbook mở rộng:** Tích hợp với Slack notification, PagerDuty, tự động cập nhật firewall rule
@@ -659,4 +674,4 @@ Ba service OpenStack không được scrape qua pod network liên cluster; thay 
 
 ---
 
-*Báo cáo được soạn thảo dựa trên hệ thống đang vận hành tại thời điểm ngày 05/06/2026.*
+*Báo cáo được soạn thảo dựa trên hệ thống đang vận hành tại thời điểm ngày 06/06/2026.*
