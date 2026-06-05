@@ -52,28 +52,24 @@ Các instance khác (`aws-gateway`, `aws-security`, `aws-siem`) **không cần**
 
 ---
 
-### Bước 1 — Bật EC2 instances trên AWS Console
+### Bước 1 — Bật EC2 instances
 
-Truy cập: **AWS Console → EC2 → Instances**
+Kiểm tra trạng thái hiện tại trước:
 
-Chọn và bật (Start) **4 instances** sau:
-
+```bash
+aws ec2 describe-instances --region ap-southeast-1 \
+  --instance-ids \
+    i-06d2382ad780bda8c \
+    i-0293f9568b3c0762b \
+    i-00001195627942100 \
+    i-08f1cf418461cca62 \
+  --query 'Reservations[].Instances[].[InstanceId, Tags[?Key==`Name`].Value|[0], State.Name]' \
+  --output table
 ```
-✓ aws-bastion      (i-06d2382ad780bda8c)
-✓ aws-k3s-master   (i-0293f9568b3c0762b)
-✓ aws-k3s-worker-1 (i-00001195627942100)
-✓ os-k3s-master    (i-08f1cf418461cca62)
-```
 
-Cách bật: tick vào từng instance → **Actions → Instance State → Start instance**
+Nếu tất cả đã `running` → bỏ qua lệnh start bên dưới, chuyển thẳng sang Bước 2.
 
-Hoặc bật hết một lúc: tick cả 4 → **Instance State → Start instance**
-
-Chờ đến khi cột **Instance state** chuyển sang `running` và **Status check** hiện `2/2 checks passed` (~3–5 phút).
-
-> **Lưu ý:** `aws-bastion` có Elastic IP tĩnh `54.254.145.86` — IP này không bao giờ thay đổi dù restart bao nhiêu lần.
-
-Hoặc bật bằng AWS CLI (nếu đã cấu hình):
+Nếu có instance đang `stopped` → bật lên:
 
 ```bash
 aws ec2 start-instances --region ap-southeast-1 \
@@ -83,6 +79,35 @@ aws ec2 start-instances --region ap-southeast-1 \
     i-00001195627942100 \
     i-08f1cf418461cca62
 ```
+
+Chờ ~3–5 phút rồi kiểm tra tất cả đã `running`:
+
+```bash
+aws ec2 describe-instance-status --region ap-southeast-1 \
+  --instance-ids \
+    i-06d2382ad780bda8c \
+    i-0293f9568b3c0762b \
+    i-00001195627942100 \
+    i-08f1cf418461cca62 \
+  --query 'InstanceStatuses[].[InstanceId, InstanceState.Name, InstanceStatus.Status, SystemStatus.Status]' \
+  --output table
+```
+
+Kết quả mong đợi — tất cả 4 dòng phải là `running | ok | ok`:
+```
+----------------------------------------------------------------------
+|                     DescribeInstanceStatus                         |
++----------------------+---------+--------+--------+
+|  i-06d2382ad780bda8c | running | ok     | ok     |
+|  i-0293f9568b3c0762b | running | ok     | ok     |
+|  i-00001195627942100 | running | ok     | ok     |
+|  i-08f1cf418461cca62 | running | ok     | ok     |
++----------------------+---------+--------+--------+
+```
+
+Nếu chưa thấy đủ 4 dòng (instance đang khởi động chưa có status) → chạy lại lệnh sau 1–2 phút.
+
+> **Lưu ý:** `aws-bastion` có Elastic IP tĩnh `54.254.145.86` — IP này không thay đổi dù restart.
 
 ---
 
@@ -95,7 +120,7 @@ ssh -i ~/.ssh/zta-siem-soar-key \
   ubuntu@54.254.145.86 "echo bastion OK && uptime"
 ```
 
-Nếu vẫn timeout sau 5 phút → quay lại AWS Console kiểm tra instance state.
+Nếu vẫn timeout sau 5 phút → chạy lại lệnh check status ở Bước 1.
 
 ---
 
@@ -158,38 +183,82 @@ ssh -N \
 Xác nhận UI tunnel hoạt động:
 
 ```bash
-curl -sI -H "Host: api.ztlab.local" http://127.0.0.1:8080/health | head -1
-# HTTP/1.1 200 OK
+curl -v -H "Host: api.ztlab.local" http://127.0.0.1:8080/health
+# Expect: HTTP/1.1 200 OK và JSON {"status":"ok","service":"api-gateway",...}
 ```
+
+**Nếu không hoạt động:**
+
+```bash
+# 1. Kiểm tra port 8080 có đang bị chiếm không
+ss -tlnp | grep 8080
+# Nếu có process khác dùng → kill trước
+kill $(lsof -ti tcp:8080) 2>/dev/null
+
+# 2. Kiểm tra bastion còn reachable không
+ssh -i ~/.ssh/zta-siem-soar-key -o ConnectTimeout=8 ubuntu@54.254.145.86 "echo OK"
+
+# 3. Kiểm tra Traefik (ingress) trên AWS master đang chạy không
+ssh -i ~/.ssh/zta-siem-soar-key -J ubuntu@54.254.145.86 ubuntu@10.10.1.10 \
+  "kubectl get pods -n kube-system | grep traefik"
+
+# 4. Thử mở lại tunnel (terminal mới)
+ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no \
+  -L 8080:10.10.1.10:80 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10
+```
+
+> Nếu Traefik không chạy → `kubectl --context ctx-aws rollout restart deployment/traefik -n kube-system`
 
 ---
 
-### Bước 6 — Mở port-forward cho AI / SOAR / Loki / Grafana
+### Bước 6 — Mở port-forward và kiểm tra các UI
+
+Hệ thống có **6 UI** truy cập được — chia làm 2 nhóm:
+
+**Nhóm 1 — Qua UI tunnel (Bước 5, cần tunnel đang chạy):**
+
+| URL | Đăng nhập | Vào thẳng trang |
+|-----|-----------|-----------------|
+| http://grafana.ztlab.local:8080 | admin / ZTALab2026! | `/d/ztlab-overview` — Security Overview |
+| http://prometheus.ztlab.local:8080 | Không cần | `/targets` — xem 9/9 targets; `/graph` — query |
+| http://keycloak.ztlab.local:8080 | admin / ztlab-admin-2026 | `/admin` — quản lý users/realms |
+| http://ai.ztlab.local:8080 | Không cần | `/health` — trạng thái AI; `/cases` — xem cases |
+| http://soar.ztlab.local:8080 | Không cần | `/cases` — danh sách SOAR cases |
+| http://api.ztlab.local:8080 | JWT Bearer token | `/health` — kiểm tra; `/payments` — demo |
+
+> **Prometheus `/graph` hiện ra blank** là bình thường — đó là query box rỗng. Vào thẳng `/targets` để thấy 9/9 scrape targets, hoặc `/graph` rồi nhập query như `ztlab_txn_total`.
+
+**Nhóm 2 — Qua port-forward (truy cập trực tiếp, không cần Host header):**
 
 ```bash
 export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
 
-kubectl --context ctx-aws port-forward -n plg-stack svc/grafana      3000:3000  --address=127.0.0.1 >/tmp/pf-grafana.log 2>&1 &
-kubectl --context ctx-aws port-forward -n plg-stack svc/loki         3100:3100  --address=127.0.0.1 >/tmp/pf-loki.log    2>&1 &
-kubectl --context ctx-aws port-forward -n plg-stack svc/ai-analyzer  8090:8080  --address=127.0.0.1 >/tmp/pf-ai.log     2>&1 &
-kubectl --context ctx-aws port-forward -n plg-stack svc/soar-engine  8091:8080  --address=127.0.0.1 >/tmp/pf-soar.log   2>&1 &
+kubectl --context ctx-aws port-forward -n plg-stack  svc/grafana      3000:3000  --address=127.0.0.1 >/tmp/pf-grafana.log  2>&1 &
+kubectl --context ctx-aws port-forward -n plg-stack  svc/loki         3100:3100  --address=127.0.0.1 >/tmp/pf-loki.log     2>&1 &
+kubectl --context ctx-aws port-forward -n plg-stack  svc/ai-analyzer  8090:8080  --address=127.0.0.1 >/tmp/pf-ai.log      2>&1 &
+kubectl --context ctx-aws port-forward -n plg-stack  svc/soar-engine  8091:8080  --address=127.0.0.1 >/tmp/pf-soar.log    2>&1 &
+kubectl --context ctx-aws port-forward -n monitoring svc/prometheus   9090:9090  --address=127.0.0.1 >/tmp/pf-prom.log    2>&1 &
 
 sleep 4
 
 # Xác nhận tất cả đang chạy
-echo "Grafana: $(curl -sf http://127.0.0.1:3000/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')"
-echo "Loki:    $(curl -sf http://127.0.0.1:3100/ready)"
-echo "AI:      $(curl -sf http://127.0.0.1:8090/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], "|", d["provider"])')"
-echo "SOAR:    $(curl -sf http://127.0.0.1:8091/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], "| cases:", d["case_count"])')"
+echo "Grafana:    $(curl -sf http://127.0.0.1:3000/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["database"])')"
+echo "Loki:       $(curl -sf http://127.0.0.1:3100/ready)"
+echo "Prometheus: $(curl -sf http://127.0.0.1:9090/-/healthy)"
+echo "AI:         $(curl -sf http://127.0.0.1:8090/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], "|", d["provider"])')"
+echo "SOAR:       $(curl -sf http://127.0.0.1:8091/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], "| cases:", d["case_count"])')"
 ```
 
 Kết quả mong đợi:
 ```
-Grafana: ok
-Loki:    ready
-AI:      ok | gemini
-SOAR:    ok | cases: 5
+Grafana:    ok
+Loki:       ready
+Prometheus: Prometheus Server is Healthy.
+AI:         ok | openai
+SOAR:       ok | cases: <số case hiện tại>
 ```
+
+> `AI_PROVIDER` phụ thuộc `.env.ai`/secret đang deploy; hệ thống live hiện dùng `openai`. Số SOAR cases tăng dần theo số lần chạy demo, nên chỉ cần endpoint trả về `ok`.
 
 Khi xong buổi demo, tắt port-forward:
 ```bash
@@ -227,22 +296,223 @@ kubectl --context ctx-aws rollout restart deployment/<tên> -n <namespace>
 
 ---
 
-### Bước 8 — Kiểm tra nhanh API và cross-cloud
+### Bước 8 — Kiểm tra toàn bộ hệ thống trước khi demo
+
+Chạy từng mục theo thứ tự. Tất cả phải pass mới demo được.
+
+#### 8.1 — Health cơ bản
 
 ```bash
 # API Gateway (AWS)
 curl -s -H "Host: api.ztlab.local" http://127.0.0.1:8080/health | python3 -m json.tool
 # Expect: {"status":"ok","service":"api-gateway","cloud":"aws"}
 
-# Core Banking (OpenStack) — plain HTTP trực tiếp qua port 30084
+# Core Banking (OpenStack) — dùng port 30084 (plain HTTP, KHÔNG dùng 30081 là mTLS)
 ssh -i ~/.ssh/zta-siem-soar-key -J ubuntu@54.254.145.86 ubuntu@10.10.1.10 \
   "curl -sf http://10.10.1.12:30084/health"
 # Expect: {"status":"ok","service":"core-banking","cloud":"openstack"}
 ```
 
-> **Lưu ý:** Port `30081` là Envoy mTLS inbound — gọi bằng plain HTTP sẽ bị từ chối (chỉ dành cho payment-service gọi qua mTLS). Dùng port `30084` cho health check và Prometheus.
+#### 8.2 — Pods tất cả Running
 
-**Hệ thống đã sẵn sàng** khi cả hai đều trả về `status: ok`.
+```bash
+export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
+
+# AWS — phải thấy: api-gateway, payment-service, fraud-detection,
+#   notification-service, opa-server, redis, promtail, loki, grafana,
+#   ai-analyzer, soar-engine, prometheus, keycloak, spire (tất cả Running)
+kubectl --context ctx-aws get pods -A --no-headers | grep -v kube-system | grep -v Completed
+
+# OpenStack — phải thấy: core-banking (2/2), account-service, transaction-service,
+#   opa-server, postgres-accounts, postgres-txn, promtail, spire-agent (tất cả Running)
+kubectl --context ctx-openstack get pods -n financial --no-headers
+kubectl --context ctx-openstack get pods -n plg-stack --no-headers
+kubectl --context ctx-openstack get pods -n spire --no-headers
+```
+
+#### 8.3 — SPIRE: workload đã được cấp SVID
+
+```bash
+# SPIRE server đang chạy và có đủ entries
+kubectl --context ctx-aws exec -n spire deploy/spire-server -- \
+  /opt/spire/bin/spire-server entry show 2>/dev/null | grep -c "Entry ID"
+# Expect: 16 (hoặc hơn)
+
+# SPIRE agent OpenStack đang nhận SVID (phải thấy "SVID" hoặc "issued")
+kubectl --context ctx-openstack logs -n spire daemonset/spire-agent --tail=10 \
+  | grep -E "SVID|issued|attestation|error" | tail -5
+```
+
+#### 8.4 — Prometheus: 9/9 targets UP
+
+```bash
+kubectl --context ctx-aws port-forward -n monitoring svc/prometheus 19090:9090 \
+  --address=127.0.0.1 >/tmp/pf-prom.log 2>&1 &
+sleep 3
+curl -s "http://localhost:19090/api/v1/targets?state=active" | python3 -c "
+import json,sys
+tgts = json.load(sys.stdin)['data']['activeTargets']
+up = [t for t in tgts if t['health']=='up']
+down = [t for t in tgts if t['health']!='up']
+print(f'Targets: {len(up)} UP / {len(tgts)} total')
+for t in down:
+    print('  DOWN:', t['scrapeUrl'], '-', t.get('lastError','')[:60])
+"
+kill %1 2>/dev/null; wait %1 2>/dev/null
+# Expect: 9 UP / 9 total
+```
+
+#### 8.5 — Loki: xác nhận nhận log từ cả AWS và OpenStack
+
+> Yêu cầu: đã chạy port-forward Loki từ Bước 6.
+
+##### Kiểm tra Loki hoạt động
+
+```bash
+curl -s http://127.0.0.1:3100/ready
+```
+
+Kết quả mong đợi:
+
+```text
+ready
+```
+
+##### Kiểm tra các labels trong Loki
+
+```bash
+curl -s http://127.0.0.1:3100/loki/api/v1/labels \
+| python3 -c 'import json,sys; print("Labels:", json.load(sys.stdin)["data"])'
+```
+
+Kết quả mong đợi:
+
+```text
+Labels: [..., 'cloud', 'namespace', 'job', 'container', ...]
+```
+
+##### Xác nhận có log từ AWS
+
+```bash
+curl -sG "http://127.0.0.1:3100/loki/api/v1/query" \
+  --data-urlencode 'query=count_over_time({cloud="aws"}[1h])' \
+| python3 -c 'import json,sys; d=json.load(sys.stdin); print("AWS logs:", "OK" if d["data"]["result"] else "KHÔNG CÓ LOG")'
+```
+
+Kết quả mong đợi:
+
+```text
+AWS logs: OK
+```
+
+##### Xác nhận có log từ OpenStack
+
+```bash
+curl -sG "http://127.0.0.1:3100/loki/api/v1/query" \
+  --data-urlencode 'query=count_over_time({cloud="openstack"}[1h])' \
+| python3 -c 'import json,sys; d=json.load(sys.stdin); print("OpenStack logs:", "OK" if d["data"]["result"] else "KHÔNG CÓ LOG — kiểm tra Promtail hoặc Loki Proxy")'
+```
+
+Kết quả mong đợi:
+
+```text
+OpenStack logs: OK
+```
+
+##### Kiểm tra trực tiếp log đang được ingest
+
+```bash
+curl -sG "http://127.0.0.1:3100/loki/api/v1/query" \
+  --data-urlencode 'query={cloud=~"aws|openstack"}' \
+| python3 -m json.tool | head -50
+```
+
+Nếu có dữ liệu trả về, chứng tỏ Loki đang nhận log từ các node trong hệ thống.
+
+#### 8.6 — Loki Proxy (socat relay cho OpenStack → AWS Loki)
+
+##### Kiểm tra socat đang listen
+
+```bash
+ssh -i ~/.ssh/zta-siem-soar-key -J ubuntu@54.254.145.86 ubuntu@10.10.1.11 \
+  "ss -tlnp | grep 31100 && echo 'socat OK — port 31100 đang listen' || echo 'STOPPED — chạy: sudo systemctl start loki-proxy.service'"
+```
+
+Kết quả mong đợi:
+
+```text
+socat OK — port 31100 đang listen
+```
+
+##### Kiểm tra relay thực sự truy cập được Loki
+
+```bash
+ssh -i ~/.ssh/zta-siem-soar-key -J ubuntu@54.254.145.86 ubuntu@10.10.1.11 \
+  "curl -s http://127.0.0.1:31100/ready"
+```
+
+Kết quả mong đợi:
+
+```text
+ready
+```
+
+Nếu nhận được `ready`, chứng tỏ:
+
+```text
+OpenStack Promtail
+    ↓
+localhost:31100 (socat)
+    ↓
+AWS Loki :3100
+```
+
+đang hoạt động bình thường.
+
+##### Nếu không hoạt động
+
+Kiểm tra log:
+
+```bash
+ssh -i ~/.ssh/zta-siem-soar-key -J ubuntu@54.254.145.86 ubuntu@10.10.1.11 \
+  "sudo journalctl -u loki-proxy.service -n 50 --no-pager"
+```
+
+Khởi động lại:
+
+```bash
+ssh -i ~/.ssh/zta-siem-soar-key -J ubuntu@54.254.145.86 ubuntu@10.10.1.11 \
+  "sudo systemctl restart loki-proxy.service"
+```
+
+> **Lưu ý:** Kiểm tra port `31100` là cách đáng tin cậy hơn `systemctl is-active`, vì trong quá trình demo socat có thể được chạy thủ công ngoài systemd nhưng vẫn hoạt động bình thường.
+
+#### 8.7 — Cross-cloud mTLS end-to-end (quan trọng nhất)
+
+```bash
+TOKEN=$(bash scripts/gen-dev-token.sh 2>/dev/null | head -1)
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Host: api.ztlab.local" \
+  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}' \
+  -X POST http://127.0.0.1:8080/payments | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+status = d.get('status','?')
+fraud  = d.get('fraud',{})
+txn    = d.get('core_banking',{})
+print(f'Payment status : {status}')
+print(f'Fraud score    : {fraud.get(\"score\",\"?\")} — gate: {fraud.get(\"gate\",\"?\")}')
+print(f'Transaction ID : {txn.get(\"transaction_id\",\"FAILED\")}')
+if status == 'completed':
+    print('✓ Cross-cloud mTLS + OPA hoạt động bình thường')
+else:
+    print('✗ Có lỗi — xem Phần 5 Xử lý sự cố')
+"
+```
+
+**Hệ thống sẵn sàng demo** khi tất cả 7 mục trên đều pass, đặc biệt Bước 8.7 trả về `status: completed`.
 
 ---
 
@@ -656,6 +926,52 @@ Mở UI tunnel, port-forward, và kiểm tra health như bình thường.
 ---
 
 ## Phần 5 — Xử lý sự cố thường gặp
+
+### API trả về 405 Method Not Allowed
+
+Nguyên nhân: gọi đúng path nhưng sai HTTP method. Bảng method đúng:
+
+| Endpoint | Method đúng | Method sai → 405 |
+|----------|-------------|------------------|
+| `/health` | GET | POST, PUT, DELETE |
+| `/payments` | POST | GET, PUT |
+| `/metrics` | GET | POST |
+
+Kiểm tra nhanh method đang dùng:
+
+```bash
+# Xem response header để biết lỗi từ đâu
+curl -sv -X POST \
+  -H "Host: api.ztlab.local" \
+  http://127.0.0.1:8080/health 2>&1 | grep -E "< HTTP|detail|Allow"
+# Nếu thấy "Method Not Allowed" → sai method
+# Header "Allow: GET" sẽ cho biết method nào mới đúng
+```
+
+Lỗi hay gặp:
+
+```bash
+# SAI — POST vào /health
+curl -X POST http://127.0.0.1:8080/health -H "Host: api.ztlab.local"
+# → 405
+
+# ĐÚNG — GET vào /health
+curl http://127.0.0.1:8080/health -H "Host: api.ztlab.local"
+# → 200
+
+# SAI — GET vào /payments
+curl http://127.0.0.1:8080/payments -H "Host: api.ztlab.local"
+# → 403 (OPA chặn trước) hoặc 405 nếu OPA pass
+
+# ĐÚNG — POST vào /payments
+curl -X POST http://127.0.0.1:8080/payments \
+  -H "Host: api.ztlab.local" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}'
+```
+
+---
 
 ### Tunnel kubectl không kết nối được
 
