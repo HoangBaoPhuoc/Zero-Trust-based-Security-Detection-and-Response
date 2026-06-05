@@ -109,10 +109,10 @@ SVID có TTL 1 giờ và được tự động gia hạn, đảm bảo nguyên t
 
 OPA là policy engine mã nguồn mở theo cơ chế "policy as code". Các chính sách được viết bằng ngôn ngữ Rego và được OPA đánh giá tại runtime. Trong đề tài, OPA được tích hợp vào Envoy Proxy như một ext_authz server: mọi request đến các microservice đều được Envoy gửi sang OPA để kiểm tra trước khi chuyển tiếp.
 
-Ba chính sách Rego chính:
-- **zta_policy.rego:** Kiểm tra JWT/SVID, phân biệt external request (JWT) và internal request (SVID)
-- **fraud_gate.rego:** Xác nhận header `X-Fraud-Gate` và `X-Fraud-Score` tại endpoint `/transactions/execute` của core-banking
-- **cross_cloud.rego:** Chỉ cho phép `spiffe://ztlab.local/aws/payment-service` gọi đến `spiffe://ztlab.local/openstack/core-banking`
+Ba policy file được load vào OPA (package khác nhau):
+- **zta_policy.rego** (`package zta.authz`): Policy chính — Envoy ext_authz query `zta/authz/allow`. Phân biệt external request (có Bearer token, không có SVID), internal request (có SVID), và core transaction (SVID + fraud gate headers hợp lệ). Rule `core_transaction_with_fraud_gate` cho phép `POST /transactions/execute` khi có SVID hợp lệ + `X-Fraud-Gate: passed` + `X-Fraud-Score < 75`
+- **fraud_gate.rego** (`package zta.fraud_gate`): Định nghĩa `fraud_gate_valid` và `fraud_gate_bypass_detected` — được import bởi `zta_policy.rego`
+- **cross_cloud.rego** (`package zta.crosscloud`): Định nghĩa `allow_cross_cloud` chỉ cho phép `payment-service → core-banking` và `allow` cho các AWS/OpenStack SVID — supplementary policy, không được Envoy ext_authz query trực tiếp (do khác package với `zta.authz`)
 
 ### 2.4 Envoy Proxy — Service Mesh PEP
 
@@ -244,7 +244,7 @@ Phân bố workload được thiết kế theo nguyên tắc **Data Classificati
 [Người dùng]
      │  JWT Bearer token
      ▼
-[Ingress - Nginx] ── host: api.ztlab.local
+[Ingress - Traefik] ── host: api.ztlab.local (IngressRoute K3s built-in)
      │
      ▼
 [api-gateway (AWS)]
@@ -376,10 +376,11 @@ Envoy được cấu hình như sidecar (`envoy/configmap.yaml`) với các thà
                   port_value: 30081     # core-banking NodePort
 ```
 
-OPA policy `zta_policy.rego` phân biệt ba loại request:
-1. **External request** (có JWT Bearer, không có SVID): chỉ cho phép `POST /payments`, `GET /health`
-2. **Internal request** (có SVID `spiffe://ztlab.local/*`): cho phép các path nội bộ
-3. **Core transaction** (có SVID + `X-Fraud-Gate: passed`): cho phép `/transactions/execute` với fraud score < 75
+OPA ext_authz query path: `zta/authz/allow` (package `zta.authz` trong `zta_policy.rego`). Policy phân biệt ba loại request:
+1. **External request** (có Bearer token, không có SVID): cho phép `POST /payments` và `GET/OPTIONS *`
+2. **Internal request** (có SVID `spiffe://ztlab.local/*`): cho phép `GET/OPTIONS *` và `POST /payments|/score|/notify`
+3. **Core transaction** (có SVID + `X-Fraud-Gate: passed` + `X-Fraud-Score < 75`): cho phép `POST /transactions/execute`
+4. **Public path** (`/health`, `/ready`, `/metrics`): luôn cho phép, không cần auth
 
 ### 4.4 Lớp dịch vụ tài chính
 

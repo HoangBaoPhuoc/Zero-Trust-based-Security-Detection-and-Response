@@ -794,9 +794,11 @@ Kết quả mong đợi:
     "confidence": 0.78,
     "attack_type": "access_denied",
     "recommended_playbook": "isolate_workload",
-    "provider_used": "gemini"
+    "provider_used": "openai"
 }
 ```
+
+> `provider_used` phụ thuộc secret `AI_PROVIDER` đang deploy. Hệ thống live hiện dùng `openai` (GPT-4o-mini). Nếu quota hết → tự fallback sang `heuristic`.
 
 Kiểm tra SOAR cases được tạo tự động:
 
