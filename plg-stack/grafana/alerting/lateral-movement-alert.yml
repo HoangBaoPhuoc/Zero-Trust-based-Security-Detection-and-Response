@@ -6,11 +6,29 @@ groups:
     folder: ZTLab
     interval: 1m
     rules:
-      - uid: lateral-movement-deny
-        title: Lateral Movement Blocked
+      - uid: lateral-movement-svid
+        title: "Lateral Movement — Invalid SVID Pair Detected"
+        for: 0s
         condition: A
         data:
           - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
             datasourceUid: Loki
             model:
-              expr: '{job="opa"} |= "lateral"'
+              datasource:
+                type: loki
+                uid: Loki
+              expr: '{job="opa-decisions"} | json | opa_result=`false` | deny_reason=`svid_mismatch`'
+              instant: false
+              queryType: range
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "OPA denied request with SVID mismatch — possible lateral movement"
+          description: "ATT&CK T1021.007. Check OPA Decision Log dashboard."
+        labels:
+          severity: critical
+          mitre: T1021.007
