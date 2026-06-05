@@ -211,6 +211,27 @@ ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no \
 
 ---
 
+### Bước 5.1 — Mở local relay cho Keycloak Admin
+
+Keycloak Admin UI dùng `http://localhost` để tránh lỗi cookie `Cookie not found` trên HTTP tunnel. Mở relay local port 80 sang UI tunnel 8080:
+
+```bash
+# Chỉ cần chạy nếu chưa có port 80 listen trên 127.0.0.1
+if ! ss -lntp | grep -q "127.0.0.1:80"; then
+  sudo sh -c 'nohup socat TCP-LISTEN:80,bind=127.0.0.1,fork,reuseaddr TCP:127.0.0.1:8080 >/tmp/ztlab-port80-socat.log 2>&1 &'
+fi
+```
+
+Mở Keycloak bằng URL này:
+
+```text
+http://localhost/admin
+```
+
+Không dùng `http://keycloak.ztlab.local:8080/admin` cho Admin UI, vì browser có thể không lưu cookie đăng nhập đúng và báo `Cookie not found`. Nếu từng mở URL cũ, xóa cookie/site data của `keycloak.ztlab.local` và `localhost`, hoặc mở tab ẩn danh.
+
+---
+
 ### Bước 6 — Mở port-forward và kiểm tra các UI
 
 Hệ thống có **6 UI** truy cập được — chia làm 2 nhóm:
@@ -221,7 +242,7 @@ Hệ thống có **6 UI** truy cập được — chia làm 2 nhóm:
 |-----|-----------|-----------------|
 | http://grafana.ztlab.local:8080 | admin / ZTALab2026! | `/d/ztlab-overview` — Security Overview |
 | http://prometheus.ztlab.local:8080 | Không cần | `/targets` — xem 9/9 targets; `/graph` — query |
-| http://keycloak.ztlab.local:8080 | admin / ztlab-admin-2026 | `/admin` — quản lý users/realms |
+| http://localhost | admin / ztlab-admin-2026 | `/admin` — quản lý users/realms |
 | http://ai.ztlab.local:8080 | Không cần | `/health` — trạng thái AI; `/cases` — xem cases |
 | http://soar.ztlab.local:8080 | Không cần | `/cases` — danh sách SOAR cases |
 | http://api.ztlab.local:8080 | JWT Bearer token | `/health` — kiểm tra; `/payments` — demo |

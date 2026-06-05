@@ -79,7 +79,7 @@ Triển khai SOAR Engine với các playbook có kiểm soát (isolate_workload,
 **Giới hạn:**
 - Môi trường lab: 3 EC2 instance t3.medium (AWS) + 1 node tương đương (OpenStack); không mô phỏng traffic thực tế quy mô lớn
 - SOAR mặc định chạy `dry_run=true` để bảo vệ cluster lab; cần bật live mode thủ công khi muốn thực thi
-- Prometheus chỉ scrape được 6/9 services (3 OS services không thể scrape cross-cluster là hành vi đúng của network isolation)
+- Prometheus scrape được 9/9 active targets; ba service OpenStack được scrape qua NodePort HTTP có kiểm soát thay vì pod network liên cluster
 - SPIRE hiện sử dụng k8s_psat NodeAttestor; workload attestation đầy đủ chưa được kích hoạt cho OpenStack cluster
 
 ---
@@ -126,7 +126,7 @@ Vai trò của Envoy:
 
 ### 2.5 Keycloak — Identity Provider
 
-Keycloak cung cấp OIDC/OAuth2 cho phép người dùng lấy JWT token để truy cập API. Hệ thống có realm `ztlab` với client `api-gateway`, cấp token RS256 có claim `realm_access.roles` để OPA kiểm tra quyền.
+Keycloak cung cấp OIDC/OAuth2 cho phép người dùng lấy JWT token để truy cập API. Hệ thống có realm `ztlab` với client `api-gateway`, cấp token RS256 có claim `realm_access.roles` để OPA kiểm tra quyền. Trong lab hiện tại, Admin UI được expose qua `http://localhost/admin` để login ổn định với cookie trên HTTP tunnel; các service vẫn dùng realm `ztlab` và endpoint OIDC nội bộ/ingress tương ứng.
 
 Trong môi trường lab, hệ thống hỗ trợ thêm dev token HS256 (gen-dev-token.sh) để dễ dàng test mà không cần flow OIDC đầy đủ.
 
