@@ -27,6 +27,15 @@ Các instance khác (`aws-gateway`, `aws-security`, `aws-siem`) **không cần**
 | Keycloak testuser01 | testuser01 | Test@1234 |
 | Keycloak testuser02 | testuser02 | Test@1234 |
 
+### Tài khoản ngân hàng demo (seeded sẵn trong PostgreSQL)
+
+| Account ID | Chủ tài khoản | Số dư | Service quản lý |
+|------------|---------------|-------|-----------------|
+| `ACC-1001` | testuser01 | 1.000.000.000 VND | account-service (OpenStack) |
+| `ACC-2001` | merchant01 | 250.000.000 VND | account-service (OpenStack) |
+
+> Data được seed khi `account-service` khởi động (`ON CONFLICT DO NOTHING`), persist trong `postgres-accounts` PVC.
+
 ### Kubectl contexts
 
 | Context | Tunnel port | Trỏ đến | Cluster |
@@ -516,7 +525,7 @@ curl -s \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000,"currency":"VND"}' \
   -X POST http://127.0.0.1:8080/payments | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
@@ -574,7 +583,7 @@ kubectl --context ctx-openstack get pods -n financial
 # core-banking (2/2 — có Envoy sidecar), account-service, transaction-service, opa-server, postgres-*
 ```
 
-**Điểm nhấn khi trình bày:** Hai context khác nhau, hai K3s cluster hoàn toàn tách biệt, phân chia workload theo nguyên tắc Data Classification (public-facing → AWS, core banking → OpenStack). Core-banking có 2 containers vì chạy thêm Envoy sidecar để thực thi mTLS và OPA.
+**Điểm nhấn khi trình bày:** Hai context khác nhau, hai K3s cluster hoàn toàn tách biệt, phân chia workload theo nguyên tắc Data Classification (public-facing → AWS, core banking → OpenStack). Core-banking có 2 containers vì chạy thêm Envoy sidecar để thực thi mTLS và OPA. Account-service và transaction-service kết nối PostgreSQL trên cùng namespace (persist data), fraud-detection kết nối Redis trên AWS (velocity tracking bền vững qua restart).
 
 ---
 
@@ -585,7 +594,7 @@ curl -s \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000,"currency":"VND"}' \
   -X POST http://127.0.0.1:8080/payments | python3 -m json.tool
 ```
 
@@ -640,7 +649,7 @@ Kiểm tra trace_id xuyên suốt cả 2 cloud trong Grafana → Explore → Lok
 curl -s \
   -H "Content-Type: application/json" \
   -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000}' \
   -X POST http://127.0.0.1:8080/payments
 ```
 
@@ -672,7 +681,7 @@ for i in $(seq 1 15); do
     -H "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.fake.signature" \
     -H "Host: api.ztlab.local" \
     -H "Content-Type: application/json" \
-    -d '{"from_account":"acc001","to_account":"acc002","amount":100}' \
+    -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100}' \
     -X POST http://127.0.0.1:8080/payments
 done
 ```
@@ -692,7 +701,7 @@ curl -s \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":500000000,"currency":"VND","channel":"tor"}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":500000000,"currency":"VND","channel":"tor"}' \
   -X POST http://127.0.0.1:8080/payments | python3 -m json.tool
 ```
 
@@ -712,7 +721,7 @@ for i in $(seq 1 35); do
     -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     -H "Host: api.ztlab.local" \
-    -d "{\"from_account\":\"flood001\",\"to_account\":\"acc002\",\"amount\":150000000}" \
+    -d "{\"from_account\":\"flood001\",\"to_account\":\"ACC-2001\",\"amount\":150000000}" \
     -X POST http://127.0.0.1:8080/payments)
   SCORE=$(echo "$RES" | python3 -c "
 import json,sys
@@ -752,7 +761,7 @@ curl -s \
   -H "Authorization: Bearer $FAKE_TOKEN" \
   -H "Host: api.ztlab.local" \
   -H "Content-Type: application/json" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000}' \
   -X POST http://127.0.0.1:8080/payments
 ```
 
@@ -989,7 +998,7 @@ curl -X POST http://127.0.0.1:8080/payments \
   -H "Host: api.ztlab.local" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}'
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000,"currency":"VND"}'
 ```
 
 ---
