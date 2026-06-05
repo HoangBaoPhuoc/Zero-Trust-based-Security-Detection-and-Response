@@ -41,9 +41,9 @@ spec:
                   name: keycloak-secret
                   key: postgres-password
             - name: KC_HOSTNAME
-              value: keycloak.ztlab.local
-            - name: KC_PROXY
-              value: edge
+              value: localhost
+            - name: KC_HOSTNAME_ADMIN
+              value: localhost
             - name: KC_HTTP_ENABLED
               value: "true"
           ports:

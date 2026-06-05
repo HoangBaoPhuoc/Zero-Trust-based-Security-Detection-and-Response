@@ -53,6 +53,22 @@ spec:
         - name: keycloak
           port: 8080
 ---
+# Keycloak localhost fallback — identity namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: keycloak-localhost
+  namespace: identity
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`localhost`)
+      kind: Rule
+      services:
+        - name: keycloak
+          port: 8080
+---
 # AI Analyzer — plg-stack namespace
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
