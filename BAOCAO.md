@@ -415,7 +415,7 @@ labels:
   node: {{ .NodeName }}
 ```
 
-Loki được deploy trên AWS với PersistentVolume 10Gi. Promtail trên OpenStack cluster được cấu hình `LOKI_PUSH_URL=http://10.10.1.10:31000/loki/api/v1/push` để đẩy log cross-cluster.
+Loki được deploy trên AWS với PersistentVolume 10Gi. Promtail trên OpenStack cluster được cấu hình `LOKI_PUSH_URL=http://10.10.1.11:31100/loki/api/v1/push`; `31100` là Loki proxy/relay trên AWS worker, chuyển tiếp về Loki backend trên AWS.
 
 Grafana được provision sẵn 4 dashboard:
 - **ZTA Security Overview**: OPA decisions, JWT failures, fraud blocks theo thời gian
@@ -475,15 +475,18 @@ Tại thời điểm báo cáo, hệ thống hoàn toàn hoạt động trên c�
 | spire | spire-server | 1 | Running |
 | spire | spire-agent | DaemonSet/2 nodes | Running |
 
-**OpenStack Cluster (5 pods Running):**
+**OpenStack Cluster (8 pods Running):**
 
 | Namespace | Service | Trạng thái |
 |-----------|---------|------------|
 | financial | core-banking | Running |
 | financial | account-service | Running |
 | financial | transaction-service | Running |
+| financial | opa-server | Running |
 | financial | postgres-accounts | Running |
 | financial | postgres-txn | Running |
+| plg-stack | promtail | Running |
+| spire | spire-agent | Running |
 
 ### 5.2 Kịch bản kiểm thử và kết quả
 
@@ -565,28 +568,29 @@ Sau các scenario tấn công, AI Analyzer (poll mỗi 120 giây) tự động p
 }
 ```
 
-**SOAR cases tích lũy:** Tại thời điểm kiểm tra, hệ thống đã tự động tạo 5 SOAR cases. Với `SOAR_DRY_RUN=true`, các case có status `dry_run` — nghĩa là playbook đã được lên kế hoạch nhưng không thực thi, phù hợp để demo mà không làm gián đoạn cluster.
+**SOAR cases tích lũy:** Tại thời điểm kiểm tra live gần nhất, SOAR health trả `case_count=77`. Số case là dữ liệu tích lũy và tăng theo số lần chạy demo. Với `SOAR_DRY_RUN=true`, các case có status `dry_run` — nghĩa là playbook đã được lên kế hoạch nhưng không thực thi, phù hợp để demo mà không làm gián đoạn cluster.
 
 ### 5.3 Prometheus Metrics
 
-Prometheus thu thập được 6/9 service targets (UP):
-- **UP (6):** api-gateway, payment-service, fraud-detection, notification-service, loki, prometheus
-- **DOWN (3):** core-banking, account-service, transaction-service
+Prometheus hiện thu thập được 9/9 active targets (UP):
+- **AWS financial (4):** api-gateway, payment-service, fraud-detection, notification-service
+- **OpenStack financial (3):** core-banking qua `10.10.1.12:30084`, account-service qua `10.10.1.12:30082`, transaction-service qua `10.10.1.12:30083`
+- **Observability (2):** loki, prometheus
 
-Ba service DOWN là các service trên OpenStack cluster — đây là **hành vi thiết kế đúng**: Prometheus chạy trên AWS không thể scrape pod metrics qua pod network của cluster riêng biệt. Đây là hệ quả tất yếu của việc tách biệt network boundary thực sự giữa hai cluster, minh chứng cho tính thực tế của kiến trúc multi-cloud đã triển khai. Metrics của các OS services được thu thập gián tiếp qua Loki logs.
+Ba service OpenStack không được scrape qua pod network liên cluster; thay vào đó Prometheus trên AWS scrape các NodePort HTTP được mở có kiểm soát trên node OpenStack. Thiết kế này vẫn giữ boundary multi-cloud rõ ràng nhưng cho phép dashboard metrics hiển thị đầy đủ cho cả hai cloud.
 
 ### 5.4 Đánh giá tổng thể
 
 | Tiêu chí | Kết quả | Ghi chú |
 |----------|---------|---------|
 | Zero Trust enforcement | Đạt | OPA block 100% request không có JWT/SVID hợp lệ |
-| mTLS giữa services | Đạt (partial) | Envoy sidecar + SPIRE trên AWS; OS cluster chưa có sidecar |
+| mTLS giữa services | Đạt (partial) | Envoy sidecar + SPIRE trên AWS; OpenStack core-banking cũng có Envoy sidecar, account/transaction còn plain HTTP nội bộ |
 | Cross-cloud routing | Đạt | payment→core-banking qua Envoy STATIC cluster, trace_id xuyên suốt |
 | Log tập trung | Đạt | Loki nhận log từ cả hai cluster với nhãn cloud rõ ràng |
 | AI detection | Đạt | Phát hiện đúng 6 attack scenarios, confidence 0.7–0.9 |
-| SOAR automation | Đạt (dry_run) | 5 cases tạo tự động, playbook mapping đúng |
+| SOAR automation | Đạt (dry_run) | Cases tạo tự động, playbook mapping đúng; `case_count` tăng theo số lần chạy demo |
 | Grafana alerting | Đạt | 6 alert rules active, brute-force alert firing đúng |
-| Prometheus metrics | Đạt (6/9) | 3 OS services không scrape được — expected behavior |
+| Prometheus metrics | Đạt (9/9) | AWS services, OpenStack NodePorts, Loki và Prometheus đều UP |
 | Infrastructure as Code | Đạt | Terraform + Ansible + K8s manifests đầy đủ |
 
 ---
@@ -609,7 +613,7 @@ Ba service DOWN là các service trên OpenStack cluster — đây là **hành v
 
 **Về SIEM/SOAR:**
 - PLG Stack thu thập và chuẩn hóa log từ cả hai cloud, đảm bảo tầm nhìn bảo mật tập trung
-- AI Analyzer với GPT-4o-mini phân loại chính xác 6 attack scenarios, xác định attack type theo MITRE ATT&CK
+- AI Analyzer với provider OpenAI phân loại chính xác 6 attack scenarios, xác định attack type theo MITRE ATT&CK
 - SOAR Engine tự động tạo case và map sang playbook phù hợp, với cơ chế rollback an toàn
 
 **Về đóng góp học thuật:**
@@ -619,16 +623,16 @@ Ba service DOWN là các service trên OpenStack cluster — đây là **hành v
 
 ### 6.2 Hạn chế
 
-- **SPIRE trên OpenStack:** Agent đã deploy nhưng workload attestation đầy đủ chưa được kích hoạt, các services OpenStack chưa có Envoy sidecar để enforce OPA
-- **Prometheus cross-cluster:** Không scrape được 3 OS services; giải pháp là Prometheus Federation hoặc remote_write, cần nghiên cứu thêm
+- **SPIRE trên OpenStack:** Agent đã deploy và cấp SVID cho core-banking, account-service, transaction-service. Core-banking đã có Envoy sidecar; account-service và transaction-service vẫn chạy plain HTTP nội bộ
+- **Prometheus cross-cluster:** Hiện scrape OpenStack qua NodePort tĩnh; về lâu dài nên dùng Prometheus Federation, remote_write hoặc Thanos để chuẩn hóa hơn
 - **AI cost:** GPT-4o-mini có cost per API call; với traffic lớn cần cân nhắc fine-tuned open-source model (Mistral, LLaMA) để giảm chi phí
 - **SOAR playbook:** Hiện chỉ có 3 playbook cơ bản; cần mở rộng thêm (block IP tại firewall, tạo ticket incident, notify Slack)
 - **Môi trường lab:** EC2 t3.medium không đủ tài nguyên để mô phỏng traffic thực tế quy mô lớn
 
 ### 6.3 Hướng phát triển
 
-1. **Hoàn thiện SPIRE cho OpenStack:** Bổ sung Envoy sidecar cho core-banking, account-service, transaction-service; kích hoạt workload attestation qua k8s_psat
-2. **Cross-cluster Prometheus:** Cấu hình Prometheus Federation hoặc Thanos Sidecar để thu thập metrics từ cả hai cluster
+1. **Hoàn thiện SPIRE cho OpenStack:** Chuẩn hóa workload attestation qua k8s_psat và bổ sung Envoy sidecar cho account-service, transaction-service
+2. **Cross-cluster Prometheus:** Nâng cấp từ scrape NodePort tĩnh sang Prometheus Federation, remote_write hoặc Thanos Sidecar
 3. **Open-source LLM:** Thay thế OpenAI bằng Mistral 7B self-hosted để demo offline và giảm chi phí
 4. **SOAR playbook mở rộng:** Tích hợp với Slack notification, PagerDuty, tự động cập nhật firewall rule
 5. **MITRE ATT&CK mapping:** Bổ sung more attack scenarios (T1059 Command Injection, T1190 Exploit Public-Facing Application)

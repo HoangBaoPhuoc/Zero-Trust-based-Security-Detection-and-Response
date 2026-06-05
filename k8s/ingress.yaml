@@ -84,3 +84,19 @@ spec:
       services:
         - name: soar-engine
           port: 8080
+---
+# Prometheus — monitoring namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`prometheus.ztlab.local`)
+      kind: Rule
+      services:
+        - name: prometheus
+          port: 9090

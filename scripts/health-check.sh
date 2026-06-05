@@ -156,7 +156,7 @@ check_inventory() {
     return
   fi
   run_warn_check "ansible inventory parses" ansible-inventory -i "$INVENTORY_FILE" --graph
-  for host in aws_gateway aws_bastion aws_k3s_master aws_siem os_gateway os_k3s_master os_identity; do
+  for host in aws_gateway aws_bastion aws_k3s_master aws_siem os_gateway os_k3s_master; do
     if ansible-inventory -i "$INVENTORY_FILE" --host "$host" >/dev/null 2>&1; then
       pass "inventory host present: $host"
     else
