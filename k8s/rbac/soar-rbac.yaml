@@ -1,0 +1,39 @@
+# SOAR Engine RBAC — allows soar-engine to patch K8s resources in financial namespace
+# Required for: isolate_workload (patch Service selector), restrict_egress/quarantine (scale Deployment)
+# Enable by updating soar-engine deployment to use this ServiceAccount
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: soar-engine
+  namespace: plg-stack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: soar-financial-responder
+  namespace: financial
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale"]
+    verbs: ["get", "list", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: soar-financial-responder
+  namespace: financial
+subjects:
+  - kind: ServiceAccount
+    name: soar-engine
+    namespace: plg-stack
+roleRef:
+  kind: Role
+  name: soar-financial-responder
+  apiGroup: rbac.authorization.k8s.io
