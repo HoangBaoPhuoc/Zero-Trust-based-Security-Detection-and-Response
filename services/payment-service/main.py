@@ -1,17 +1,29 @@
 # ZTLab - payment-service
-# Source: IMPLEMENTATION.md §6.4
-# See MAP.md §10 for context and edit guidance
 
 import os
 import time
 import uuid
+import httpx
 from fastapi import FastAPI, Request, HTTPException
+from prometheus_client import make_asgi_app
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="ZTLab Payment Service")
-FRAUD_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-detection:8080")
-CORE_BANKING_URL = os.getenv("CORE_BANKING_URL", "http://core-banking:8080")
+from shared.logging import ZTLabLogger, trace_middleware
+from shared.metrics import CROSS_CLOUD_LATENCY, TXN_TOTAL, SERVICE_UP
+
+SERVICE = "payment-service"
+CLOUD = "aws"
+FRAUD_URL = os.getenv("FRAUD_SERVICE_URL", "http://fraud-detection:8080").rstrip("/")
+CORE_BANKING_URL = os.getenv("CORE_BANKING_URL", "http://core-banking:8080").rstrip("/")
+NOTIFICATION_URL = os.getenv("NOTIFICATION_SERVICE_URL", "http://127.0.0.1:15001").rstrip("/")
 MAX_SINGLE_TXN = int(os.getenv("MAX_SINGLE_TXN_VND", str(500_000_000)))
+
+app = FastAPI(title="ZTLab Payment Service")
+app.add_middleware(trace_middleware(SERVICE, CLOUD))
+app.mount("/metrics", make_asgi_app())
+logger = ZTLabLogger(SERVICE, CLOUD)
+SERVICE_UP.labels(service=SERVICE, cloud=CLOUD).set(1)
+
 
 class PaymentRequest(BaseModel):
     from_account: str
@@ -19,22 +31,68 @@ class PaymentRequest(BaseModel):
     amount: float = Field(gt=0)
     currency: str = Field(default="VND")
     channel: str = Field(default="api")
+    country: str | None = None
+
 
 @app.post("/payments")
 async def process_payment(req: Request, body: PaymentRequest):
+    trace_id = req.headers.get("X-Trace-ID", str(uuid.uuid4()))
+    downstream_headers = {"X-Trace-ID": trace_id}
+    authorization = req.headers.get("Authorization")
+    if authorization:
+        downstream_headers["Authorization"] = authorization
     if body.amount > MAX_SINGLE_TXN:
+        TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="payment", status="rejected_amount_limit").inc()
+        logger.warn("payment_rejected_amount_limit", trace_id=trace_id, amount=body.amount)
         raise HTTPException(status_code=400, detail="amount exceeds MAX_SINGLE_TXN_VND")
 
-    trace_id = req.headers.get("X-Trace-ID", str(uuid.uuid4()))
-    return {
-        "transaction_id": str(uuid.uuid4()),
-        "status": "queued",
-        "trace_id": trace_id,
-        "fraud_service": FRAUD_URL,
-        "core_banking": CORE_BANKING_URL,
-        "note": "TODO: implement fraud gate orchestration from IMPLEMENTATION.md §6.4"
-    }
+    payload = body.model_dump()
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            fraud_response = await client.post(f"{FRAUD_URL}/score", json=payload, headers=downstream_headers)
+            fraud_response.raise_for_status()
+        except Exception as exc:
+            TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="payment", status="fraud_unavailable").inc()
+            logger.error("fraud_service_unavailable", trace_id=trace_id, error=str(exc))
+            raise HTTPException(status_code=503, detail="fraud service unavailable") from exc
+
+        fraud = fraud_response.json()
+        score = int(fraud.get("score", 100))
+        gate = str(fraud.get("gate", "blocked"))
+        if gate != "passed":
+            TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="payment", status="blocked_fraud").inc()
+            logger.audit("payment_blocked_fraud", trace_id=trace_id, fraud_score=score, fraud=fraud)
+            raise HTTPException(status_code=403, detail={"reason": "fraud gate blocked", "fraud": fraud})
+
+        start = time.time()
+        try:
+            core_response = await client.post(
+                f"{CORE_BANKING_URL}/transactions/execute",
+                json={**payload, "trace_id": trace_id},
+                headers={**downstream_headers, "X-Fraud-Gate": "passed", "X-Fraud-Score": str(score)},
+            )
+            latency = time.time() - start
+            CROSS_CLOUD_LATENCY.labels(source=SERVICE, target="core-banking", status=str(core_response.status_code)).observe(latency)
+            core_response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="payment", status="core_denied").inc()
+            logger.warn("core_banking_denied", trace_id=trace_id, fraud_score=score, status_code=exc.response.status_code)
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="payment", status="core_unavailable").inc()
+            logger.error("core_banking_unavailable", trace_id=trace_id, error=str(exc))
+            raise HTTPException(status_code=503, detail="core banking unavailable") from exc
+
+        result = core_response.json()
+        TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="payment", status="completed").inc()
+        logger.audit("payment_completed", trace_id=trace_id, fraud_score=score, transaction_id=result.get("transaction_id"))
+        try:
+            await client.post(f"{NOTIFICATION_URL}/notify", json={"trace_id": trace_id, "event": "payment_completed", "transaction": result}, headers=downstream_headers)
+        except Exception as exc:
+            logger.warn("notification_send_failed", trace_id=trace_id, error=str(exc))
+        return {"status": "completed", "trace_id": trace_id, "fraud": fraud, "core_banking": result}
+
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "payment-service", "cloud": "aws", "ts": time.time()}
+    return {"status": "ok", "service": SERVICE, "cloud": CLOUD, "ts": time.time()}

@@ -9,11 +9,76 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # Intra-cluster: OS services talk to each other (plain HTTP port 8080)
+    # port 9191 = OPA ext_authz gRPC (Envoy sidecar → OPA)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+    # Cross-cloud: AWS K3s nodes (10.10.1.0/24) can reach core-banking via NodePort
+    # port 15006 = Envoy mTLS inbound, port 8080 = fallback direct app
+    - from:
+        - ipBlock:
+            cidr: 10.10.1.0/24
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+    # Prometheus scraping from plg-stack namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
   egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Intra-cluster: OS services talk to each other + postgres
+    # port 9191 = OPA ext_authz gRPC (Envoy sidecar → OPA)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+    # Push logs to Loki on AWS via socat proxy (31100 on worker-1 10.10.1.11)
     - to:
         - ipBlock:
-            cidr: 0.0.0.0/0
+            cidr: 10.10.1.0/24
+      ports:
+        - port: 31100
+          protocol: TCP
+        - port: 31000
+          protocol: TCP
+    # SPIRE server on AWS (NodePort 30900 on master)
+    - to:
+        - ipBlock:
+            cidr: 10.10.1.10/32
+      ports:
+        - port: 30900
+          protocol: TCP

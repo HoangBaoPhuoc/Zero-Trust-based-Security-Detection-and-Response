@@ -10,6 +10,7 @@ register() {
 	local sa="$4"
 
 	"$SPIRE_SERVER_BIN" entry create \
+		-socketPath /tmp/spire-server/private/api.sock \
 		-spiffeID "$spiffe_id" \
 		-parentID "$parent_id" \
 		-selector "k8s:ns:${ns}" \
@@ -17,18 +18,18 @@ register() {
 		-ttl 3600 || true
 }
 
-register "spiffe://ztlab.local/os/core-banking" \
-	"spiffe://ztlab.local/k8s-psat/os-k3s/spire-agent" \
+register "spiffe://ztlab.local/openstack/core-banking" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent" \
 	"financial" "core-banking"
 
-register "spiffe://ztlab.local/os/account-service" \
-	"spiffe://ztlab.local/k8s-psat/os-k3s/spire-agent" \
+register "spiffe://ztlab.local/openstack/account-service" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent" \
 	"financial" "account-service"
 
-register "spiffe://ztlab.local/os/transaction-service" \
-	"spiffe://ztlab.local/k8s-psat/os-k3s/spire-agent" \
+register "spiffe://ztlab.local/openstack/transaction-service" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent" \
 	"financial" "transaction-service"
 
-register "spiffe://ztlab.local/os/identity-service" \
-	"spiffe://ztlab.local/k8s-psat/os-k3s/spire-agent" \
+register "spiffe://ztlab.local/openstack/identity-service" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent" \
 	"identity" "identity-service"

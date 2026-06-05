@@ -1,27 +1,24 @@
-package zta.cross_cloud
-
-default allow_cross_cloud = false
-
-allow_cross_cloud {
-  input.source.principal == "spiffe://ztlab.local/aws/payment-service"
-  input.destination.principal == "spiffe://ztlab.local/os/core-banking"
-}
-
 package zta.crosscloud
 
 import future.keywords.if
 import future.keywords.in
 
 default allow = false
+default allow_cross_cloud = false
+
+allow_cross_cloud if {
+  input.attributes.source.principal == "spiffe://ztlab.local/aws/payment-service"
+  input.attributes.destination.principal == "spiffe://ztlab.local/openstack/core-banking"
+}
 
 allow if {
-  startswith(input.source.principal, "spiffe://ztlab.local/aws/")
+  startswith(input.attributes.source.principal, "spiffe://ztlab.local/aws/")
   input.attributes.request.http.method in ["GET", "POST"]
   not denied_path
 }
 
 allow if {
-  startswith(input.source.principal, "spiffe://ztlab.local/os/")
+  startswith(input.attributes.source.principal, "spiffe://ztlab.local/openstack/")
   input.attributes.request.http.method in ["GET", "OPTIONS"]
 }
 

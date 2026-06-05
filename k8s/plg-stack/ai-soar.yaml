@@ -17,7 +17,7 @@ spec:
         - name: ai-analyzer
           image: ztlab/ai-analyzer:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - name: http
               containerPort: 8080
@@ -43,7 +43,7 @@ spec:
             - name: AI_PROVIDER_COOLDOWN_SECONDS
               value: "900"
             - name: AI_ANALYZER_LOKI_QUERY
-              value: '{job="kubernetes-pods",namespace="financial"} |~ "(?i)(401|403|unauthorized|forbidden|denied|fraud_gate_bypass|error|exception|attack|sqlmap|/etc/passwd|powershell)"'
+              value: '{job=~"envoy-access|opa-decisions|kubernetes-pods"} |~ "(?i)(403|401|denied|fraud_gate_bypass|lateral|xmrig|cryptomin|port.scan|nmap|bytes_sent|large_response|unauthorized|svid|spiffe)"'
           readinessProbe:
             httpGet:
               path: /health
@@ -92,11 +92,12 @@ spec:
       labels:
         app: soar-engine
     spec:
+      serviceAccountName: soar-engine
       containers:
         - name: soar-engine
           image: ztlab/soar-engine:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - name: http
               containerPort: 8080
@@ -143,7 +144,21 @@ spec:
               memory: 512Mi
       volumes:
         - name: soar-data
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: soar-data-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-data-pvc
+  namespace: plg-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: v1
 kind: Service

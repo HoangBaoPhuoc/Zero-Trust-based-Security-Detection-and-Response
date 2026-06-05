@@ -16,17 +16,22 @@ spec:
       labels:
         app: opa
     spec:
-      serviceAccountName: default
+      serviceAccountName: opa
       containers:
         - name: opa
-          image: openpolicyagent/opa:latest
+          image: openpolicyagent/opa:latest-envoy
           args:
             - "run"
             - "--server"
             - "--addr=0.0.0.0:8181"
+            - "--config-file=/etc/opa/opa-config.yaml"
+            - "--ignore=.*"
+            - "/policies"
           ports:
             - name: http
               containerPort: 8181
+            - name: grpc-authz
+              containerPort: 9191
           volumeMounts:
             - name: opa-config
               mountPath: /etc/opa
@@ -70,6 +75,9 @@ spec:
     - name: http
       port: 8181
       targetPort: 8181
+    - name: grpc-authz
+      port: 9191
+      targetPort: 9191
 ---
 apiVersion: v1
 kind: ServiceAccount

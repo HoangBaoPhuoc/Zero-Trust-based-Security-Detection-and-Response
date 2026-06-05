@@ -129,11 +129,11 @@ deploy_step_2_keycloak() {
   }
 
   log_info "Deploying Keycloak server..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
-
   log_info "Deploying Keycloak realm config..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/realm-configmap.yaml"
+
+  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
+  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
 
   log_info "Keycloak deployment initiated (can take 5-10 minutes on first startup with DB setup)"
   log_info "Note: Keycloak is not a blocking dependency for SPIRE/OPA, so we proceed with deployment"
@@ -251,7 +251,18 @@ deploy_step_4_opa() {
   log_info "Deploying OPA on AWS..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
 
-  log_info "OPA deployment initiated (may take time)"
+  log_info "Creating OPA config/policy configmaps on OpenStack..."
+  kubectl --context $OS_CONTEXT -n financial create configmap opa-config \
+    --from-file=opa-config.yaml="$REPO_ROOT/opa/config/opa-config.yaml" \
+    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
+  kubectl --context $OS_CONTEXT -n financial create configmap opa-policies \
+    --from-file="$REPO_ROOT/opa/policies" \
+    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
+
+  log_info "Deploying OPA on OpenStack..."
+  kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
+
+  log_info "OPA deployment initiated on both clusters (may take time)"
 }
 
 deploy_step_5_envoy() {
@@ -264,6 +275,47 @@ deploy_step_5_envoy() {
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/envoy/configmap.yaml"
 
   log_info "Envoy ConfigMaps deployed"
+}
+
+register_spire_entry() {
+  local ctx="$1"
+  local spiffe_id="$2"
+  local parent_id="$3"
+  local ns="$4"
+  local sa="$5"
+
+  kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry create \
+    -socketPath /tmp/spire-server/private/api.sock \
+    -spiffeID "$spiffe_id" \
+    -parentID "$parent_id" \
+    -selector "k8s:ns:${ns}" \
+    -selector "k8s:sa:${sa}" \
+    -ttl 3600 >/dev/null 2>&1 || true
+}
+
+register_spire_workloads() {
+  log_step "3.3 Register SPIRE workload entries"
+
+  kubectl --context "$AWS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
+  kubectl --context "$AWS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
+  kubectl --context "$OS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
+  kubectl --context "$OS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
+
+  local aws_parent="spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent"
+  local os_parent="spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent"
+
+  log_info "Registering AWS workload SVID entries..."
+  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/api-gateway" "$aws_parent" financial api-gateway
+  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/payment-service" "$aws_parent" financial payment-service
+  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/fraud-detection" "$aws_parent" financial fraud-detection
+  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/notification-service" "$aws_parent" financial notification-service
+
+  log_info "Registering OpenStack workload SVID entries..."
+  register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/core-banking" "$os_parent" financial core-banking
+  register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/account-service" "$os_parent" financial account-service
+  register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/transaction-service" "$os_parent" financial transaction-service
+
+  log_info "SPIRE workload registration completed"
 }
 
 verify_deployment() {
@@ -289,6 +341,10 @@ verify_deployment() {
   kubectl --context $AWS_CONTEXT get pods -n financial
 
   log_info ""
+  log_info "OPA pods on OpenStack:"
+  kubectl --context $OS_CONTEXT get pods -n financial
+
+  log_info ""
   log_info "Envoy ConfigMaps on AWS:"
   kubectl --context $AWS_CONTEXT get cm -n financial
 
@@ -301,6 +357,7 @@ verify_deployment() {
   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$OS_CONTEXT" "spire" "spire-agent" "true"
   check_rollout "$AWS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
+  check_rollout "$OS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
   check_configmap "$AWS_CONTEXT" "financial" "envoy-config"
   check_configmap "$OS_CONTEXT" "financial" "envoy-config"
 
@@ -326,6 +383,7 @@ main() {
   deploy_step_2_keycloak
   deploy_step_3_spire_aws
   deploy_step_3_spire_os
+  register_spire_workloads
   deploy_step_4_opa
   deploy_step_5_envoy
 

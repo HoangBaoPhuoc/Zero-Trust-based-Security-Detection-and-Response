@@ -1,23 +1,7 @@
-services:
-  - name: opa-server
+plugins:
+  envoy_ext_authz_grpc:
+    addr: :9191
+    path: zta/authz/allow
 
 decision_logs:
-  plugin: file
-
-plugins:
-  file:
-    path: /var/log/opa/decisions.log
-
-services:
-  - name: opa-server
-    url: http://127.0.0.1:8181
-
-decision_logs:
-  plugin: file
-  file:
-    path: /var/log/opa/decisions.log
-    partition_name: opa-decisions
-
-plugins:
-  file:
-    path: /var/log/opa/decisions.log
+  console: true

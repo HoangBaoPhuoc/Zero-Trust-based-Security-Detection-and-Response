@@ -20,7 +20,7 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: '{job="opa-decisions"} | json | opa_result=`false` | deny_reason=`svid_mismatch`'
+              expr: '{job="opa-decisions",opa_result="false"}'
               instant: false
               queryType: range
               refId: A

@@ -9,25 +9,13 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Allow intra-namespace traffic (service-to-service)
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: financial
-    # Allow ingress from Traefik (kube-system)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
-    # Allow Promtail (plg-stack) to scrape metrics
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: plg-stack
       ports:
-        - port: 8080
+        - port: 15006
           protocol: TCP
-    # Allow Prometheus (monitoring) to scrape metrics
     - from:
         - namespaceSelector:
             matchLabels:
@@ -35,16 +23,60 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+        - port: 15006
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
   egress:
-    # Allow egress to anywhere (DNS, external calls)
     - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-    # Allow egress to identity namespace (Keycloak)
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
     - to:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: identity
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Cross-cloud egress: AWS → OpenStack K3s node (core-banking NodePort)
+    - to:
+        - ipBlock:
+            cidr: 10.10.1.12/32
+      ports:
+        - port: 30081
+          protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -57,38 +89,109 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Intra-namespace
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: plg-stack
-    # Traefik ingress
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: kube-system
-    # Allow financial services (Promtail push to Loki)
+      ports:
+        - port: 3000
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
     - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: financial
+        - ipBlock:
+            cidr: 10.10.4.0/24
+        - ipBlock:
+            cidr: 10.10.5.0/24
+        - ipBlock:
+            cidr: 10.10.0.0/24
+        - ipBlock:
+            cidr: 10.200.200.0/24
       ports:
         - port: 3100
           protocol: TCP
-  egress:
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-    # Allow egress to financial namespace (AI/SOAR → K8s API via financial services)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: financial
-    # Allow Prometheus (monitoring) to scrape Loki
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
       ports:
         - port: 3100
+          protocol: TCP
+        - port: 3000
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 3100
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 3000
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 15006
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.1/32
+      ports:
+        - port: 443
+          protocol: TCP
+    # K3s API server direct access for Promtail kubernetes_sd
+    - to:
+        - ipBlock:
+            cidr: 10.10.1.10/32
+      ports:
+        - port: 6443
+          protocol: TCP
+    # Prometheus scrape OpenStack services via WireGuard
+    - to:
+        - ipBlock:
+            cidr: 10.10.1.12/32
+      ports:
+        - port: 30081
+          protocol: TCP
+        - port: 30082
+          protocol: TCP
+        - port: 30083
+          protocol: TCP
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ai-analyzer-provider-egress
+  namespace: plg-stack
+spec:
+  podSelector:
+    matchLabels:
+      app: ai-analyzer
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 443
           protocol: TCP

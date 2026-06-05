@@ -19,6 +19,46 @@ spec:
           args: ["-config.file=/etc/loki/loki-config.yml"]
           ports:
             - containerPort: 3100
+              name: http
+          volumeMounts:
+            - name: loki-config
+              mountPath: /etc/loki/loki-config.yml
+              subPath: loki-config.yml
+              readOnly: true
+            - name: loki-data
+              mountPath: /loki
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: loki-config
+          configMap:
+            name: loki-config
+        - name: loki-data
+          persistentVolumeClaim:
+            claimName: loki-data-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loki-data-pvc
+  namespace: plg-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -26,8 +66,11 @@ metadata:
   name: loki
   namespace: plg-stack
 spec:
+  type: NodePort
   selector:
     app: loki
   ports:
-    - port: 3100
-      targetPort: 3100
+    - name: http
+      port: 3100
+      targetPort: http
+      nodePort: 31000

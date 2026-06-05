@@ -6,7 +6,7 @@ INVENTORY_FILE="${INVENTORY_FILE:-$ROOT_DIR/ansible/inventory/hosts.yml}"
 SSH_USER="${SSH_USER:-ubuntu}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/zta-siem-soar-key}"
 AWS_LOCAL_PORT="${AWS_K8S_LOCAL_PORT:-6444}"
-OS_LOCAL_PORT="${OS_K8S_LOCAL_PORT:-6443}"
+OS_LOCAL_PORT="${OS_K8S_LOCAL_PORT:-6445}"
 
 AWS_CONTEXT="ctx-aws"
 OS_CONTEXT="ctx-openstack"
@@ -16,6 +16,24 @@ need_cmd() {
     echo "Missing required command: $1" >&2
     exit 1
   }
+}
+
+local_port_open() {
+  local port="$1"
+  ss -lnt | awk '{print $4}' | grep -Eq "(^|:)${port}$"
+}
+
+wait_for_local_port() {
+  local port="$1"
+  local attempts="${2:-10}"
+  local i
+  for ((i = 0; i < attempts; i++)); do
+    if local_port_open "$port"; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
 }
 
 inventory_host_var() {
@@ -38,34 +56,45 @@ resolve_targets() {
 }
 
 start_tunnels() {
+  local scope="${1:-all}"
   resolve_targets
 
-  ssh -fN \
-    -i "$SSH_KEY" \
-    -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
-    -o StrictHostKeyChecking=no \
-    -L "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443" \
-    -J "${SSH_USER}@${AWS_BASTION_IP}" \
-    "${SSH_USER}@${AWS_MASTER_IP}"
+  if [[ "$scope" == "all" || "$scope" == "aws" ]]; then
+    if local_port_open "$AWS_LOCAL_PORT"; then
+      echo "AWS tunnel already listening on 127.0.0.1:${AWS_LOCAL_PORT}; skipping."
+    else
+      local aws_log="/tmp/ztlab-aws-k8s-tunnel.log"
+      setsid ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o StrictHostKeyChecking=no         -L "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443"         -J "${SSH_USER}@${AWS_BASTION_IP}"         "${SSH_USER}@${AWS_MASTER_IP}" >"$aws_log" 2>&1 < /dev/null &
+      if ! wait_for_local_port "$AWS_LOCAL_PORT" 10; then
+        cat "$aws_log" >&2 2>/dev/null || true
+        echo "Failed to start AWS tunnel on 127.0.0.1:${AWS_LOCAL_PORT}" >&2
+        exit 1
+      fi
+    fi
+  fi
 
-  ssh -fN \
-    -i "$SSH_KEY" \
-    -o ExitOnForwardFailure=yes \
-    -o ServerAliveInterval=30 \
-    -o ServerAliveCountMax=3 \
-    -o UserKnownHostsFile=/dev/null \
-    -o StrictHostKeyChecking=no \
-    -L "127.0.0.1:${OS_LOCAL_PORT}:127.0.0.1:6443" \
-    -J "${SSH_USER}@${OS_GATEWAY_IP}" \
-    "${SSH_USER}@${OS_MASTER_IP}"
+  if [[ "$scope" == "all" || "$scope" == "openstack" ]]; then
+    if local_port_open "$OS_LOCAL_PORT"; then
+      echo "OpenStack tunnel already listening on 127.0.0.1:${OS_LOCAL_PORT}; skipping."
+    else
+      local os_log="/tmp/ztlab-openstack-k8s-tunnel.log"
+      setsid ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o UserKnownHostsFile=/dev/null         -o StrictHostKeyChecking=no         -o ProxyCommand="ssh -i ${SSH_KEY} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -W %h:%p ${SSH_USER}@${OS_GATEWAY_IP}"         -L "127.0.0.1:${OS_LOCAL_PORT}:127.0.0.1:6443"         "${SSH_USER}@${OS_MASTER_IP}" >"$os_log" 2>&1 < /dev/null &
+      if ! wait_for_local_port "$OS_LOCAL_PORT" 10; then
+        cat "$os_log" >&2 2>/dev/null || true
+        echo "Failed to start OpenStack tunnel on 127.0.0.1:${OS_LOCAL_PORT}" >&2
+        exit 1
+      fi
+    fi
+  fi
 
-  echo "Tunnels started:"
-  echo "  AWS       127.0.0.1:${AWS_LOCAL_PORT} -> ${AWS_MASTER_IP}:6443 via ${AWS_BASTION_IP}"
-  echo "  OpenStack 127.0.0.1:${OS_LOCAL_PORT} -> ${OS_MASTER_IP}:6443 via ${OS_GATEWAY_IP}"
+  echo "Tunnels started (${scope}):"
+  if [[ "$scope" == "all" || "$scope" == "aws" ]]; then
+    echo "  AWS       127.0.0.1:${AWS_LOCAL_PORT} -> ${AWS_MASTER_IP}:6443 via ${AWS_BASTION_IP}"
+  fi
+  if [[ "$scope" == "all" || "$scope" == "openstack" ]]; then
+    echo "  OpenStack 127.0.0.1:${OS_LOCAL_PORT} -> ${OS_MASTER_IP}:6443 via ${OS_GATEWAY_IP}"
+  fi
 }
-
 pull_remote_kubeconfig() {
   local cloud="$1"
   local output_file="$2"
@@ -87,7 +116,7 @@ pull_remote_kubeconfig() {
       -i "$SSH_KEY" \
       -o UserKnownHostsFile=/dev/null \
       -o StrictHostKeyChecking=no \
-      -J "${SSH_USER}@${OS_GATEWAY_IP}" \
+      -o ProxyCommand="ssh -i ${SSH_KEY} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -W %h:%p ${SSH_USER}@${OS_GATEWAY_IP}" \
       "${SSH_USER}@${OS_MASTER_IP}" \
       "sudo cat /etc/rancher/k3s/k3s.yaml" > "$output_file"
     return
@@ -140,21 +169,26 @@ configure_context_from_kubeconfig() {
 }
 
 sync_kubeconfig() {
+  local scope="${1:-all}"
   local tmp_dir
   tmp_dir="$(mktemp -d)"
 
   local aws_source="$tmp_dir/aws-k3s.yaml"
   local os_source="$tmp_dir/openstack-k3s.yaml"
 
-  pull_remote_kubeconfig aws "$aws_source"
-  pull_remote_kubeconfig openstack "$os_source"
+  if [[ "$scope" == "all" || "$scope" == "aws" ]]; then
+    pull_remote_kubeconfig aws "$aws_source"
+    configure_context_from_kubeconfig "$aws_source" "$AWS_CONTEXT" "$AWS_LOCAL_PORT" "$tmp_dir"
+  fi
 
-  configure_context_from_kubeconfig "$aws_source" "$AWS_CONTEXT" "$AWS_LOCAL_PORT" "$tmp_dir"
-  configure_context_from_kubeconfig "$os_source" "$OS_CONTEXT" "$OS_LOCAL_PORT" "$tmp_dir"
+  if [[ "$scope" == "all" || "$scope" == "openstack" ]]; then
+    pull_remote_kubeconfig openstack "$os_source"
+    configure_context_from_kubeconfig "$os_source" "$OS_CONTEXT" "$OS_LOCAL_PORT" "$tmp_dir"
+  fi
 
   rm -rf "$tmp_dir"
 
-  echo "Kubeconfig contexts synchronized: ${AWS_CONTEXT}, ${OS_CONTEXT}"
+  echo "Kubeconfig contexts synchronized (${scope})."
 }
 
 stop_tunnels() {
@@ -168,16 +202,23 @@ show_status() {
 }
 
 verify_kubectl() {
-  sync_kubeconfig
-  kubectl --context "$AWS_CONTEXT" cluster-info
-  kubectl --context "$OS_CONTEXT" cluster-info
-  kubectl --context "$AWS_CONTEXT" get nodes -o wide
-  kubectl --context "$OS_CONTEXT" get nodes -o wide
+  local scope="${1:-all}"
+  sync_kubeconfig "$scope"
+
+  if [[ "$scope" == "all" || "$scope" == "aws" ]]; then
+    kubectl --context "$AWS_CONTEXT" cluster-info
+    kubectl --context "$AWS_CONTEXT" get nodes -o wide
+  fi
+
+  if [[ "$scope" == "all" || "$scope" == "openstack" ]]; then
+    kubectl --context "$OS_CONTEXT" cluster-info
+    kubectl --context "$OS_CONTEXT" get nodes -o wide
+  fi
 }
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <up|down|status|verify|sync>
+Usage: $(basename "$0") <up|down|status|verify|sync> [all|aws|openstack]
 
 Env overrides:
   INVENTORY_FILE       Path to Ansible inventory (default: ansible/inventory/hosts.yml)
@@ -185,6 +226,10 @@ Env overrides:
   SSH_USER             SSH username (default: ubuntu)
   AWS_K8S_LOCAL_PORT   Local AWS API tunnel port (default: 6444)
   OS_K8S_LOCAL_PORT    Local OpenStack API tunnel port (default: 6443)
+
+Examples:
+  $(basename "$0") up openstack
+  $(basename "$0") verify openstack
 EOF
 }
 
@@ -193,11 +238,18 @@ main() {
   need_cmd ssh
   need_cmd ss
 
+  local scope="${2:-all}"
+  if [[ "$scope" != "all" && "$scope" != "aws" && "$scope" != "openstack" ]]; then
+    echo "Unsupported scope: $scope" >&2
+    usage
+    exit 1
+  fi
+
   case "${1:-}" in
     up)
-      start_tunnels
+      start_tunnels "$scope"
       need_cmd kubectl
-      sync_kubeconfig
+      sync_kubeconfig "$scope"
       ;;
     down)
       stop_tunnels
@@ -207,11 +259,11 @@ main() {
       ;;
     verify)
       need_cmd kubectl
-      verify_kubectl
+      verify_kubectl "$scope"
       ;;
     sync)
       need_cmd kubectl
-      sync_kubeconfig
+      sync_kubeconfig "$scope"
       ;;
     *)
       usage

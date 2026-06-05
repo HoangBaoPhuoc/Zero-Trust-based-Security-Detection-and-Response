@@ -42,17 +42,28 @@ spec:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/api-gateway"
     spec:
       serviceAccountName: api-gateway
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: api-gateway
           image: ztlab/api-gateway:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
           env:
             - name: PAYMENT_SERVICE_URL
-              value: "http://payment-service.financial.svc.cluster.local:8080"
+              value: "http://127.0.0.1:15001"
           readinessProbe:
             httpGet:
               path: /health
@@ -65,6 +76,37 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -77,7 +119,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 15006
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -99,19 +141,30 @@ spec:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/payment-service"
     spec:
       serviceAccountName: payment-service
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: payment-service
           image: ztlab/payment-service:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
           env:
             - name: FRAUD_SERVICE_URL
-              value: "http://fraud-detection.financial.svc.cluster.local:8080"
+              value: "http://127.0.0.1:15001"
             - name: CORE_BANKING_URL
-              value: "http://core-banking.financial.svc.cluster.local:8080"
+              value: "http://127.0.0.1:15001"
             - name: MAX_SINGLE_TXN_VND
               value: "500000000"
           readinessProbe:
@@ -126,6 +179,37 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -138,7 +222,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 15006
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -160,11 +244,22 @@ spec:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/fraud-detection"
     spec:
       serviceAccountName: fraud-detection
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: fraud-detection
           image: ztlab/fraud-detection:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
@@ -183,6 +278,37 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -195,7 +321,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 15006
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -217,11 +343,22 @@ spec:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/notification-service"
     spec:
       serviceAccountName: notification-service
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: notification-service
           image: ztlab/notification-service:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
@@ -237,6 +374,37 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -249,4 +417,4 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 15006
