@@ -20,7 +20,7 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: '{job="opa-decisions"} | json | deny_reason=`fraud_gate_bypass`'
+              expr: '{job="opa-decisions",opa_result="false",request_path="/transactions/execute"}'
               instant: false
               queryType: range
               refId: A

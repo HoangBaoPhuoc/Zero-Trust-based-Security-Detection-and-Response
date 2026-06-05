@@ -14,12 +14,31 @@ GROUP_PAUSE_SECONDS="${GROUP_PAUSE_SECONDS:-10}"
 MIN_SWAP_SIZE_GB="${MIN_SWAP_SIZE_GB:-8}"
 AUTO_INCREASE_SWAP="${AUTO_INCREASE_SWAP:-false}"
 
-K3S_TARGETS="aws_k3s_master:aws_k3s_worker_1:aws_k3s_worker_2:os_k3s_master:os_k3s_worker_1:os_k3s_worker_2"
+SKIP_PUSH_OPENSTACK=false
+
+for arg in "$@"; do
+  case "$arg" in
+    --skip-push-openstack|--aws-only)
+      SKIP_PUSH_OPENSTACK=true
+      ;;
+    --help|-h)
+      echo "Usage: $0 [--skip-push-openstack|--aws-only]"
+      exit 0
+      ;;
+  esac
+done
+
+AWS_K3S_TARGETS="aws_k3s_master:aws_k3s_worker_1:aws_k3s_worker_2"
+OPENSTACK_K3S_TARGETS="os_k3s_master:os_k3s_worker_1:os_k3s_worker_2"
+K3S_TARGETS="$AWS_K3S_TARGETS"
+if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
+  K3S_TARGETS="$AWS_K3S_TARGETS:$OPENSTACK_K3S_TARGETS"
+fi
 
 BATCHES=()
 BATCHES+=("api-gateway payment-service fraud-detection")
 BATCHES+=("notification-service core-banking account-service")
-BATCHES+=("transaction-service")
+BATCHES+=("transaction-service ai-analyzer soar-engine")
 
 log() {
   echo "[INFO] $*"
@@ -120,7 +139,7 @@ import_archive_on_nodes() {
     local batch_archive="/tmp/$(basename "${ARCHIVE_PATH%.tar}.batch${batch_index}.tar")"
     log "Importing ${batch_archive}"
     ansible "$K3S_TARGETS" -i "$INVENTORY_FILE" -m shell \
-      -a "sudo -n ctr -n k8s.io images import --no-unpack ${batch_archive}"
+      -a "sudo -n ctr -n k8s.io images import ${batch_archive}"
     batch_index=$((batch_index + 1))
     sleep "$GROUP_PAUSE_SECONDS"
   done
@@ -130,15 +149,24 @@ restart_financial_deployments() {
   log "Restarting financial deployments on ctx-aws"
   kubectl --context ctx-aws -n financial rollout restart deployment || true
 
-  log "Restarting financial deployments on ctx-openstack"
-  kubectl --context ctx-openstack -n financial rollout restart deployment || true
+  if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
+    log "Restarting financial deployments on ctx-openstack"
+    kubectl --context ctx-openstack -n financial rollout restart deployment || true
+  else
+    log "Skipping ctx-openstack restart (--skip-push-openstack)"
+  fi
 }
 
 verify_quick() {
   log "Quick check (financial pods)"
   kubectl --context ctx-aws get pods -n financial
-  echo "---"
-  kubectl --context ctx-openstack get pods -n financial
+
+  if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
+    echo "---"
+    kubectl --context ctx-openstack get pods -n financial
+  else
+    log "Skipping ctx-openstack pod check (--skip-push-openstack)"
+  fi
 }
 
 main() {

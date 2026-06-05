@@ -10,6 +10,7 @@ register() {
 	local sa="$4"
 
 	"$SPIRE_SERVER_BIN" entry create \
+		-socketPath /tmp/spire-server/private/api.sock \
 		-spiffeID "$spiffe_id" \
 		-parentID "$parent_id" \
 		-selector "k8s:ns:${ns}" \
@@ -18,17 +19,17 @@ register() {
 }
 
 register "spiffe://ztlab.local/aws/payment-service" \
-	"spiffe://ztlab.local/k8s-psat/aws-k3s/spire-agent" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
 	"financial" "payment-service"
 
 register "spiffe://ztlab.local/aws/fraud-detection" \
-	"spiffe://ztlab.local/k8s-psat/aws-k3s/spire-agent" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
 	"financial" "fraud-detection"
 
 register "spiffe://ztlab.local/aws/notification-service" \
-	"spiffe://ztlab.local/k8s-psat/aws-k3s/spire-agent" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
 	"financial" "notification-service"
 
 register "spiffe://ztlab.local/aws/api-gateway" \
-	"spiffe://ztlab.local/k8s-psat/aws-k3s/spire-agent" \
+	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
 	"financial" "api-gateway"

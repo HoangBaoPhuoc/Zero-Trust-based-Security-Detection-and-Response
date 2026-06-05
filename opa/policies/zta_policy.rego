@@ -5,72 +5,89 @@ import future.keywords.in
 
 default allow = false
 
-valid_jwt if {
-  token := input.attributes.request.http.headers["authorization"]
-  token != ""
+headers := input.attributes.request.http.headers
+method := input.attributes.request.http.method
+path := input.attributes.request.http.path
+source_principal := object.get(object.get(input.attributes, "source", {}), "principal", object.get(object.get(input, "source", {}), "principal", ""))
+
+allow if {
+  public_path
+}
+
+# External users can enter only through the API Gateway business endpoint.
+# The API service performs Keycloak/JWKS or dev-token verification; OPA only gates
+# the edge path and prevents a bearer string from authorizing internal services.
+allow if {
+  external_api_request
+}
+
+# Internal service calls are identity based. A plain in-cluster request with only
+# an Authorization header must not reach sensitive financial services.
+allow if {
+  internal_service_request
+}
+
+allow if {
+  core_transaction_with_fraud_gate
+}
+
+public_path if {
+  path in ["/health", "/ready", "/metrics"]
+}
+
+public_path if {
+  startswith(path, "/metrics")
+}
+
+external_api_request if {
+  method == "POST"
+  path == "/payments"
+  has_bearer_token
+  not valid_svid
+}
+
+external_api_request if {
+  method in ["GET", "OPTIONS"]
+  has_bearer_token
+  not valid_svid
+}
+
+internal_service_request if {
+  valid_svid
+  method in ["GET", "OPTIONS"]
+}
+
+internal_service_request if {
+  valid_svid
+  method == "POST"
+  path in ["/payments", "/score", "/notify"]
+}
+
+core_transaction_with_fraud_gate if {
+  valid_svid
+  method == "POST"
+  startswith(path, "/transactions/execute")
+  fraud_gate_valid
 }
 
 valid_svid if {
-  svid := input.source.principal
-  startswith(svid, "spiffe://ztlab.local/")
+  startswith(source_principal, "spiffe://ztlab.local/")
 }
 
-role_permits_action if {
-  method := input.attributes.request.http.method
-  method in ["GET", "POST", "OPTIONS"]
-}
-
-allow if {
-  valid_jwt
-  valid_svid
-  role_permits_action
-}
-
-package zta.authz
-
-import future.keywords.if
-import future.keywords.in
-
-default allow = false
-
-allow if {
-  valid_jwt
-  valid_svid
-  role_permits_action
-}
-
-valid_jwt if {
-  token := input.attributes.request.http.headers["authorization"]
+has_bearer_token if {
+  token := headers["authorization"]
   startswith(token, "Bearer ")
-  [_, payload, _] := io.jwt.decode(token)
-  payload.iss == "https://keycloak.ztlab.local/realms/ztlab"
-  payload.exp > time.now_ns() / 1000000000
-  input.parsed_body.subject = payload.sub
 }
 
-valid_svid if {
-  svid := input.source.principal
-  startswith(svid, "spiffe://ztlab.local/")
-}
-
-role_permits_action if {
-  [_, payload, _] := io.jwt.decode(input.attributes.request.http.headers["authorization"])
-  roles := payload.realm_access.roles
-  input.attributes.request.http.method == "POST"
-  startswith(input.attributes.request.http.path, "/transactions")
-  "financial-write" in roles
-}
-
-role_permits_action if {
-  [_, _payload, _] := io.jwt.decode(input.attributes.request.http.headers["authorization"])
-  input.attributes.request.http.method in ["GET", "OPTIONS"]
+fraud_gate_valid if {
+  headers["x-fraud-gate"] == "passed"
+  to_number(headers["x-fraud-score"]) < 75
 }
 
 audit_log := {
   "timestamp": time.now_ns(),
-  "subject": input.parsed_body.subject,
-  "action": input.attributes.request.http.method,
-  "resource": input.attributes.request.http.path,
+  "action": method,
+  "resource": path,
   "decision": allow,
-  "svid": input.source.principal,
+  "svid": source_principal,
 }

@@ -1,0 +1,139 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spire
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spire-agent
+  namespace: spire
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spire-agent
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "namespaces", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: spire-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spire-agent
+subjects:
+  - kind: ServiceAccount
+    name: spire-agent
+    namespace: spire
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spire-agent-config
+  namespace: spire
+data:
+  agent.conf: |
+    agent {
+      data_dir      = "/run/spire"
+      log_level     = "INFO"
+      trust_domain  = "ztlab.local"
+      insecure_bootstrap = true
+      server_address = "10.10.1.10"
+      server_port   = "30900"
+      socket_path   = "/run/spire/sockets/agent.sock"
+    }
+
+    plugins {
+      NodeAttestor "join_token" { plugin_data {} }
+
+      KeyManager "memory" { plugin_data {} }
+
+      WorkloadAttestor "k8s" {
+        plugin_data {
+          skip_kubelet_verification = true
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spire-agent
+  namespace: spire
+  labels:
+    app: spire-agent
+spec:
+  selector:
+    matchLabels:
+      app: spire-agent
+  template:
+    metadata:
+      labels:
+        app: spire-agent
+    spec:
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: spire-agent
+      tolerations:
+        - operator: Exists
+      initContainers:
+        - name: wait-for-server
+          image: busybox:1.36
+          command: ["/bin/sh", "-c", "until nc -z -w 2 10.10.1.10 30900; do echo waiting for spire-server; sleep 3; done && echo spire-server ready"]
+      containers:
+        - name: spire-agent
+          image: ghcr.io/spiffe/spire-agent:1.9.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config
+            - /run/spire/config/agent.conf
+            - -joinToken
+            - a183d0d1-42b8-4df9-9a0a-7400bedc1754
+          volumeMounts:
+            - name: spire-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+            - name: spire-token
+              mountPath: /var/run/secrets/tokens
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: spire-config
+          configMap:
+            name: spire-agent-config
+            items:
+              - key: agent.conf
+                path: agent.conf
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+        - name: spire-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: spire-server
+                  expirationSeconds: 7200
+                  path: spire-agent

@@ -8,7 +8,7 @@ set -euo pipefail
 USERNAME="${1:-testuser01}"
 ROLE="${2:-financial-write}"
 JWT_SECRET="${JWT_DEV_SECRET:-ztlab-dev-secret}"
-ISSUER="${JWT_ISSUER:-https://keycloak.ztlab.local/realms/ztlab}"
+ISSUER="${JWT_ISSUER:-http://keycloak.ztlab.local/realms/ztlab}"
 AUDIENCE="${JWT_AUDIENCE:-api-gateway}"
 TTL_SECONDS="${JWT_TTL:-3600}"
 
@@ -51,9 +51,9 @@ PY
 )
 
 echo "$TOKEN"
-echo ""
-echo "# Usage:"
-echo "# curl -H 'Authorization: Bearer $TOKEN' http://127.0.0.1:8080/payments ..."
-echo ""
-echo "# Or export:"
-echo "export TOKEN='$TOKEN'"
+echo "" >&2
+echo "# Usage:" >&2
+echo "# curl -H 'Authorization: Bearer $TOKEN' http://127.0.0.1:8080/payments ..." >&2
+echo "" >&2
+echo "# Or export:" >&2
+echo "export TOKEN='$TOKEN'" >&2

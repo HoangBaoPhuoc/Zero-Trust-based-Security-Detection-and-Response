@@ -1,223 +1,284 @@
-# ZTLab — Zero Trust Security Detection & Response System
+# ZTLab — Zero Trust Security Detection & Response
 
-ZTLab hiện đã chuyển sang kiến trúc gọn nhẹ hơn: **PLG Stack** gồm Promtail, Loki và Grafana cho SIEM, chạy song song với hạ tầng Zero Trust, WireGuard, SPIRE, OPA, Envoy và Keycloak. ELK, Wazuh, Kafka, SOAR và AI Engine không còn nằm trong luồng deploy hiện tại.
+> **Đồ án chuyên ngành** | Trường Đại học Công nghệ Thông tin — ĐHQG TP.HCM  
+> Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)  
+> GVHD: Đỗ Thị Phương Uyên
 
-## Kiến trúc hiện tại
+Hệ thống triển khai kiến trúc **Zero Trust** kết hợp **SIEM/SOAR tích hợp AI** trên môi trường **Multi-Cloud thực tế** (AWS + OpenStack), minh họa bằng ứng dụng tài chính microservices.
 
-```text
+---
+
+## Kiến trúc
+
+```
 Internet
-  -> DMZ: WireGuard gateway, API gateway, Keycloak
-  -> Private: K3s workloads, SPIRE, OPA, Envoy sidecars
-  -> Restricted: Loki + Grafana
-  -> Management: Bastion, Terraform, Ansible
-
-OpenStack <-> AWS qua WireGuard tunnel
-Promtail chạy trên mọi node và đẩy log về Loki
+  └─▶ Nginx Ingress (api.ztlab.local)
+        └─▶ [AWS K3s Cluster — ctx-aws]
+              ├─ api-gateway   (JWT verify, rate limit)
+              ├─ payment-service ─── Envoy ──▶ OPA ext_authz
+              │    └─────────────────────────────────────────▶ 10.10.1.12:30081
+              ├─ fraud-detection  (velocity + amount scoring)         │
+              ├─ notification-service                                  │
+              ├─ opa-server / redis / keycloak                        │
+              └─ loki / grafana / ai-analyzer / soar-engine           │
+                                                                      │
+                              [OpenStack K3s Cluster — ctx-openstack] │
+                               └─ core-banking ◀────────────────────-─┘
+                               └─ account-service
+                               └─ transaction-service
+                               └─ postgres-accounts / postgres-txn
+                               └─ promtail ──▶ Loki (AWS:31000)
 ```
 
-## Repo Layout
+**Luồng thanh toán cross-cloud:**  
+`API Gateway → JWT verify → OPA allow → payment-service → Fraud score → Envoy STATIC 10.10.1.12:30081 → core-banking (OpenStack)`
 
-| Path | Mục đích |
-|------|----------|
-| [terraform/](terraform/) | Provision AWS và OpenStack |
-| [ansible/](ansible/) | Baseline, WireGuard, K3s, Promtail |
-| [k8s/](k8s/) | Kubernetes manifests |
-| [spire/](spire/) | SPIRE server, agent, registration |
-| [envoy/](envoy/) | Envoy sidecar config |
-| [opa/](opa/) | Policy engine config và Rego policies |
-| [plg-stack/](plg-stack/) | Docker Compose cho Loki, Grafana, Promtail |
-| [scripts/](scripts/) | Hỗ trợ deploy, tunnel, health check |
-| [services/](services/) | Microservices tài chính |
-| [shared/](shared/) | Shared Python modules |
+Cùng `trace_id` xuất hiện trong log của cả hai cloud để đảm bảo khả năng truy vết xuyên suốt.
 
-## Deploy Flow Hiện Tại
+---
 
-### 1. Chuẩn bị biến môi trường
+## Thành phần bảo mật
+
+| Tầng | Công nghệ | Vai trò |
+|------|-----------|---------|
+| Định danh workload | SPIFFE/SPIRE | Cấp X.509 SVID cho mỗi microservice, TTL 1h |
+| Kiểm soát truy cập | OPA + Envoy ext_authz | Policy as code, chặn request tại Envoy sidecar |
+| Xác thực người dùng | Keycloak OIDC | JWT RS256, claim-based authorization |
+| mTLS | Envoy + SPIRE SDS | Service-to-service encryption |
+| Network segmentation | Kubernetes NetworkPolicy | Phân tách traffic AWS↔OpenStack |
+| SIEM | PLG Stack (Promtail + Loki + Grafana) | Log tập trung từ cả hai cloud |
+| AI Detection | OpenAI GPT-4o-mini / Gemini / Heuristic | Phân loại log theo MITRE ATT&CK |
+| SOAR | SOAR Engine (FastAPI + Kubernetes SDK) | Playbook tự động: isolate, restrict, quarantine |
+| Metrics | Prometheus + Grafana | 6/9 services (3 OS services — expected) |
+
+---
+
+## Hạ tầng
+
+### AWS Cluster (`ctx-aws`, port 6444)
+
+| Node | IP | Vai trò |
+|------|----|---------|
+| bastion | 54.254.145.86 (EIP) | SSH jump host |
+| aws-master | 10.10.1.10 | K3s control plane |
+| aws-worker-1 | 10.10.1.11 | K3s worker |
+
+### OpenStack Cluster (`ctx-openstack`, port 6445)
+
+| Node | IP | Vai trò |
+|------|----|---------|
+| os-master | 10.10.1.12 | K3s control plane (standalone) |
+
+```
+SSH Key    : ~/.ssh/zta-siem-soar-key
+Kubeconfig : ~/.kube/ztlab/aws-tunnel.yaml
+```
+
+---
+
+## Cấu trúc repo
+
+```
+.
+├── terraform/               # IaC — provision AWS và OpenStack
+├── ansible/                 # Configuration management (K3s, WireGuard, Promtail)
+├── k8s/
+│   ├── financial/           # Kubernetes manifests dịch vụ tài chính
+│   │   ├── aws-services.yaml      # api-gateway, payment, fraud, notification
+│   │   ├── os-services.yaml       # core-banking, account, transaction (OpenStack)
+│   │   ├── redis.yaml / postgres-*.yaml
+│   │   └── network-policies/      # aws-allow-list.yaml, os-allow-list.yaml
+│   ├── plg-stack/           # Loki, Grafana, Promtail, AI Analyzer, SOAR Engine
+│   ├── monitoring/          # Prometheus
+│   ├── ingress.yaml / namespaces.yaml
+│   └── rbac/                # SOAR RBAC (patch deployments/services)
+├── envoy/
+│   └── configmap.yaml       # Envoy sidecar config (ext_authz, cross-cloud upstream)
+├── opa/
+│   ├── policies/
+│   │   ├── zta_policy.rego        # JWT + SVID verification
+│   │   ├── fraud_gate.rego        # Fraud gate header validation
+│   │   └── cross_cloud.rego       # AWS→OpenStack identity policy
+│   └── deployment.yaml
+├── spire/
+│   ├── server/              # SPIRE Server config (trust_domain: ztlab.local)
+│   ├── agent/               # SPIRE Agent config (aws + openstack)
+│   ├── k8s/                 # SPIRE Kubernetes manifests
+│   └── scripts/             # register-aws-workloads.sh, register-os-workloads.sh
+├── services/
+│   ├── api-gateway/         # FastAPI — JWT verify, rate limit, forward
+│   ├── payment-service/     # FastAPI — Điều phối thanh toán, cross-cloud latency metric
+│   ├── fraud-detection/     # FastAPI — Velocity + amount + channel scoring
+│   ├── core-banking/        # FastAPI — Thực thi giao dịch, validate fraud gate
+│   ├── account-service/     # FastAPI — Quản lý tài khoản
+│   ├── transaction-service/ # FastAPI — Lịch sử giao dịch
+│   ├── notification-service/# FastAPI — Thông báo sự kiện
+│   ├── soar-engine/         # FastAPI — SOAR playbook execution
+│   └── Dockerfile           # Multi-stage build, shared base
+├── shared/
+│   ├── logging.py           # ZTLabLogger (JSON structured, cloud-aware)
+│   └── metrics.py           # Prometheus metrics definitions
+├── plg-stack/
+│   ├── grafana/
+│   │   ├── dashboards/      # ZTA Overview, AI SIEM SOAR, OPA, Envoy Access
+│   │   └── alerting/        # 6 alert rules (brute-force, fraud, lateral-movement, ...)
+│   └── loki/loki-config.yml
+├── scripts/
+│   ├── deploy-all.sh        # Deploy toàn bộ (cả hai cluster)
+│   ├── deploy-security-stack.sh  # SPIRE + OPA + Envoy + Keycloak
+│   ├── setup-os-cluster.sh  # Khởi tạo OpenStack K3s cluster từ đầu
+│   ├── k8s-tunnel.sh        # Quản lý SSH tunnel (up/down/status/verify)
+│   ├── sync-financial-images.sh  # Build + sync images vào K3s nodes
+│   ├── gen-dev-token.sh     # Tạo JWT dev token (HS256)
+│   ├── health-check.sh      # Kiểm tra sức khỏe toàn hệ thống
+│   └── run-demo.sh          # Script demo tự động
+├── tests/                   # 12 test scenarios (brute force, JWT forgery, SOAR, ...)
+├── BAOCAO.md                # Báo cáo đồ án đầy đủ
+└── HUONG_DAN.md             # Hướng dẫn vận hành và demo
+```
+
+---
+
+## Khởi động nhanh
+
+### Yêu cầu
+
+- SSH key tại `~/.ssh/zta-siem-soar-key`
+- `kubectl`, `ansible`, `ssh` đã cài sẵn
+- EC2 instances đang running (AWS Console)
+
+### 1. Mở tunnels
 
 ```bash
-git clone 
-cp .env.template .env
-set -a && source .env && set +a
+bash scripts/k8s-tunnel.sh up all
+export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
 
-# If conflict version jinja
-source .venv/bin/activate
-export PYTHONNOUSERSITE=1
+kubectl --context ctx-aws get nodes        # 2 nodes Ready
+kubectl --context ctx-openstack get nodes  # 1 node Ready (os-master)
 ```
 
-### 2. Provision hạ tầng
+### 2. Mở UI tunnel (terminal riêng, để block)
 
 ```bash
-cd /etc/zta-siem-soar/terraform/aws
-terraform init
-terraform apply --auto-approve
-
-cd ../openstack
-terraform init
-terraform apply --auto-approve
+ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no \
+  -L 8080:10.10.1.10:80 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10
 ```
 
-### 3. Cập nhật inventory Ansible
-
-Điều chỉnh [ansible/inventory/hosts.yml](ansible/inventory/hosts.yml) theo output Terraform, tối thiểu phải có:
-- `aws_gateway`
-- `aws_bastion`
-- `aws_k3s_master`
-- `aws_k3s_worker_1`
-- `aws_k3s_worker_2`
-- `aws_security`
-- `aws_siem`
-- `os_gateway`
-- `os_k3s_master`
-- `os_k3s_worker_1`
-- `os_k3s_worker_2`
-- `os_identity`
-
-#### Trích output để sửa IP cho lần đầu deploy
+### 3. Mở port-forward AI / SOAR / Loki
 
 ```bash
-cd /etc/zta-siem-soar/terraform
-
-# AWS
-terraform -chdir=aws output aws_gateway_eip
-terraform -chdir=aws output aws_bastion_pip
-terraform -chdir=aws output aws_instances
-
-# OpenStack
-terraform -chdir=openstack output os_gateway_floating_ip
-terraform -chdir=openstack output openstack_instances
+kubectl --context ctx-aws port-forward -n plg-stack svc/ai-analyzer 8090:8080 --address=127.0.0.1 &
+kubectl --context ctx-aws port-forward -n plg-stack svc/soar-engine 8091:8080 --address=127.0.0.1 &
+kubectl --context ctx-aws port-forward -n plg-stack svc/loki 3100:3100 --address=127.0.0.1 &
 ```
 
-Map output -> host trong [ansible/inventory/hosts.yml](ansible/inventory/hosts.yml):
-
-| Host trong inventory | Nguồn output |
-|---|---|
-| `aws_gateway.ansible_host` | `aws_gateway_eip` hoặc `aws_instances.aws_gateway.elastic_ip` |
-| `aws_bastion.ansible_host` | `aws_bastion_pip` hoặc `aws_instances.aws_bastion.public_ip` |
-| `aws_k3s_master.ansible_host` | `aws_instances.aws_k3s_master.private_ip` |
-| `aws_k3s_worker_1.ansible_host` | `aws_instances.aws_k3s_worker_1.private_ip` |
-| `aws_k3s_worker_2.ansible_host` | `aws_instances.aws_k3s_worker_2.private_ip` |
-| `aws_security.ansible_host` | `aws_instances.aws_security.private_ip` |
-| `aws_siem.ansible_host` | `aws_instances.aws_siem.private_ip` |
-| `os_gateway.ansible_host` | `os_gateway_floating_ip` hoặc `openstack_instances.os_gateway.public_ip` |
-| `openstack.vars.os_gateway_floating_ip` | `os_gateway_floating_ip` |
-| `os_k3s_master.ansible_host` | `openstack_instances.os_k3s_master.private_ip` |
-| `os_k3s_worker_1.ansible_host` | `openstack_instances.os_k3s_worker_1.private_ip` |
-| `os_k3s_worker_2.ansible_host` | `openstack_instances.os_k3s_worker_2.private_ip` |
-| `os_identity.ansible_host` | `openstack_instances.os_identity.identity_ip` |
-
-Sau khi sửa IP, chạy kiểm tra nhanh:
+### 4. Thêm /etc/hosts (1 lần)
 
 ```bash
-cd /etc/zta-siem-soar/ansible
-ansible ssh_entrypoints -i inventory/hosts.yml -m ping
-ansible aws_private -i inventory/hosts.yml -m ping
-ansible openstack -i inventory/hosts.yml -m ping
+grep -q "api.ztlab.local" /etc/hosts || sudo tee -a /etc/hosts <<'EOF'
+127.0.0.1  api.ztlab.local grafana.ztlab.local keycloak.ztlab.local prometheus.ztlab.local
+EOF
 ```
 
-### 4. Baseline và WireGuard
+### 5. Kiểm tra sức khỏe
 
 ```bash
-cd /etc/zta-siem-soar/ansible
-ansible-playbook -i inventory/hosts.yml playbooks/baseline.yml
-ansible-playbook -i inventory/hosts.yml playbooks/wireguard.yml
+curl -s -H "Host: api.ztlab.local" http://127.0.0.1:8080/health
+# {"status":"ok","service":"api-gateway","cloud":"aws"}
+
+curl -s http://127.0.0.1:8090/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status'], d['provider'])"
+# ok openai
 ```
 
-### 5. Triển khai K3s
+---
+
+## URLs sau khi mở tunnel
+
+| Service | URL | Credentials |
+|---------|-----|-------------|
+| Grafana | http://grafana.ztlab.local:8080 | admin / ZTALab2026! |
+| Keycloak | http://keycloak.ztlab.local:8080 | admin / ztlab-admin-2026 |
+| API Gateway | http://api.ztlab.local:8080/health | — |
+| Prometheus | http://prometheus.ztlab.local:8080/targets | — |
+| AI Analyzer | http://127.0.0.1:8090/health | port-forward |
+| SOAR Engine | http://127.0.0.1:8091/cases | port-forward |
+| Loki | http://127.0.0.1:3100/ready | port-forward |
+
+---
+
+## Test payment flow
 
 ```bash
-ansible-playbook -i inventory/hosts.yml playbooks/k3s.yml
+TOKEN=$(bash scripts/gen-dev-token.sh testuser01 financial-write 2>/dev/null | head -1)
+
+curl -s \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Host: api.ztlab.local" \
+  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}' \
+  -X POST http://127.0.0.1:8080/payments | python3 -m json.tool
 ```
 
-### 6. Mở tunnel kubectl
+Kết quả mong đợi: `status=completed`, `fraud.score=5`, `core_banking.status=completed`
+
+---
+
+## Fraud scoring model
+
+| Yếu tố | Ngưỡng | Điểm |
+|--------|--------|------|
+| Baseline | Luôn có | +5 |
+| Velocity cao | > 30 txn/60s | +40 |
+| Critical amount | ≥ 500M VND | +55 |
+| High amount | ≥ 100M VND | +30 |
+| Risky channel | tor / unknown / script | +15 |
+| Unusual country | Ngoài VN, SG, TH | +10 |
+
+`score < 40` → allow · `40–74` → review (passed) · `≥ 75` → **block**
+
+---
+
+## Attack scenarios
+
+Xem chi tiết tại [HUONG_DAN.md — Section 4](HUONG_DAN.md#4-demo-attack-scenarios-hành-vi-thật--log-thật):
+
+| Scenario | Kỹ thuật MITRE | Kết quả |
+|----------|----------------|---------|
+| Không có JWT | — | HTTP 403, OPA deny |
+| Brute force JWT sai | T1110.001 | HTTP 401×15, Alert Firing |
+| channel=tor + 500M VND | T1078 | HTTP 403, fraud.score=75 |
+| Vượt giới hạn 500M+ | — | HTTP 400, amount limit |
+| Velocity 35 txn/60s | T1496 | Block từ txn thứ 31 |
+| JWT sai secret | T1550.001 | HTTP 401, sig fail |
+
+---
+
+## Deploy từ đầu
 
 ```bash
-cd /etc/zta-siem-soar
-./scripts/k8s-tunnel.sh up
-./scripts/k8s-tunnel.sh verify
+# Sau khi có hạ tầng + K3s sẵn trên cả hai cluster:
+export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
+bash scripts/deploy-all.sh --skip-images
+
+# Nếu cần setup OpenStack cluster từ đầu:
+bash scripts/setup-os-cluster.sh
 ```
 
-### 7. Deploy security stack
+---
 
-```bash
-./scripts/deploy-security-stack.sh
+## Prometheus metrics tự định nghĩa
+
+```promql
+ztlab_transactions_total{service, cloud, type, status}
+ztlab_fraud_score{service, cloud, verdict}
+ztlab_cross_cloud_latency_seconds{source, target, status}
+ztlab_auth_failures_total{service, cloud, reason}
+ztlab_service_up{service, cloud}
 ```
 
-Script này deploy SPIRE, Keycloak, OPA và Envoy ConfigMap cho cả hai cluster.
+---
 
-Khi có thành phần chưa ready, verify nhanh:
+## Tài liệu
 
-```bash
-kubectl --context ctx-aws get pods -n spire -o wide
-kubectl --context ctx-openstack get pods -n spire -o wide
-kubectl --context ctx-aws logs -n spire deploy/spire-server --tail=100
-kubectl --context ctx-openstack logs -n spire deploy/spire-server --tail=100
-kubectl --context ctx-aws get events -A --sort-by=.lastTimestamp | tail -n 50
-kubectl --context ctx-openstack get events -A --sort-by=.lastTimestamp | tail -n 50
-```
-
-### 8. Deploy financial workloads
-
-```bash
-cd /etc/zta-siem-soar
-
-# Neu may aio bi đơ khi build image, tăng swap trước:
-./scripts/increase-swap.sh
-
-# Bat buoc cho lab: dong bo image local len tat ca K3s nodes
-./scripts/sync-financial-images.sh
-
-kubectl --context ctx-aws apply -f k8s/financial/
-kubectl --context ctx-openstack apply -f k8s/financial/
-kubectl --context ctx-aws apply -f k8s/financial/network-policies/aws-allow-list.yaml
-kubectl --context ctx-openstack apply -f k8s/financial/network-policies/os-allow-list.yaml
-```
-
-Neu chi can dong bo lai image (khong rebuild):
-
-```bash
-SKIP_BUILD=true ./scripts/sync-financial-images.sh
-```
-
-Neu may van con nang, chay sync theo mode an toan hon:
-
-```bash
-AUTO_INCREASE_SWAP=true ./scripts/sync-financial-images.sh
-```
-
-### 9. Deploy PLG Stack
-
-```bash
-./scripts/deploy-plg-stack.sh
-```
-
-Hoặc chạy trực tiếp:
-
-```bash
-cd /etc/zta-siem-soar
-docker compose -f plg-stack/docker-compose.plg.yml up -d
-```
-
-## Verify Sau Deploy
-
-```bash
-cd /etc/zta-siem-soar/ansible
-ansible ssh_entrypoints -i inventory/hosts.yml -m ping
-ansible aws_private -i inventory/hosts.yml -m ping
-ansible openstack -i inventory/hosts.yml -m ping
-
-cd /etc/zta-siem-soar
-./scripts/k8s-tunnel.sh status
-kubectl --context ctx-aws get pods -A
-kubectl --context ctx-openstack get pods -A
-```
-
-## Ghi chú
-
-- SIEM hiện dùng Loki làm backend log trung tâm, Grafana cho dashboard và alerting, Promtail làm collector trên mọi node.
-- Các file và thư mục cũ của ELK, Wazuh, Kafka, SOAR và AI Engine đã được loại bỏ khỏi luồng deploy hiện tại.
-- Nếu đổi IP sau khi `terraform apply`, cập nhật lại [ansible/inventory/hosts.yml](ansible/inventory/hosts.yml) trước khi chạy Ansible.
-
-## Tài liệu tham khảo
-
-- [IMPLEMENTATION.md](IMPLEMENTATION.md)
-- [MAP.md](MAP.md)
+- [HUONG_DAN.md](HUONG_DAN.md) — Hướng dẫn vận hành, khởi động, troubleshooting, demo step-by-step
+- [BAOCAO.md](BAOCAO.md) — Báo cáo đồ án đầy đủ (tổng quan, thiết kế, triển khai, kết quả)

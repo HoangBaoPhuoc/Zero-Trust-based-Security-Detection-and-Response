@@ -16,6 +16,7 @@ metadata:
   name: transaction-service
   namespace: financial
 ---
+# core-banking: exposed via NodePort 30081 so AWS cluster can reach it cross-cloud
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -23,6 +24,7 @@ metadata:
   namespace: financial
   labels:
     app: core-banking
+    cloud: openstack
 spec:
   replicas: 1
   selector:
@@ -32,21 +34,35 @@ spec:
     metadata:
       labels:
         app: core-banking
+        cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
     spec:
       serviceAccountName: core-banking
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: core-banking
           image: ztlab/core-banking:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
           env:
             - name: MAX_ALLOWED_FRAUD_SCORE
               value: "74"
+            - name: CLOUD_PROVIDER
+              value: "openstack"
           readinessProbe:
             httpGet:
               path: /health
@@ -59,6 +75,38 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/core-banking"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -66,12 +114,18 @@ metadata:
   name: core-banking
   namespace: financial
 spec:
+  type: NodePort
   selector:
     app: core-banking
   ports:
+    - name: envoy
+      port: 15006
+      targetPort: 15006
+      nodePort: 30081
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 8080
+      nodePort: 30084
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -80,6 +134,7 @@ metadata:
   namespace: financial
   labels:
     app: account-service
+    cloud: openstack
 spec:
   replicas: 1
   selector:
@@ -89,6 +144,7 @@ spec:
     metadata:
       labels:
         app: account-service
+        cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
     spec:
@@ -97,7 +153,7 @@ spec:
         - name: account-service
           image: ztlab/account-service:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
@@ -106,6 +162,8 @@ spec:
               value: "postgres-accounts.financial.svc.cluster.local"
             - name: ACCOUNTS_DB_PORT
               value: "5432"
+            - name: CLOUD_PROVIDER
+              value: "openstack"
           readinessProbe:
             httpGet:
               path: /health
@@ -118,6 +176,13 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -125,12 +190,14 @@ metadata:
   name: account-service
   namespace: financial
 spec:
+  type: NodePort
   selector:
     app: account-service
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 8080
+      nodePort: 30082
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -139,6 +206,7 @@ metadata:
   namespace: financial
   labels:
     app: transaction-service
+    cloud: openstack
 spec:
   replicas: 1
   selector:
@@ -148,6 +216,7 @@ spec:
     metadata:
       labels:
         app: transaction-service
+        cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
     spec:
@@ -156,7 +225,7 @@ spec:
         - name: transaction-service
           image: ztlab/transaction-service:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
@@ -165,6 +234,8 @@ spec:
               value: "postgres-txn.financial.svc.cluster.local"
             - name: TXN_DB_PORT
               value: "5432"
+            - name: CLOUD_PROVIDER
+              value: "openstack"
           readinessProbe:
             httpGet:
               path: /health
@@ -177,6 +248,13 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -184,9 +262,11 @@ metadata:
   name: transaction-service
   namespace: financial
 spec:
+  type: NodePort
   selector:
     app: transaction-service
   ports:
     - name: http
       port: 8080
-      targetPort: http
+      targetPort: 8080
+      nodePort: 30083

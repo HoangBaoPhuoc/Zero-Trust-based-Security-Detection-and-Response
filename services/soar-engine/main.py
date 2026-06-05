@@ -27,9 +27,9 @@ CASE_STORE_PATH = os.getenv("SOAR_CASE_STORE_PATH", "/data/cases.jsonl")
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 TARGETS_BY_ATTACK = {
     "fraud_gate_bypass": {"context": "ctx-aws", "workload": "payment-service"},
-    "lateral_movement": {"context": "ctx-openstack", "workload": "core-banking"},
-    "large_response": {"context": "ctx-openstack", "workload": "core-banking"},
-    "cryptomining": {"context": "ctx-openstack", "workload": "transaction-service"},
+    "lateral_movement": {"context": "ctx-aws", "workload": "core-banking"},
+    "large_response": {"context": "ctx-aws", "workload": "core-banking"},
+    "cryptomining": {"context": "ctx-aws", "workload": "transaction-service"},
     "port_scan": {"context": "ctx-aws", "workload": "api-gateway"},
     "exploit_probe": {"context": "ctx-aws", "workload": "api-gateway"},
 }
@@ -265,14 +265,16 @@ def rollback_playbook(case: CaseRecord) -> str:
         if not raw_selector:
             raise ValueError("original service selector annotation is missing")
         selector = json.loads(raw_selector)
-        api.patch_namespaced_service(
-            name=workload,
-            namespace=SOAR_NAMESPACE,
-            body={
-                "metadata": {"annotations": {"soar.ztlab.io/rolled-back-at": _now_iso()}},
-                "spec": {"selector": selector},
-            },
-        )
+        # Rebuild the service with original selector using replace (not patch)
+        # to avoid strategic merge patch keeping the isolated label.
+        service = api.read_namespaced_service(name=workload, namespace=SOAR_NAMESPACE)
+        service.spec.selector = selector
+        if service.metadata.annotations is None:
+            service.metadata.annotations = {}
+        service.metadata.annotations["soar.ztlab.io/rolled-back-at"] = _now_iso()
+        # Clear managed fields to avoid conflicts with replace
+        service.metadata.managed_fields = None
+        api.replace_namespaced_service(name=workload, namespace=SOAR_NAMESPACE, body=service)
         return "restored original Service selector"
 
     if case.playbook in {"restrict_egress", "quarantine_workload"}:
