@@ -1312,4 +1312,73 @@ kubectl --context ctx-openstack logs -n financial deployment/opa-server --since=
 
 ---
 
+## Tắt / Bật lại AWS để tiết kiệm chi phí
+
+### Tắt toàn bộ (stop, không terminate)
+
+```bash
+# Stop tất cả 7 EC2 instances — data và IP nội bộ được giữ nguyên
+aws ec2 stop-instances --region ap-southeast-1 --instance-ids \
+  i-06d2382ad780bda8c \
+  i-0293f9568b3c0762b \
+  i-08f1cf418461cca62 \
+  i-0b0ec5f99d896bf65 \
+  i-059694c4d1affdb2f \
+  i-0de79b221be7358cf \
+  i-00001195627942100
+
+# Kiểm tra đã stopped chưa
+aws ec2 describe-instances --region ap-southeast-1 \
+  --query 'Reservations[].Instances[].[Tags[?Key==`Name`].Value|[0],State.Name]' \
+  --output table
+```
+
+> **Lưu ý:** EIP của bastion (`54.254.145.86`) **không đổi** khi restart. Private IP các node cũng giữ nguyên.
+
+### Bật lại
+
+```bash
+# Start tất cả 7 EC2 instances
+aws ec2 start-instances --region ap-southeast-1 --instance-ids \
+  i-06d2382ad780bda8c \
+  i-0293f9568b3c0762b \
+  i-08f1cf418461cca62 \
+  i-0b0ec5f99d896bf65 \
+  i-059694c4d1affdb2f \
+  i-0de79b221be7358cf \
+  i-00001195627942100
+
+# Chờ ~2 phút cho K3s và WireGuard khởi động (systemd service tự start)
+# Sau đó mở SSH tunnel kubectl
+ssh -f -N \
+  -i ~/.ssh/zta-siem-soar-key \
+  -o StrictHostKeyChecking=no \
+  -L 6444:10.10.1.10:6443 \
+  -J ubuntu@54.254.145.86 \
+  ubuntu@10.10.1.10
+
+# Mở tunnel UI (Grafana, Keycloak, API Gateway...)
+ssh -N \
+  -i ~/.ssh/zta-siem-soar-key \
+  -o StrictHostKeyChecking=no \
+  -L 8080:10.10.1.10:80 \
+  -J ubuntu@54.254.145.86 \
+  ubuntu@10.10.1.10
+```
+
+### Kiểm tra sau khi bật lại
+
+```bash
+export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
+
+# Pods phải Running hết — lệnh dưới không được in gì
+kubectl get pods -A --no-headers | grep -v kube-system | grep -v Running
+
+# Nếu có pod không Running, restart namespace đó
+kubectl rollout restart deployment -n financial
+kubectl rollout restart deployment -n plg-stack
+```
+
+---
+
 *Xem báo cáo đầy đủ tại [BAOCAO.md](BAOCAO.md)*
