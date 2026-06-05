@@ -665,6 +665,25 @@ rules:
 
 SOAR Engine mount PersistentVolumeClaim `soar-cases-pvc` (1Gi, local-path provisioner) tại `/data`. File `cases.jsonl` tại đường dẫn này accumulate tất cả SOAR case qua các lần restart — đảm bảo audit trail không bị mất. Endpoint `GET /cases` đọc từ file này và trả về danh sách case phân trang.
 
+**Chế độ vận hành SOAR:**
+
+SOAR Engine hỗ trợ hai chế độ, có thể chuyển đổi trực tiếp qua `kubectl` mà không cần redeploy:
+
+```bash
+# Bật live mode — SOAR thực sự tác động workload khi phát hiện tấn công
+kubectl set env deployment/soar-engine SOAR_DRY_RUN=false -n plg-stack
+
+# Trở về dry-run (an toàn cho lab)
+kubectl set env deployment/soar-engine SOAR_DRY_RUN=true -n plg-stack
+```
+
+| Chế độ | `SOAR_DRY_RUN` | Hành vi |
+|--------|---------------|---------|
+| **Dry-run** (mặc định) | `true` | Phát hiện, tạo case, ghi log intent — không tác động workload |
+| **Live** | `false` | Thực thi playbook thật: patch Service selector, scale Deployment về 0 |
+
+Mặc định để `dry_run=true` để bảo vệ cluster trong môi trường lab và demo. Khi chuyển sang live mode, SOAR thực sự có khả năng cô lập workload trong vòng vài giây sau khi AI phát hiện tấn công — đây là minh chứng cho khả năng tự động hóa MTTR (Mean Time To Respond).
+
 **Giám sát AI-SOAR:**
 
 Cả hai service expose `/metrics` endpoint (Prometheus format) và `/health` endpoint. Grafana dashboard "AI SIEM SOAR" kết nối trực tiếp Loki datasource để query `{job="ai-analyzer"}` và hiển thị: verdict distribution (pie chart), severity timeline, attack type heatmap, SOAR case creation rate, và top recommended playbooks.
@@ -870,7 +889,7 @@ Ba service OpenStack không được scrape qua pod network liên cluster; thay 
 | Cross-cloud routing | Đạt | payment→core-banking qua Envoy STATIC cluster (10.10.1.12:30081), trace_id xuyên suốt |
 | Log tập trung | Đạt | Loki nhận log từ cả hai cluster với nhãn cloud rõ ràng |
 | AI detection | Đạt | Phân tích 7 attack scenarios với confidence 0.78–0.85; xác định đúng MITRE technique; reasoning có thể đọc được |
-| SOAR automation | Đạt (dry_run) | Cases tạo tự động với audit trail; playbook mapping đúng cho 6 attack type; rollback hoạt động; `case_count=77+` tích lũy |
+| SOAR automation | Đạt | Cases tạo tự động với audit trail; playbook mapping đúng cho 6 attack type; rollback hoạt động; live mode sẵn sàng (`kubectl set env SOAR_DRY_RUN=false`); mặc định `dry_run=true` để bảo vệ cluster lab |
 | Grafana alerting | Đạt | 6 alert rules active, brute-force alert firing đúng |
 | Prometheus metrics | Đạt (9/9) | AWS services, OpenStack NodePorts, Loki và Prometheus đều UP |
 | Database persistence | Đạt | account-service (PostgreSQL), transaction-service (PostgreSQL), fraud-detection (Redis) — data không mất khi pod restart |

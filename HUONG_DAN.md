@@ -1164,30 +1164,41 @@ kill %1 2>/dev/null
 
 ### Bật SOAR live mode (thực thi thật)
 
-> ⚠️ Khi `DRY_RUN=false`, SOAR **thực sự** scale down / isolate pods trong cluster.
+Mặc định SOAR chạy `dry_run=true` — phát hiện và ghi case nhưng **không** tác động workload. Đây là cơ chế an toàn cho môi trường lab.
+
+> ⚠️ Khi bật live mode, SOAR **thực sự** scale down hoặc isolate pods trong cluster khi phát hiện tấn công.
 
 ```bash
 # Bật live mode
-kubectl --context ctx-aws patch secret ai-secrets -n plg-stack --type=json \
-  -p='[{"op":"replace","path":"/data/SOAR_DRY_RUN","value":"'$(echo -n 'false' | base64)'"}]'
-kubectl --context ctx-aws rollout restart deployment/soar-engine -n plg-stack
+kubectl --context ctx-aws set env deployment/soar-engine SOAR_DRY_RUN=false -n plg-stack
+
+# Xác nhận đã bật
+kubectl --context ctx-aws exec -n plg-stack deploy/soar-engine -- \
+  env | grep SOAR_DRY_RUN
+# → SOAR_DRY_RUN=false
 
 # Tắt lại về dry-run (an toàn)
-kubectl --context ctx-aws patch secret ai-secrets -n plg-stack --type=json \
-  -p='[{"op":"replace","path":"/data/SOAR_DRY_RUN","value":"'$(echo -n 'true' | base64)'"}]'
-kubectl --context ctx-aws rollout restart deployment/soar-engine -n plg-stack
+kubectl --context ctx-aws set env deployment/soar-engine SOAR_DRY_RUN=true -n plg-stack
 ```
+
+Khi live mode bật, SOAR sẽ thực thi playbook ngay khi AI gửi alert có `severity >= medium` và `confidence >= 0.5`:
+- `isolate_workload` → patch Service selector, pods không còn nhận traffic mới
+- `restrict_egress` / `quarantine_workload` → scale Deployment về 0
 
 ### Rollback case sau khi SOAR thực thi
 
 ```bash
-CASE_ID=$(curl -s http://127.0.0.1:8091/cases | python3 -c "
-import json,sys; cases=json.load(sys.stdin)
-if cases: print(cases[-1]['case_id'])
-")
-echo "Case ID: $CASE_ID"
-curl -s http://127.0.0.1:8091/cases/$CASE_ID | python3 -m json.tool
+# Xem case mới nhất
+curl -s http://127.0.0.1:8091/cases | python3 -c "
+import json,sys
+cases = json.load(sys.stdin)
+if cases: print(cases[-1]['case_id'], '-', cases[-1]['status'])
+"
+
+# Rollback (khôi phục workload về trạng thái trước)
+CASE_ID=<case_id_ở_trên>
 curl -s -X POST http://127.0.0.1:8091/cases/$CASE_ID/rollback | python3 -m json.tool
+# → status: "rolled_back", workload được khôi phục
 ```
 
 ### Redeploy một phần sau khi sửa code
