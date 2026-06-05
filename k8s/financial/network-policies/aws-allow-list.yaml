@@ -9,11 +9,86 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # Allow intra-namespace traffic (service-to-service)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: financial
+    # Allow ingress from Traefik (kube-system)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    # Allow Promtail (plg-stack) to scrape metrics
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Allow Prometheus (monitoring) to scrape metrics
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    # Allow egress to anywhere (DNS, external calls)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+    # Allow egress to identity namespace (Keycloak)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: plg-stack-allow-baseline
+  namespace: plg-stack
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Intra-namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+    # Traefik ingress
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+    # Allow financial services (Promtail push to Loki)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 3100
+          protocol: TCP
   egress:
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
+    # Allow egress to financial namespace (AI/SOAR → K8s API via financial services)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+    # Allow Prometheus (monitoring) to scrape Loki
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 3100
+          protocol: TCP
