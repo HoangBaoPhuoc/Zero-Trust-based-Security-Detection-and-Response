@@ -26,7 +26,7 @@ Implementation of a Zero Trust-Based Security Detection and Response System for 
 
 1. [Tổng quan đề tài](#1-tổng-quan-đề-tài)
 2. [Cơ sở lý thuyết](#2-cơ-sở-lý-thuyết)
-3. [Thiết kế hệ thống](#3-thiết-kế-hệ-thống)
+3. [Thiết kế hệ thống](#3-thiết-kế-hệ-thống) — 3.1 Kiến trúc tổng thể | 3.2 Hạ tầng Multi-Cloud (AWS + OpenStack + WireGuard) | 3.3–3.6
 4. [Triển khai hệ thống](#4-triển-khai-hệ-thống)
 5. [Kết quả và đánh giá](#5-kết-quả-và-đánh-giá)
 6. [Kết luận và hướng phát triển](#6-kết-luận-và-hướng-phát-triển)
@@ -256,21 +256,92 @@ Hệ thống ZTLab được tổ chức thành 4 lớp chức năng:
 
 ### 3.2 Hạ tầng Multi-Cloud
 
-Hệ thống triển khai trên hai K3s cluster hoàn toàn tách biệt, kết nối qua WireGuard VPN:
+Hệ thống triển khai trên hai K3s cluster hoàn toàn tách biệt, kết nối qua WireGuard VPN, mô phỏng môi trường Multi-Cloud thực tế giữa AWS Public Cloud và OpenStack Private Cloud.
 
-**AWS Cluster (`ctx-aws`, localhost:6444 → 10.10.1.10:6443)**
+#### 3.2.1 AWS — Public Cloud
 
-| Node | IP Private | Vai trò |
-|------|------------|---------|
-| bastion | 54.254.145.86 (EIP) | SSH jump host |
-| aws-master | 10.10.1.10 | K3s control plane |
-| aws-worker-1 | 10.10.1.11 | K3s worker |
+Hạ tầng AWS được thiết kế theo mô hình **Defense-in-Depth** với 4 subnet tách biệt trong cùng một VPC:
 
-**OpenStack Cluster (`ctx-openstack`, localhost:6445 → 10.10.1.12:6443)**
+```
+AWS VPC (10.10.0.0/16)
+├── Subnet DMZ        (10.10.0.0/24)  — WireGuard Gateway, tiếp nhận kết nối VPN
+├── Subnet Private    (10.10.1.0/24)  — K3s cluster nodes (control plane + worker)
+├── Subnet Restricted (10.10.2.0/24)  — SIEM node (isolated)
+└── Subnet Management (10.10.4.0/24)  — Bastion SSH jump host
+```
 
-| Node | IP Private | Vai trò |
-|------|------------|---------|
-| os-master | 10.10.1.12 | K3s control plane (standalone) |
+| Instance | Subnet | IP Private | IP Public | Loại | Vai trò |
+|----------|--------|------------|-----------|------|---------|
+| `aws-bastion` | Management | 10.10.4.10 | **54.254.145.86** (EIP) | t3.micro | SSH jump host — entry point duy nhất từ internet |
+| `aws-gateway` | DMZ | 10.10.0.10 | 18.143.173.245 | t3.micro | WireGuard VPN server — cầu nối AWS ↔ OpenStack |
+| `aws-k3s-master` | Private | 10.10.1.10 | *(không có)* | t3.medium | K3s control plane (2 vCPU, 4GB RAM) |
+| `aws-k3s-worker-1` | Private | 10.10.1.11 | *(không có)* | t3.small | K3s worker node (2 vCPU, 2GB RAM) |
+| `aws-security` | Private | 10.10.1.20 | *(không có)* | t3.micro | Dự phòng cho SPIRE / Keycloak nếu tách node |
+| `aws-siem` | Restricted | 10.10.2.10 | *(không có)* | t3.medium | Dự phòng SIEM độc lập nếu tách cluster |
+
+**Thiết kế mạng AWS theo nguyên tắc Zero Trust:**
+- Bastion (Management subnet) là điểm truy cập duy nhất từ ngoài, chỉ cho phép SSH port 22
+- K3s nodes nằm trong Private subnet, **không có public IP**, chỉ tiếp cận được qua bastion hoặc qua WireGuard tunnel
+- Security Group của K3s nodes chỉ mở các port cần thiết: 6443 (K3s API), 8080 (workload), 30000–32767 (NodePort)
+- Không có route trực tiếp từ internet vào Private subnet
+
+**K3s cluster AWS (`ctx-aws`):**
+- `aws-k3s-master` (10.10.1.10): chạy K3s control plane (etcd, API server, scheduler), đồng thời là worker
+- `aws-k3s-worker-1` (10.10.1.11): chạy workload pods (Loki, Grafana, AI-SOAR, Prometheus nằm trên node này)
+- Kubectl truy cập qua SSH tunnel: `localhost:6444 → 10.10.1.10:6443` (qua bastion)
+
+#### 3.2.2 OpenStack — Private Cloud
+
+OpenStack đóng vai trò **Private Cloud** trong kiến trúc Multi-Cloud, mô phỏng môi trường on-premise của ngân hàng nơi hệ thống Core Banking vận hành. Hạ tầng OpenStack có mạng riêng biệt hoàn toàn với AWS:
+
+```
+OpenStack Network
+├── zta-dmz-network     (192.168.100.0/24) — Gateway, kết nối external network
+└── zta-private-network (192.168.101.0/24) — K3s node, Core Banking workloads
+```
+
+| Instance | Network | IP Private | Flavor | Vai trò |
+|----------|---------|------------|--------|---------|
+| `os-gateway` | DMZ | 192.168.100.x | nano-plus | WireGuard VPN client — kết nối về aws-gateway |
+| `os-k3s-master` | Private | **10.10.1.12** (WireGuard) | m1.medium | K3s standalone node — chạy toàn bộ Core Banking layer |
+
+> **Lưu ý về địa chỉ IP:** `os-k3s-master` có IP WireGuard `10.10.1.12` thuộc cùng dải `10.10.1.0/24` với AWS K3s nodes — đây là thiết kế có chủ đích, cho phép Envoy trên AWS định tuyến đến OpenStack qua WireGuard VPN mà không cần DNS cross-cluster.
+
+**K3s cluster OpenStack (`ctx-openstack`):**
+- `os-k3s-master` chạy K3s ở chế độ standalone (control plane + worker trên cùng một node)
+- Chứa toàn bộ Core Banking layer: core-banking, account-service, transaction-service, PostgreSQL × 2, SPIRE agent, Promtail
+- Kubectl truy cập qua SSH tunnel riêng: `localhost:6445 → 10.10.1.12:6443`
+
+#### 3.2.3 Kết nối liên cloud — WireGuard VPN
+
+WireGuard VPN tạo tunnel mã hóa layer 3 giữa hai cloud, cho phép giao tiếp trực tiếp ở mức IP:
+
+```
+[aws-gateway: 10.10.0.10]  ←── WireGuard tunnel (UDP 51820) ───→  [os-gateway: 192.168.100.x]
+         │                                                                    │
+    10.10.1.0/24 (AWS)                                              10.10.1.12 (OS WG IP)
+```
+
+- **AWS phía**: `aws-gateway` (10.10.0.10) là WireGuard server, lắng nghe UDP 51820, quảng bá route `10.10.1.0/24`
+- **OpenStack phía**: `os-gateway` là WireGuard client, kết nối về EIP của `aws-gateway`, nhận route về `10.10.1.0/24`
+- WireGuard được cấu hình như **systemd service** (`wg-quick@wg0`) trên cả hai node, tự khởi động khi reboot
+- Toàn bộ traffic cross-cloud (payment-service → core-banking) đi qua tunnel này, được mã hóa ChaCha20-Poly1305 ở layer network — **bổ sung thêm một lớp mã hóa ngoài mTLS ứng dụng**
+
+**Tóm tắt phân tầng Multi-Cloud:**
+
+```
+Internet
+    │  SSH port 22 only
+    ▼
+[aws-bastion: 54.254.145.86]  — Management subnet
+    │  SSH tunneling
+    ▼
+[aws-k3s-master: 10.10.1.10]  — Private subnet (AWS)
+[aws-k3s-worker-1: 10.10.1.11]
+    │  WireGuard VPN (10.10.1.0/24)
+    ▼
+[os-k3s-master: 10.10.1.12]  — Private Cloud (OpenStack)
+```
 
 ### 3.3 Phân lớp dịch vụ theo cloud
 
