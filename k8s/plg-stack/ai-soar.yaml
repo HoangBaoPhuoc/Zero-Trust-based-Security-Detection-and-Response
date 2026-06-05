@@ -1,0 +1,159 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-analyzer
+  namespace: plg-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-analyzer
+  template:
+    metadata:
+      labels:
+        app: ai-analyzer
+    spec:
+      containers:
+        - name: ai-analyzer
+          image: ztlab/ai-analyzer:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: ai-secrets
+                optional: true
+          env:
+            - name: LOKI_URL
+              value: http://loki.plg-stack.svc.cluster.local:3100
+            - name: SOAR_WEBHOOK_URL
+              value: http://soar-engine.plg-stack.svc.cluster.local:8080/alerts
+            - name: AI_ANALYZER_POLL_ENABLED
+              value: "true"
+            - name: AI_ANALYZER_POLL_INTERVAL_SECONDS
+              value: "120"
+            - name: AI_ANALYZER_LOOKBACK_SECONDS
+              value: "300"
+            - name: AI_ANALYZER_MAX_LOGS_PER_BATCH
+              value: "10"
+            - name: AI_ANALYZER_MIN_ALERT_SEVERITY
+              value: medium
+            - name: AI_PROVIDER_COOLDOWN_SECONDS
+              value: "900"
+            - name: AI_ANALYZER_LOKI_QUERY
+              value: '{job="kubernetes-pods",namespace="financial"} |~ "(?i)(401|403|unauthorized|forbidden|denied|fraud_gate_bypass|error|exception|attack|sqlmap|/etc/passwd|powershell)"'
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-analyzer
+  namespace: plg-stack
+spec:
+  selector:
+    app: ai-analyzer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soar-engine
+  namespace: plg-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soar-engine
+  template:
+    metadata:
+      labels:
+        app: soar-engine
+    spec:
+      containers:
+        - name: soar-engine
+          image: ztlab/soar-engine:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: ai-secrets
+                optional: true
+          env:
+            - name: LOKI_URL
+              value: http://loki.plg-stack.svc.cluster.local:3100
+            - name: SOAR_DRY_RUN
+              value: "true"
+            - name: SOAR_AUTO_EXECUTE
+              value: "true"
+            - name: SOAR_MIN_SEVERITY
+              value: medium
+            - name: SOAR_MIN_CONFIDENCE
+              value: "0.50"
+            - name: SOAR_NAMESPACE
+              value: financial
+            - name: SOAR_CASE_STORE_PATH
+              value: /data/cases.jsonl
+          volumeMounts:
+            - name: soar-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: soar-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soar-engine
+  namespace: plg-stack
+spec:
+  selector:
+    app: soar-engine
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

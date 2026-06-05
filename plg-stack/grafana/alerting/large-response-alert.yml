@@ -2,15 +2,34 @@ apiVersion: 1
 
 groups:
   - orgId: 1
-    name: large-response
+    name: gap1-exfiltration
     folder: ZTLab
     interval: 1m
     rules:
-      - uid: large-response
-        title: Large Response Detected
+      - uid: gap1-large-response
+        title: "Large Response — Exfiltration Suspect (Gap 1)"
+        for: 0s
         condition: A
         data:
           - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
             datasourceUid: Loki
             model:
-              expr: '{job="envoy"} |= "bytes_sent"'
+              datasource:
+                type: loki
+                uid: Loki
+              expr: '{job="envoy-access", cloud="openstack"} | json | bytes_sent > 1048576'
+              instant: false
+              queryType: range
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "Large response (>1MB) from OpenStack — possible data exfiltration"
+          description: "Envoy log from OpenStack has bytes_sent > 1MB. ATT&CK T1041."
+        labels:
+          severity: high
+          gap: gap1
+          mitre: T1041

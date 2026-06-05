@@ -2,15 +2,34 @@ apiVersion: 1
 
 groups:
   - orgId: 1
-    name: fraud-gate-bypass
+    name: fraud-gate
     folder: ZTLab
     interval: 1m
     rules:
       - uid: fraud-gate-bypass
-        title: Fraud Gate Bypass
+        title: "Fraud Gate Bypass Detected (Gap 2)"
+        for: 0s
         condition: A
         data:
           - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
             datasourceUid: Loki
             model:
-              expr: '{job="opa"} |= "fraud_gate_bypass"'
+              datasource:
+                type: loki
+                uid: Loki
+              expr: '{job="opa-decisions"} | json | deny_reason=`fraud_gate_bypass`'
+              instant: false
+              queryType: range
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "payment-service attempted core-banking without fraud gate header"
+          description: "Gap 2 validation triggered. ATT&CK T1078.004."
+        labels:
+          severity: critical
+          gap: gap2
+          mitre: T1078.004
