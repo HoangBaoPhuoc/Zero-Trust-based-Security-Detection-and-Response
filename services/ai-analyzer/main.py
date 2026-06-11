@@ -6,11 +6,12 @@ import os
 import random
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 
@@ -23,9 +24,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 POLL_ENABLED = os.getenv("AI_ANALYZER_POLL_ENABLED", "true").lower() == "true"
 MIN_ALERT_SEVERITY = os.getenv("AI_ANALYZER_MIN_ALERT_SEVERITY", "medium").lower()
+# Severity threshold requiring admin approval before SOAR executes.
+# Alerts below this (e.g. medium) are logged to Loki only.
+# Alerts at or above this (e.g. high, critical) enter the pending queue.
+ADMIN_APPROVAL_SEVERITY = os.getenv("AI_ANALYZER_ADMIN_APPROVAL_SEVERITY", "high").lower()
 LOKI_QUERY = os.getenv("AI_ANALYZER_LOKI_QUERY", '{job=~"kubernetes-pods|envoy-access|opa-decisions|system|demo-raw"}')
 SOAR_WEBHOOK_URL = os.getenv("SOAR_WEBHOOK_URL", "").strip()
 SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "").strip()
+# Webhook URL that receives pending alert notifications (Telegram bot, Slack, n8n, etc.)
+ADMIN_WEBHOOK_URL = os.getenv("ADMIN_WEBHOOK_URL", "").strip()
 PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "900"))
 _provider_backoff_until = 0.0
 
@@ -59,9 +66,14 @@ def _env_int(name: str, default: int, minimum: int, maximum: int) -> int:
 POLL_INTERVAL_SECONDS = _env_int("AI_ANALYZER_POLL_INTERVAL_SECONDS", 30, 5, 3600)
 LOOKBACK_SECONDS = _env_int("AI_ANALYZER_LOOKBACK_SECONDS", 90, 10, 86400)
 MAX_LOGS_PER_BATCH = _env_int("AI_ANALYZER_MAX_LOGS_PER_BATCH", 25, 1, 200)
+PENDING_TTL_SECONDS = _env_int("AI_ANALYZER_PENDING_TTL_SECONDS", 3600, 60, 86400)
+
 if MIN_ALERT_SEVERITY not in SEVERITY_RANK:
     logger.warning(json.dumps({"event_type": "invalid_min_alert_severity", "value": MIN_ALERT_SEVERITY, "default": "medium"}))
     MIN_ALERT_SEVERITY = "medium"
+if ADMIN_APPROVAL_SEVERITY not in SEVERITY_RANK:
+    logger.warning(json.dumps({"event_type": "invalid_admin_approval_severity", "value": ADMIN_APPROVAL_SEVERITY, "default": "high"}))
+    ADMIN_APPROVAL_SEVERITY = "high"
 
 
 class LogEntry(BaseModel):
@@ -109,6 +121,28 @@ class AlertRecord(BaseModel):
     log_count: int
     log_hash: str
     ts: str
+
+
+class PendingAlert(BaseModel):
+    alert_id: str
+    alert: AlertRecord
+    created_at: str
+    expires_at: str
+    status: Literal["pending", "approved", "dismissed", "expired"] = "pending"
+    reviewed_at: str | None = None
+    note: str | None = None
+
+
+class ApproveRequest(BaseModel):
+    note: str | None = None
+
+
+class DismissRequest(BaseModel):
+    note: str | None = None
+
+
+# In-memory store for pending alerts awaiting admin approval
+PENDING_ALERTS: dict[str, PendingAlert] = {}
 
 
 def _now_iso() -> str:
@@ -177,8 +211,13 @@ def _logs_hash(logs: list[LogEntry]) -> str:
         digest.update(_flatten_log(entry).encode("utf-8", errors="replace"))
     return digest.hexdigest()[:16]
 
+
 def _extract_source_ip(text: str) -> str | None:
-    patterns = [r"source_ip[=: ](?P<ip>\d{1,3}(?:\.\d{1,3}){3})", r"src_ip[=: ](?P<ip>\d{1,3}(?:\.\d{1,3}){3})", r"client_ip[=: ](?P<ip>\d{1,3}(?:\.\d{1,3}){3})"]
+    patterns = [
+        r"source_ip[=: ](?P<ip>\d{1,3}(?:\.\d{1,3}){3})",
+        r"src_ip[=: ](?P<ip>\d{1,3}(?:\.\d{1,3}){3})",
+        r"client_ip[=: ](?P<ip>\d{1,3}(?:\.\d{1,3}){3})",
+    ]
     for pattern in patterns:
         match = re.search(pattern, text, flags=re.I)
         if match:
@@ -437,8 +476,6 @@ async def analyze_logs(logs: list[LogEntry]) -> AnalyzeResult:
     return heuristic_analyze(logs)
 
 
-
-
 async def forward_alert_to_soar(alert: AlertRecord) -> None:
     if not SOAR_WEBHOOK_URL:
         return
@@ -447,18 +484,22 @@ async def forward_alert_to_soar(alert: AlertRecord) -> None:
         response = await client.post(SOAR_WEBHOOK_URL, json=alert.model_dump(), headers=headers, timeout=15)
         response.raise_for_status()
 
-async def push_alert_to_loki(alert: AlertRecord) -> None:
+
+async def push_alert_to_loki(alert: AlertRecord, extra_labels: dict[str, str] | None = None) -> None:
     line = alert.model_dump_json()
+    stream_labels: dict[str, str] = {
+        "job": "ai-analyzer",
+        "service": APP_NAME,
+        "severity": alert.severity,
+        "verdict": alert.verdict,
+        "attack_type": alert.attack_type[:80],
+    }
+    if extra_labels:
+        stream_labels.update(extra_labels)
     payload = {
         "streams": [
             {
-                "stream": {
-                    "job": "ai-analyzer",
-                    "service": APP_NAME,
-                    "severity": alert.severity,
-                    "verdict": alert.verdict,
-                    "attack_type": alert.attack_type[:80],
-                },
+                "stream": stream_labels,
                 "values": [[str(time.time_ns()), line]],
             }
         ]
@@ -468,40 +509,114 @@ async def push_alert_to_loki(alert: AlertRecord) -> None:
         response.raise_for_status()
 
 
+async def notify_admin(alert: AlertRecord, alert_id: str) -> None:
+    """Push pending alert notification to Loki (Grafana-visible) and optional webhook."""
+    # Push to Loki with special label so Grafana can alert on it
+    try:
+        await push_alert_to_loki(alert, extra_labels={"pending_approval": "true", "alert_id": alert_id})
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "ai_admin_notify_loki_failed", "error": str(exc), "alert_id": alert_id}))
+
+    if not ADMIN_WEBHOOK_URL:
+        return
+
+    payload = {
+        "event": "pending_security_alert",
+        "alert_id": alert_id,
+        "severity": alert.severity,
+        "attack_type": alert.attack_type,
+        "summary": alert.summary,
+        "affected_service": alert.affected_service,
+        "source_ip": alert.source_ip,
+        "confidence": alert.confidence,
+        "evidence": alert.evidence[:3],
+        "approve_hint": f"POST /pending/{alert_id}/approve",
+        "dismiss_hint": f"POST /pending/{alert_id}/dismiss",
+        "ts": alert.ts,
+    }
+    async with httpx.AsyncClient() as client:
+        response = await client.post(ADMIN_WEBHOOK_URL, json=payload, timeout=10)
+        response.raise_for_status()
+
+
 def should_alert(result: AnalyzeResult) -> bool:
     return result.verdict != "normal" and SEVERITY_RANK[result.severity] >= SEVERITY_RANK.get(MIN_ALERT_SEVERITY, 2)
 
 
+def requires_admin_approval(result: AnalyzeResult) -> bool:
+    return SEVERITY_RANK[result.severity] >= SEVERITY_RANK.get(ADMIN_APPROVAL_SEVERITY, 3)
+
+
 async def handle_logs(logs: list[LogEntry], source: str) -> AnalyzeResult:
     result = await analyze_logs(logs)
-    if should_alert(result):
-        alert = AlertRecord(
-            provider=result.provider_used,
-            model=result.model_used,
-            source=source,
-            verdict=result.verdict,
-            severity=result.severity,
-            confidence=result.confidence,
-            attack_type=result.attack_type,
-            summary=result.summary,
-            evidence=result.evidence,
-            recommended_action=result.recommended_action,
-            recommended_playbook=result.recommended_playbook,
-            affected_service=result.affected_service,
-            source_ip=result.source_ip,
-            log_count=len(logs),
-            log_hash=_logs_hash(logs),
-            ts=_now_iso(),
+
+    if not should_alert(result):
+        # Below minimum threshold: log to stdout only, no Loki alert, no SOAR
+        logger.info(json.dumps({
+            "event_type": "ai_analysis_below_threshold",
+            "severity": result.severity,
+            "verdict": result.verdict,
+            "min_alert_severity": MIN_ALERT_SEVERITY,
+        }))
+        return result
+
+    alert = AlertRecord(
+        provider=result.provider_used,
+        model=result.model_used,
+        source=source,
+        verdict=result.verdict,
+        severity=result.severity,
+        confidence=result.confidence,
+        attack_type=result.attack_type,
+        summary=result.summary,
+        evidence=result.evidence,
+        recommended_action=result.recommended_action,
+        recommended_playbook=result.recommended_playbook,
+        affected_service=result.affected_service,
+        source_ip=result.source_ip,
+        log_count=len(logs),
+        log_hash=_logs_hash(logs),
+        ts=_now_iso(),
+    )
+    logger.warning(alert.model_dump_json())
+
+    if requires_admin_approval(result):
+        # High/critical: create pending alert, notify admin, do NOT forward to SOAR yet
+        alert_id = str(uuid.uuid4())[:12]
+        now = _now_iso()
+        expires_ts = datetime.fromtimestamp(time.time() + PENDING_TTL_SECONDS, tz=timezone.utc).isoformat()
+        pending = PendingAlert(
+            alert_id=alert_id,
+            alert=alert,
+            created_at=now,
+            expires_at=expires_ts,
         )
-        logger.warning(alert.model_dump_json())
+        PENDING_ALERTS[alert_id] = pending
+        logger.warning(json.dumps({
+            "event_type": "ai_pending_alert_created",
+            "alert_id": alert_id,
+            "severity": alert.severity,
+            "attack_type": alert.attack_type,
+            "expires_at": expires_ts,
+            "message": f"Waiting for admin approval before SOAR execution. Review at GET /pending/{alert_id}",
+        }))
+        try:
+            await notify_admin(alert, alert_id)
+        except Exception as exc:
+            logger.error(json.dumps({"event_type": "ai_admin_notify_failed", "error": str(exc), "alert_id": alert_id}))
+    else:
+        # Medium severity: push to Loki for Grafana visibility, no SOAR action
         try:
             await push_alert_to_loki(alert)
         except Exception as exc:
             logger.error(json.dumps({"event_type": "ai_alert_push_failed", "error": str(exc), "log_hash": alert.log_hash}))
-        try:
-            await forward_alert_to_soar(alert)
-        except Exception as exc:
-            logger.error(json.dumps({"event_type": "ai_soar_forward_failed", "error": str(exc), "log_hash": alert.log_hash}))
+        logger.info(json.dumps({
+            "event_type": "ai_alert_logged_only",
+            "severity": alert.severity,
+            "attack_type": alert.attack_type,
+            "message": "Alert logged to Loki. Below admin approval threshold, no SOAR action.",
+        }))
+
     return result
 
 
@@ -547,14 +662,47 @@ async def poll_loki_loop() -> None:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
 
+async def expire_pending_loop() -> None:
+    """Periodically mark expired pending alerts and clean up old dismissed/approved ones."""
+    while True:
+        await asyncio.sleep(60)
+        now_ts = time.time()
+        to_remove: list[str] = []
+        for alert_id, pending in list(PENDING_ALERTS.items()):
+            if pending.status == "pending":
+                expires_ts = datetime.fromisoformat(pending.expires_at).timestamp()
+                if now_ts >= expires_ts:
+                    PENDING_ALERTS[alert_id] = pending.model_copy(update={
+                        "status": "expired",
+                        "reviewed_at": _now_iso(),
+                        "note": "Auto-expired: no admin response within TTL",
+                    })
+                    logger.warning(json.dumps({
+                        "event_type": "ai_pending_alert_expired",
+                        "alert_id": alert_id,
+                        "severity": pending.alert.severity,
+                        "attack_type": pending.alert.attack_type,
+                    }))
+            elif pending.status in {"approved", "dismissed", "expired"}:
+                # Keep resolved alerts for 1 hour then remove
+                if pending.reviewed_at:
+                    resolved_ts = datetime.fromisoformat(pending.reviewed_at).timestamp()
+                    if now_ts - resolved_ts > 3600:
+                        to_remove.append(alert_id)
+        for alert_id in to_remove:
+            del PENDING_ALERTS[alert_id]
+
+
 @app.on_event("startup")
 async def startup() -> None:
     if POLL_ENABLED:
         asyncio.create_task(poll_loki_loop())
+    asyncio.create_task(expire_pending_loop())
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    pending_count = sum(1 for p in PENDING_ALERTS.values() if p.status == "pending")
     return {
         "status": "ok",
         "service": APP_NAME,
@@ -562,9 +710,99 @@ async def health() -> dict[str, Any]:
         "poll_enabled": POLL_ENABLED,
         "loki_url": LOKI_URL,
         "provider_backoff_remaining_seconds": _provider_cooldown_remaining(),
+        "admin_approval_severity": ADMIN_APPROVAL_SEVERITY,
+        "pending_alerts_count": pending_count,
+        "admin_webhook_configured": bool(ADMIN_WEBHOOK_URL),
     }
 
 
 @app.post("/analyze", response_model=AnalyzeResult)
 async def analyze(request: AnalyzeRequest) -> AnalyzeResult:
     return await handle_logs(request.logs[:MAX_LOGS_PER_BATCH], request.source)
+
+
+# ---------------------------------------------------------------------------
+# Admin approval endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/pending", response_model=list[PendingAlert])
+async def list_pending(status: str | None = None) -> list[PendingAlert]:
+    """List pending security alerts awaiting admin review."""
+    alerts = list(PENDING_ALERTS.values())
+    if status:
+        alerts = [a for a in alerts if a.status == status]
+    # Most recent first
+    alerts.sort(key=lambda a: a.created_at, reverse=True)
+    return alerts
+
+
+@app.get("/pending/{alert_id}", response_model=PendingAlert)
+async def get_pending(alert_id: str) -> PendingAlert:
+    """Get a specific pending alert by ID."""
+    pending = PENDING_ALERTS.get(alert_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id!r} not found")
+    return pending
+
+
+@app.post("/pending/{alert_id}/approve", response_model=PendingAlert)
+async def approve_pending(alert_id: str, body: ApproveRequest = ApproveRequest()) -> PendingAlert:
+    """Admin approves a pending alert — forwards to SOAR for execution."""
+    pending = PENDING_ALERTS.get(alert_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id!r} not found")
+    if pending.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Alert is already {pending.status!r}, cannot approve")
+
+    now = _now_iso()
+    updated = pending.model_copy(update={
+        "status": "approved",
+        "reviewed_at": now,
+        "note": body.note or "Approved by admin",
+    })
+    PENDING_ALERTS[alert_id] = updated
+
+    logger.warning(json.dumps({
+        "event_type": "ai_pending_alert_approved",
+        "alert_id": alert_id,
+        "severity": pending.alert.severity,
+        "attack_type": pending.alert.attack_type,
+        "note": updated.note,
+    }))
+
+    # Forward to SOAR
+    try:
+        await forward_alert_to_soar(pending.alert)
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "ai_soar_forward_failed", "error": str(exc), "alert_id": alert_id}))
+        raise HTTPException(status_code=502, detail=f"SOAR forward failed: {exc}")
+
+    return updated
+
+
+@app.post("/pending/{alert_id}/dismiss", response_model=PendingAlert)
+async def dismiss_pending(alert_id: str, body: DismissRequest = DismissRequest()) -> PendingAlert:
+    """Admin dismisses a pending alert — logs it and takes no SOAR action."""
+    pending = PENDING_ALERTS.get(alert_id)
+    if not pending:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id!r} not found")
+    if pending.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Alert is already {pending.status!r}, cannot dismiss")
+
+    now = _now_iso()
+    updated = pending.model_copy(update={
+        "status": "dismissed",
+        "reviewed_at": now,
+        "note": body.note or "Dismissed by admin",
+    })
+    PENDING_ALERTS[alert_id] = updated
+
+    logger.warning(json.dumps({
+        "event_type": "ai_pending_alert_dismissed",
+        "alert_id": alert_id,
+        "severity": pending.alert.severity,
+        "attack_type": pending.alert.attack_type,
+        "note": updated.note,
+    }))
+
+    return updated
