@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ai-analyzer
-          image: ztlab/ai-analyzer:1.0.0
+          image: ztlab/ai-analyzer:1.1.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -40,6 +40,15 @@ spec:
               value: "10"
             - name: AI_ANALYZER_MIN_ALERT_SEVERITY
               value: medium
+            # Alerts at or above this severity require admin approval before SOAR executes
+            - name: AI_ANALYZER_ADMIN_APPROVAL_SEVERITY
+              value: high
+            # TTL (seconds) for pending alerts before they auto-expire
+            - name: AI_ANALYZER_PENDING_TTL_SECONDS
+              value: "3600"
+            # Optional webhook URL to notify admin (Telegram bot, Slack, n8n, etc.)
+            # - name: ADMIN_WEBHOOK_URL
+            #   value: "https://your-webhook-url"
             - name: AI_PROVIDER_COOLDOWN_SECONDS
               value: "900"
             - name: AI_ANALYZER_LOKI_QUERY
