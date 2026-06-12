@@ -27,7 +27,7 @@ Browser / curl
   ├─ fraud-detection    (Redis velocity + amount/channel/country scoring)
   ├─ notification-service
   ├─ Keycloak / OPA / SPIRE / Redis
-  └─ Loki / Grafana / Prometheus / AI Analyzer / SOAR Engine / TheHive
+  └─ Loki / Grafana / Prometheus / AI Analyzer / SOAR Engine
              │
              │ Envoy mTLS + SPIRE SVID
              ▼
@@ -85,7 +85,6 @@ Chi tiết input/output từng điểm được mô tả trong [BAOCAO_FLOW_HE_T
 | AI Detection | OpenAI/Gemini/Heuristic | Phân loại log, suy luận attack type, đề xuất playbook |
 | HITL | Grafana alert → AI Analyzer webhook → Web Portal | Severity ≥ high tạo PendingAlert, Grafana POST `/grafana-webhook`, admin approve/reject trước khi SOAR chạy |
 | SOAR | FastAPI + Kubernetes SDK | `isolate_workload`, `restrict_egress`, `quarantine_workload`, `block_source_ip`, `revoke_user_sessions` |
-| Case management | TheHive | Tạo alert/case điều tra sự cố |
 
 ---
 
@@ -129,7 +128,7 @@ Kubeconfig : ~/.kube/ztlab/aws-tunnel.yaml
 │   │   ├── postgres-txn.yaml
 │   │   └── network-policies/
 │   ├── keycloak/                 # Realm ztlab, users, roles, clients
-│   ├── plg-stack/                # Loki, Grafana, Promtail, AI, SOAR, TheHive
+│   ├── plg-stack/                # Loki, Grafana, Promtail, AI, SOAR
 │   ├── monitoring/               # Prometheus
 │   ├── ingress.yaml
 │   └── rbac/
@@ -198,7 +197,6 @@ ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no   -L 18080:10.10.
 kubectl --context ctx-aws port-forward -n plg-stack svc/ai-analyzer 8090:8080 --address=127.0.0.1 &
 kubectl --context ctx-aws port-forward -n plg-stack svc/soar-engine 8091:8080 --address=127.0.0.1 &
 kubectl --context ctx-aws port-forward -n plg-stack svc/loki 3100:3100 --address=127.0.0.1 &
-kubectl --context ctx-aws port-forward -n plg-stack svc/thehive 19000:9000 --address=127.0.0.1 &
 ```
 
 ### 4. Thêm `/etc/hosts`
@@ -232,7 +230,6 @@ curl -s http://127.0.0.1:8091/health | python3 -m json.tool
 | AI Analyzer | http://127.0.0.1:8090/health | Port-forward |
 | SOAR Engine | http://127.0.0.1:8091/cases | Port-forward |
 | Loki | http://127.0.0.1:3100/ready | Port-forward |
-| TheHive | http://127.0.0.1:19000 | Port-forward |
 
 Tài khoản demo trong Keycloak:
 
@@ -311,11 +308,13 @@ Service/Envoy logs
   -> Nếu severity >= high: tạo PendingAlert, push log pending_approval=true lên Loki
   -> Grafana alert rule detect log pending_approval=true
   -> Grafana Contact Point "ztlab-security-admin" POST /grafana-webhook trên AI Analyzer
-  -> Admin nhận thông báo, review tại Web Portal (GET /pending)
+  -> Admin nhận thông báo, review tại Web Portal (/alerts)
   -> Admin approve: POST /approve/{alert_id}
   -> SOAR Engine thực thi playbook (isolate/restrict/quarantine/block/revoke)
   -> Kubernetes/Keycloak action
   -> cases.jsonl + Loki audit log
+
+> **Lưu ý:** TheHive và Cassandra đã được gỡ bỏ để tiết kiệm RAM. AI Analyzer hoạt động với `thehive_configured: false` — case management thực hiện qua SOAR Engine (`/cases`) và Loki logs.
 ```
 
 Playbook hiện có:

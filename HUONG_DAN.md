@@ -64,7 +64,7 @@ Browser ──► Keycloak (JWT)                                              �
 {status, trace_id, fraud, core_banking}
 ```
 
-### Flow AI-SOAR-TheHive (HITL)
+### Flow AI-SOAR (HITL)
 
 ```
 Envoy/OPA/App logs
@@ -73,7 +73,6 @@ Envoy/OPA/App logs
 AI Analyzer — poll Loki mỗi 120s bằng LogQL
      │ medium   → log vào Loki, không làm gì thêm
      │ high/critical → tạo pending alert (in-memory)
-     │               + tạo TheHive alert
      │               + push Loki {pending_approval="true"}
      ▼
 Grafana rule "ai-pending-approval-alert"
@@ -82,7 +81,7 @@ Grafana rule "ai-pending-approval-alert"
      │          (Webhook: POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/grafana-webhook)
      ▼
 Admin xem Web Portal /alerts
-     │ approve  → AI tạo TheHive case → gọi SOAR
+     │ approve  → gọi SOAR Engine thực thi playbook
      │ dismiss  → ghi lý do, không tác động workload
      ▼
 SOAR Engine
@@ -92,6 +91,8 @@ SOAR Engine
      ▼
 Audit trail → /data/cases.jsonl + Loki
 ```
+
+> **Lưu ý:** TheHive và Cassandra đã được gỡ bỏ khỏi cluster để tiết kiệm RAM (~1.6GB). AI Analyzer chạy với `thehive_configured: false`. Case management qua SOAR `/cases` endpoint.
 
 ### OPA — Kiểm tra JWT
 
@@ -117,8 +118,6 @@ Role → method được phép:
 |---------|------|----------|
 | Grafana | admin | ZTALab2026! |
 | Keycloak Admin | admin | ztlab-admin-2026 |
-| TheHive Admin | admin@thehive.local | secret |
-| TheHive AI user | ai-soar2@ztlab.local | API key trong secret `ai-secrets` |
 | testuser01 (ACC-1001) | testuser01 | Test1234! |
 | testuser02 | testuser02 | Test1234! |
 | merchant01 (ACC-2001) | merchant01 | Merchant1234! |
@@ -142,7 +141,6 @@ Role → method được phép:
 | 8090 | plg-stack | ai-analyzer | AI Analyzer API | http://localhost:8090 |
 | 8091 | plg-stack | soar-engine | SOAR Engine API | http://localhost:8091 |
 | 3100 | plg-stack | loki | Loki query | http://localhost:3100 |
-| 9000 | plg-stack | thehive | TheHive | http://localhost:9000 |
 
 ---
 
@@ -241,7 +239,6 @@ nohup kubectl --context ctx-aws port-forward svc/grafana     3000:3000 -n plg-st
 nohup kubectl --context ctx-aws port-forward svc/ai-analyzer 8090:8080 -n plg-stack  >/tmp/pf-ai.log 2>&1 &
 nohup kubectl --context ctx-aws port-forward svc/soar-engine 8091:8080 -n plg-stack  >/tmp/pf-soar.log 2>&1 &
 nohup kubectl --context ctx-aws port-forward svc/loki        3100:3100 -n plg-stack  >/tmp/pf-loki.log 2>&1 &
-nohup kubectl --context ctx-aws port-forward svc/thehive     9000:9000 -n plg-stack  >/tmp/pf-hive.log 2>&1 &
 
 sleep 4
 
@@ -255,12 +252,9 @@ curl -sf http://localhost:8180/realms/ztlab/.well-known/openid-configuration \
 curl -sf http://localhost:3000/api/health \
   | python3 -c "import json,sys; print('Grafana:', json.load(sys.stdin).get('database','ok'))"
 curl -sf http://localhost:8090/health \
-  | python3 -c "import json,sys; d=json.load(sys.stdin); print('AI Analyzer:', d['status'], '| pending:', d.get('pending_alerts_count',0))"
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print('AI Analyzer:', d['status'], '| pending:', d.get('pending_alerts_count',0), '| thehive:', d.get('thehive_configured',False))"
 curl -sf http://localhost:8091/health \
   | python3 -c "import json,sys; d=json.load(sys.stdin); print('SOAR:', d['status'], '| dry_run:', d.get('dry_run'), '| cases:', d.get('case_count',0))"
-curl -sf http://localhost:9000/api/status \
-  | python3 -c "import json,sys; print('TheHive:', json.load(sys.stdin).get('versions',{}).get('TheHive','?'))" 2>/dev/null \
-  || echo "TheHive: khởi động chậm — thử lại sau 2 phút"
 ```
 
 Output mong đợi:
@@ -269,9 +263,8 @@ Web Portal: ok
 API Gateway: ok | aws
 Keycloak issuer: http://keycloak.ztlab.local/realms/ztlab
 Grafana: ok
-AI Analyzer: ok | pending: 0
+AI Analyzer: ok | pending: 0 | thehive: False
 SOAR: ok | dry_run: False | cases: 137
-TheHive: 5.2.16-1
 ```
 
 ---
@@ -305,7 +298,6 @@ kubectl --context ctx-openstack get pods -n financial
 
 **AWS plg-stack:**
 - `loki`, `grafana`, `promtail`, `ai-analyzer`, `soar-engine`
-- `thehive`, `thehive-cassandra`
 
 **OpenStack financial:**
 - `core-banking` 2/2 (Envoy sidecar), `opa-server` 1/1
@@ -501,8 +493,7 @@ for svc in "8080:/health" \
            "8180:/realms/ztlab" \
            "3000:/api/health" \
            "8090:/health" \
-           "8091:/health" \
-           "9000:/api/status"; do
+           "8091:/health"; do
   port="${svc%%:*}"; path="${svc##*:}"
   code=$(curl -so /dev/null -w "%{http_code}" "http://localhost:$port$path")
   echo "  :$port $path → HTTP $code"
@@ -574,15 +565,7 @@ kubectl --context ctx-aws rollout restart deployment/loki -n plg-stack
 kubectl --context ctx-aws rollout status deployment/loki -n plg-stack --timeout=90s
 ```
 
-#### Restart TheHive (cẩn thận — mất data in-memory nếu không dùng Cassandra)
-```bash
-# Kiểm tra Cassandra trước
-kubectl --context ctx-aws get pods -n plg-stack -l app=thehive-cassandra
-
-kubectl --context ctx-aws rollout restart deployment/thehive -n plg-stack
-kubectl --context ctx-aws rollout status deployment/thehive -n plg-stack --timeout=180s
-# TheHive khởi động lâu (~2 phút vì chờ Cassandra)
-```
+<!-- TheHive và Cassandra đã bị gỡ bỏ khỏi cluster để tiết kiệm RAM -->
 
 #### Restart OPA (AWS)
 ```bash
@@ -677,47 +660,6 @@ pkill -f "kubectl.*port-forward" 2>/dev/null; sleep 1
 
 ---
 
-### Sự cố: TheHive không tạo alert (thehive_configured=true nhưng alert_id=null)
-
-Nguyên nhân thường gặp: API key thiếu quyền `manageAlert/create` trong org `ztlab`.
-
-```bash
-# Kiểm tra key còn hoạt động
-THEHIVE_KEY=$(kubectl --context ctx-aws -n plg-stack get secret ai-secrets \
-  -o jsonpath='{.data.THEHIVE_API_KEY}' | base64 -d)
-
-curl -s -o /dev/null -w "%{http_code}" \
-  -H "Authorization: Bearer ${THEHIVE_KEY}" \
-  http://localhost:19000/api/v1/alert
-# 200 hoặc 400 → key OK; 403 → key sai quyền
-
-# Tạo lại user integration nếu cần
-ADMIN_KEY=$(curl -s -u 'admin@thehive.local:secret' \
-  http://localhost:19000/api/v1/user/~8208/key | python3 -c "import json,sys; print(json.load(sys.stdin)['key'])")
-
-# Tạo org nếu chưa có
-curl -s -X POST http://localhost:19000/api/v0/organisation \
-  -H "Authorization: Bearer ${ADMIN_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"ztlab","description":"ZTLab","taskRule":"manual","observableRule":"manual"}'
-
-# Tạo user analyst trong org ztlab
-USER_RESP=$(curl -s -X POST http://localhost:19000/api/v1/user \
-  -H "Authorization: Bearer ${ADMIN_KEY}" \
-  -H "Content-Type: application/json" \
-  -d '{"login":"ai-soar2@ztlab.local","name":"AI SOAR","organisation":"ztlab","profile":"analyst","type":"Normal"}')
-USER_ID=$(echo $USER_RESP | python3 -c "import json,sys; print(json.load(sys.stdin).get('_id',''))")
-
-NEW_KEY=$(curl -s -X POST -H "Authorization: Bearer ${ADMIN_KEY}" \
-  "http://localhost:19000/api/v1/user/${USER_ID}/key/renew")
-
-# Gắn key mới vào AI secret
-kubectl --context ctx-aws -n plg-stack patch secret ai-secrets --type merge \
-  -p "{\"stringData\":{\"THEHIVE_API_KEY\":\"${NEW_KEY}\",\"THEHIVE_URL\":\"http://thehive.plg-stack.svc.cluster.local:9000\",\"THEHIVE_ORG\":\"ztlab\"}}"
-kubectl --context ctx-aws -n plg-stack rollout restart deployment/ai-analyzer
-kubectl --context ctx-aws -n plg-stack rollout status deployment/ai-analyzer --timeout=180s
-```
-
 ---
 
 ### Sự cố: Pod CrashLoopBackOff
@@ -742,7 +684,6 @@ kubectl --context ctx-aws rollout restart deployment/<name> -n <ns>
 | **Keycloak Admin** | http://localhost:8180/admin | admin / ztlab-admin-2026 |
 | **AI Analyzer API** | http://localhost:8090/docs | — |
 | **SOAR Engine API** | http://localhost:8091/docs | — |
-| **TheHive** | http://localhost:9000 | admin@thehive.local / secret |
 
 > **Xem hướng dẫn Web Portal đầy đủ:** [Phần 5 — Web Portal UI](#phần-5--sử-dụng-web-portal-ui)
 
@@ -750,7 +691,7 @@ kubectl --context ctx-aws rollout restart deployment/<name> -n <ns>
 - `ZTLab Security Overview` — tổng quan toàn hệ thống
 - `Envoy Access Logs` — log mTLS Envoy
 - `OPA Decision Log` — quyết định OPA allow/deny
-- `AI SIEM SOAR` — AI alerts, SOAR cases, TheHive cases
+- `AI SIEM SOAR` — AI alerts, SOAR cases
 - `ZTLab Threat Intelligence Feed` — MITRE ATT&CK heatmap, top IPs, verdict distribution
 
 ---
@@ -950,9 +891,9 @@ curl -s -X POST http://localhost:18082/analyze \
 
 ---
 
-### Demo 10 — AI/SOAR/TheHive HITL pipeline (core demo)
+### Demo 10 — AI/SOAR HITL pipeline (core demo)
 
-**Mục tiêu:** chứng minh full flow AI → pending → admin approve → SOAR thực thi.
+**Mục tiêu:** chứng minh full flow AI → pending → admin approve → SOAR thực thi. (TheHive đã bị gỡ — case management qua SOAR `/cases`)
 
 #### Bước 1: Inject tấn công critical
 ```bash
@@ -972,10 +913,8 @@ curl -s -X POST http://localhost:18082/analyze \
 #### Bước 2: Xem pending alert
 ```bash
 curl -s 'http://localhost:18082/pending?status=pending' | python3 -m json.tool
-# Có alert_id và thehive_alert_id
+# Có alert_id — thehive_alert_id sẽ là null (TheHive đã gỡ)
 ```
-
-Kiểm tra TheHive: `http://localhost:19000/index.html` → org `ztlab` → **Alerts** tab.
 
 #### Bước 3: Xem evidence (endpoint mới)
 ```bash
@@ -1293,7 +1232,7 @@ Hiển thị security log từ Loki (1 giờ gần nhất):
 
 Danh sách pending alerts chờ admin phê duyệt:
 - Xem severity, attack_type, evidence, MITRE technique
-- **Approve** → AI tạo TheHive case → gọi SOAR thực thi playbook
+- **Approve** → gọi SOAR thực thi playbook
 - **Dismiss** → ghi lý do, không tác động
 
 Để có alert để test: chạy một scenario từ tab **⚔️ Kịch bản** với attack_type có severity `high`/`critical`.
@@ -1353,7 +1292,7 @@ Trang chính để demo và test. 12 kịch bản chia 3 nhóm:
 |------|-----|-------------|
 | AI Alerts (HITL) | http://localhost:8080/alerts | session hiện tại |
 | Grafana | http://localhost:3000 | admin / ZTALab2026! |
-| TheHive | http://localhost:9000 | admin@thehive.local / secret |
+| SOAR Cases | http://localhost:8091/cases | — |
 
 ---
 
@@ -1391,8 +1330,7 @@ for spec in \
   "ctx-aws plg-stack grafana 3000:3000" \
   "ctx-aws plg-stack ai-analyzer 8090:8080" \
   "ctx-aws plg-stack soar-engine 8091:8080" \
-  "ctx-aws plg-stack loki 3100:3100" \
-  "ctx-aws plg-stack thehive 9000:9000"
+  "ctx-aws plg-stack loki 3100:3100"
 do
   read ctx ns svc ports <<< "$spec"
   nohup kubectl --context $ctx port-forward svc/$svc $ports -n $ns \
@@ -1433,7 +1371,7 @@ aws ec2 stop-instances --region ap-southeast-1 \
 
 ### Bật lại → làm theo Phần 1
 
-> Data trong PostgreSQL, Keycloak, Redis, Cassandra (TheHive) được giữ nguyên vì dùng PersistentVolume.
+> Data trong PostgreSQL, Keycloak, Redis được giữ nguyên vì dùng PersistentVolume.
 
 ---
 
@@ -1813,7 +1751,6 @@ if [ -n "$ALERT_ID" ]; then
 import json,sys
 d = json.load(sys.stdin)
 print('approved  :', d.get('status'))
-print('thehive   :', d.get('thehive_case_id','N/A'))
 print('soar_case :', d.get('soar_case_id','N/A'))
 "
   sleep 3
@@ -2140,7 +2077,7 @@ ls results/
 
 ---
 
-### Flow 7 — Xem toàn bộ kết quả trên Grafana + TheHive
+### Flow 7 — Xem toàn bộ kết quả trên Grafana + SOAR
 
 ```bash
 echo "=== Link trực tiếp đến từng dashboard ==="
@@ -2150,10 +2087,8 @@ echo "OPA Decision Log   : http://localhost:3000/d/ztlab-opa-decisions"
 echo "AI SIEM SOAR       : http://localhost:3000/d/ztlab-ai-siem-soar"
 echo "Threat Intel Feed  : http://localhost:3000/d/ztlab-threat-intel"
 echo ""
-echo "TheHive alerts     : http://localhost:19000/index.html#/alerts"
-echo "TheHive cases      : http://localhost:19000/index.html#/cases"
-echo "SOAR cases API     : http://localhost:18091/cases"
-echo "AI pending alerts  : http://localhost:18082/pending"
+echo "SOAR cases API     : http://localhost:8091/cases"
+echo "AI pending alerts  : http://localhost:8090/pending"
 ```
 
 ```bash
@@ -2204,4 +2139,4 @@ kubectl --context ctx-aws get networkpolicy -n financial \
 | **Flow 4** | block_source_ip | NetworkPolicy tạo với `except:[IP/32]`, rollback xóa NetworkPolicy |
 | **Flow 5** | revoke_user_sessions | Keycloak sessions=0 sau revoke, rollback note ghi nhận |
 | **Flow 6** | 20 scenarios tự động | ≥18/20 PASS (2 có thể SKIP nếu infrastructure không hỗ trợ) |
-| **Flow 7** | Xem Grafana + TheHive | Dashboard hiển thị đủ data, TheHive có alerts/cases từ AI |
+| **Flow 7** | Xem Grafana + SOAR | Dashboard hiển thị đủ data, SOAR cases và Loki logs |

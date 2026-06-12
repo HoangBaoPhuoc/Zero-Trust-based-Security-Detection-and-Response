@@ -20,7 +20,7 @@ Hệ thống chạy trên mô hình multi-cloud:
   - `notification-service`
   - `keycloak`
   - `opa-service`
-  - `loki`, `grafana`, `ai-analyzer`, `soar-engine`, `thehive`
+  - `loki`, `grafana`, `ai-analyzer`, `soar-engine`
 - **OpenStack K3s cluster**: chạy các service lõi nội bộ:
   - `core-banking`
   - `account-service`
@@ -709,8 +709,9 @@ Nếu severity dưới ngưỡng approve, AI chỉ push alert vào Loki. Nếu s
 
 - Lưu trong memory `PENDING_ALERTS`.
 - Push Loki với label `pending_approval="true"`.
-- Tạo TheHive alert nếu có cấu hình.
 - Chờ admin approve/dismiss qua `GET /pending`, `POST /pending/{alert_id}/approve`, `POST /pending/{alert_id}/dismiss`.
+
+> **Lưu ý:** TheHive và Cassandra đã được gỡ bỏ để tiết kiệm RAM. AI hoạt động với `thehive_configured: false`.
 
 ### 7.4 SOAR Engine
 
@@ -788,7 +789,7 @@ Case được lưu vào `/data/cases.jsonl`, push lại vào Loki với `event_t
 | Transaction Service | Ledger JSON hoặc query | Ghi/đọc PostgreSQL ledger | transaction record/list |
 | Notification Service | Event JSON | Log/audit notification queued | queued status |
 | Promtail/Loki | Container/app/Envoy logs | Label và tập trung log | Log queryable cho Grafana/AI |
-| AI Analyzer | Log batch từ Loki/API | LLM/heuristic classify threat | alert, pending alert, TheHive alert |
+| AI Analyzer | Log batch từ Loki/API | LLM/heuristic classify threat | alert, pending alert (thehive_configured=false) |
 | SOAR Engine | Approved security alert | Chọn playbook, patch K8s/Keycloak, ghi case | case record, Loki audit, rollback endpoint |
 
 ## 9. Các điểm cần nhấn mạnh khi thuyết trình
