@@ -389,61 +389,96 @@ OPA query path: `POST /v1/data/zta/authz/allow` — package `zta.authz` trong `z
 ### 4.4 OPA Policy — Rego rules
 
 ```rego
-# zta_policy.rego (trích)
+# opa/policies/zta_policy.rego (trích)
 package zta.authz
 
-import rego.v1
+import future.keywords.if
+import future.keywords.in
 
-default allow := false
+default allow = false
 
-# Public health endpoints — luôn cho phép
-allow if {
-    input.parsed_path[0] in {"health", "ready", "metrics"}
+headers          := input.attributes.request.http.headers
+method           := input.attributes.request.http.method
+path             := input.attributes.request.http.path
+source_principal := object.get(object.get(input.attributes, "source", {}), "principal",
+                   object.get(object.get(input, "source", {}), "principal", ""))
+
+# --- JWT helpers ---
+
+bearer_token := t if {
+  raw := headers["authorization"]
+  startswith(raw, "Bearer ")
+  t := substring(raw, 7, -1)
 }
 
-# External request — JWT Bearer (không có SVID)
-allow if {
-    not has_svid
-    has_valid_jwt
-    input.attributes.request.http.method in {"GET", "OPTIONS", "POST"}
-    has_financial_write_role
+jwt_payload := payload if {
+  [_, payload, _] := io.jwt.decode(bearer_token)
 }
 
-# Internal service call — SVID từ trust domain
-allow if {
-    has_svid
-    svid_in_trust_domain
-    input.attributes.request.http.method in {"GET", "POST", "OPTIONS"}
-    internal_path_allowed
+# Role → HTTP method được phép
+permissions := {
+  "financial-read":  {"GET": true, "OPTIONS": true},
+  "financial-write": {"GET": true, "OPTIONS": true, "POST": true, "PUT": true},
+  "security-analyst": {"GET": true, "OPTIONS": true},
+  "security-admin":  {"GET": true, "OPTIONS": true, "POST": true, "PUT": true, "DELETE": true},
 }
 
-# Core transaction — SVID + fraud gate đã pass
-allow if {
-    has_svid
-    svid_in_trust_domain
-    input.attributes.request.http.path == "/transactions/execute"
-    input.attributes.request.http.method == "POST"
-    fraud_gate.fraud_gate_valid     # import từ fraud_gate.rego
+# JWT hợp lệ: issuer đúng VÀ chưa hết hạn
+valid_jwt if {
+  jwt_payload.iss == "http://keycloak.ztlab.local/realms/ztlab"
+  jwt_payload.exp > time.now_ns() / 1e9
 }
 
-has_svid if {
-    spiffe_id := input.attributes.request.http.headers["x-forwarded-client-cert"]
-    contains(spiffe_id, "spiffe://")
+# Ít nhất một realm_access.role trong JWT cho phép HTTP method hiện tại
+role_permits_action if {
+  some role in jwt_payload.realm_access.roles
+  permissions[role][method]
 }
 
-svid_in_trust_domain if {
-    cert := input.attributes.request.http.headers["x-forwarded-client-cert"]
-    contains(cert, "spiffe://ztlab.local/")
+# SVID từ trust domain ztlab.local (internal service)
+valid_svid if { startswith(source_principal, "spiffe://ztlab.local/") }
+
+# Fraud gate: X-Fraud-Gate=passed VÀ score < 75
+fraud_gate_valid if {
+  headers["x-fraud-gate"] == "passed"
+  to_number(headers["x-fraud-score"]) < 75
 }
 
-internal_path_allowed if {
-    path := input.attributes.request.http.path
-    startswith(path, "/payments")
+# === Allow rules ===
+
+# 1. Public endpoints: /health, /ready, /metrics
+allow if { public_path }
+
+# 2. External user — JWT hợp lệ + role phù hợp method, không có SVID
+allow if { external_api_request }
+
+# 3. Internal service-to-service (SVID từ trust domain)
+allow if { internal_service_request }
+
+# 4. Core transaction qua fraud gate
+allow if { core_transaction_with_fraud_gate }
+
+public_path if { path in ["/health", "/ready", "/metrics"] }
+public_path if { startswith(path, "/metrics") }
+
+external_api_request if {
+  method == "POST"; path == "/payments"
+  valid_jwt; role_permits_action; not valid_svid
 }
-internal_path_allowed if { startswith(input.attributes.request.http.path, "/score") }
-internal_path_allowed if { startswith(input.attributes.request.http.path, "/notify") }
-internal_path_allowed if { startswith(input.attributes.request.http.path, "/accounts/") }
-internal_path_allowed if { startswith(input.attributes.request.http.path, "/transactions/") }
+external_api_request if {
+  method in ["GET", "OPTIONS"]
+  valid_jwt; role_permits_action; not valid_svid
+}
+
+internal_service_request if { valid_svid; method in ["GET", "OPTIONS"] }
+internal_service_request if { valid_svid; method == "POST"; path in ["/payments", "/score", "/notify"] }
+internal_service_request if { valid_svid; method == "POST"; startswith(path, "/accounts") }
+internal_service_request if { valid_svid; method == "POST"; startswith(path, "/transactions") }
+
+core_transaction_with_fraud_gate if {
+  valid_svid; method == "POST"; startswith(path, "/transactions/execute")
+  fraud_gate_valid
+}
 ```
 
 ### 4.5 NetworkPolicy
@@ -969,8 +1004,8 @@ BƯỚC 3: HITL — Human-in-the-Loop
   │  ) > 0
   │
   │  Khi FIRING → gửi qua Contact Point "ztlab-security-admin"
-  │  (Email / Slack / Telegram / Webhook — admin cấu hình trong UI)
-  │  Payload: alert name, severity, link to Grafana dashboard
+  │  (Webhook: POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/grafana-webhook)
+  │  Payload: alert name, severity, pending_alert_ids, link to Grafana dashboard
   ▼
 Admin nhận thông báo → mở Web Portal http://portal/alerts
   │
@@ -1359,13 +1394,13 @@ AI: verdict=malicious, attack_type=container_escape, T1611
 
 | Tiêu chí | Kết quả | Chi tiết |
 |----------|---------|---------|
-| **Zero Trust enforcement** | Đạt | OPA block 100% request thiếu JWT/SVID hợp lệ |
+| **Zero Trust enforcement** | Đạt | OPA verify JWT (issuer + expiry + realm role) và SVID; block 100% request không hợp lệ tại Envoy sidecar |
 | **mTLS giữa services** | Đạt (partial) | Envoy + SPIRE trên AWS đầy đủ; core-banking OpenStack có sidecar; account/txn-service chưa có |
 | **Cross-cloud routing** | Đạt | Envoy STATIC cluster → 10.10.1.12:30081; WireGuard mã hóa layer 3; trace_id xuyên suốt |
 | **Log tập trung** | Đạt | Loki nhận log cả hai cluster; label `cloud=aws|openstack`; LogQL cross-cloud |
 | **Fraud Detection** | Đạt | Velocity + amount + channel scoring; Redis sliding window 60s; double-check tại core-banking |
 | **AI Detection** | Đạt | 20 kịch bản tấn công; confidence 0.78–0.92; MITRE ATT&CK mapping; heuristic fallback |
-| **HITL + SOAR** | Đạt | Pending alert → Grafana Contact Points → admin approve → SOAR execute; rollback hoạt động |
+| **HITL + SOAR** | Đạt | Pending alert → Grafana alert POST `/grafana-webhook` → admin approve qua Web Portal → SOAR execute; rollback hoạt động |
 | **TheHive Integration** | Đạt | Alert và Case tự động tạo khi high/critical; IR timeline trong TheHive UI |
 | **Grafana Alerting** | Đạt | 7 rules active; Contact Point `ztlab-security-admin`; Threat Intel Feed dashboard |
 | **Prometheus** | Đạt (9/9) | Tất cả services, cả hai cloud |
