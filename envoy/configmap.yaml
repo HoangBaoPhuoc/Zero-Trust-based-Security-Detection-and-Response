@@ -180,6 +180,10 @@ data:
                                 prefix: "/transactions"
                               route:
                                 cluster: core_banking
+                            - match:
+                                prefix: "/accounts"
+                              route:
+                                cluster: core_banking
                     http_filters:
                       - name: envoy.filters.http.router
                         typed_config:
@@ -305,7 +309,7 @@ data:
 
         - name: core_banking
           connect_timeout: 8s
-          type: STATIC
+          type: STRICT_DNS
           wait_for_warm_on_init: false
           transport_socket:
             name: envoy.transport_sockets.tls
@@ -339,5 +343,5 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: 10.10.1.12   # OpenStack cluster node
-                          port_value: 30081     # NodePort → Envoy 15006 (mTLS)
+                          address: 10.10.1.12
+                          port_value: 30081  # OpenStack core-banking Envoy inbound mTLS (NodePort)

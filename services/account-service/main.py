@@ -11,7 +11,7 @@ from shared.logging import ZTLabLogger, trace_middleware
 from shared.metrics import SERVICE_UP
 
 SERVICE = "account-service"
-CLOUD = "openstack"
+CLOUD = os.getenv("CLOUD_PROVIDER", "aws")
 
 DB_HOST = os.getenv("ACCOUNTS_DB_HOST", "localhost")
 DB_PORT = int(os.getenv("ACCOUNTS_DB_PORT", "5432"))

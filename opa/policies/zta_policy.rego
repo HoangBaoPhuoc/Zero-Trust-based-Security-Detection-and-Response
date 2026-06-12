@@ -63,6 +63,20 @@ internal_service_request if {
   path in ["/payments", "/score", "/notify"]
 }
 
+# core-banking → account-service: POST /accounts/transfer and POST /accounts
+internal_service_request if {
+  valid_svid
+  method == "POST"
+  startswith(path, "/accounts")
+}
+
+# core-banking → transaction-service: POST /transactions (ledger write)
+internal_service_request if {
+  valid_svid
+  method == "POST"
+  startswith(path, "/transactions")
+}
+
 core_transaction_with_fraud_gate if {
   valid_svid
   method == "POST"

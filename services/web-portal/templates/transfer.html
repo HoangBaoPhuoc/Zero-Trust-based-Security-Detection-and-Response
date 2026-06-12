@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Chuyển tiền — ZTLab{% endblock %}
+{% block page_title %}Chuyển tiền{% endblock %}
+
+{% block content %}
+<div class="grid-2">
+  <div>
+    <div class="card">
+      <h3>Thực hiện chuyển khoản</h3>
+      <div id="result-box" style="display:none"></div>
+      <div class="form-group">
+        <label>Tài khoản nguồn</label>
+        <input type="text" id="from-account" value="{{ account_id }}" readonly style="opacity:.6">
+      </div>
+      <div class="form-group">
+        <label>Tài khoản đích</label>
+        <input type="text" id="to-account" placeholder="ACC-2001">
+      </div>
+      <div class="form-group">
+        <label>Số tiền (VND)</label>
+        <input type="number" id="amount" placeholder="100000" min="1" step="1000">
+      </div>
+      <div class="form-group">
+        <label>Ghi chú (tùy chọn)</label>
+        <input type="text" id="memo" placeholder="Thanh toán hóa đơn">
+      </div>
+      <button class="btn btn-primary" id="transfer-btn" onclick="doTransfer()">
+        Xác nhận chuyển tiền →
+      </button>
+    </div>
+
+    <div class="card" style="font-size:13px;color:var(--muted);line-height:1.7">
+      <h3>Luồng Zero Trust</h3>
+      <div id="flow-steps">
+        <div class="flow-step" id="step-jwt">⬜ Xác thực JWT (Keycloak)</div>
+        <div class="flow-step" id="step-opa">⬜ Kiểm tra quyền (OPA)</div>
+        <div class="flow-step" id="step-fraud">⬜ Kiểm tra fraud (fraud-detection)</div>
+        <div class="flow-step" id="step-mtls">⬜ mTLS → core-banking (SPIRE)</div>
+        <div class="flow-step" id="step-account">⬜ Trừ/cộng tài khoản (account-service)</div>
+        <div class="flow-step" id="step-ledger">⬜ Ghi sổ cái (transaction-service)</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card" id="balance-card">
+      <h3>Số dư hiện tại</h3>
+      <div class="stat-value" id="my-balance">Đang tải...</div>
+      <div class="stat-sub" id="my-acct">{{ account_id }}</div>
+    </div>
+    <div class="card">
+      <h3>Giao dịch nhanh</h3>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn" onclick="quickFill('ACC-2001',50000)">50,000 ₫ → ACC-2001</button>
+        <button class="btn" onclick="quickFill('ACC-2001',100000)">100,000 ₫ → ACC-2001</button>
+        <button class="btn" onclick="quickFill('ACC-2001',500000)">500,000 ₫ → ACC-2001</button>
+        <button class="btn" onclick="quickFill('ACC-1001',1000000)">1,000,000 ₫ → ACC-1001</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const myAccountId = '{{ account_id }}';
+
+async function loadMyBalance() {
+  if (!myAccountId) return;
+  const r = await fetch('/api/balance/' + myAccountId);
+  const d = await r.json();
+  if (d.balance !== undefined)
+    document.getElementById('my-balance').textContent = parseFloat(d.balance).toLocaleString('vi-VN') + ' ₫';
+}
+
+function quickFill(to, amt) {
+  document.getElementById('to-account').value = to;
+  document.getElementById('amount').value = amt;
+}
+
+function setStep(id, state) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const icons = { pending:'⬜', running:'🔄', ok:'✅', err:'❌' };
+  el.textContent = el.textContent.replace(/^[⬜🔄✅❌]/, icons[state] || '⬜');
+  el.style.color = state === 'ok' ? 'var(--green)' : state === 'err' ? 'var(--red)' : state === 'running' ? 'var(--yellow)' : 'var(--muted)';
+}
+
+function resetSteps() {
+  ['step-jwt','step-opa','step-fraud','step-mtls','step-account','step-ledger'].forEach(id => setStep(id, 'pending'));
+}
+
+async function doTransfer() {
+  const fromAccount = document.getElementById('from-account').value;
+  const toAccount = document.getElementById('to-account').value.trim();
+  const amount = parseFloat(document.getElementById('amount').value);
+  const resultBox = document.getElementById('result-box');
+
+  if (!toAccount || !amount || amount <= 0) {
+    resultBox.style.display = 'block';
+    resultBox.className = 'alert alert-error';
+    resultBox.textContent = 'Vui lòng nhập đầy đủ thông tin';
+    return;
+  }
+
+  resetSteps();
+  resultBox.style.display = 'none';
+  document.getElementById('transfer-btn').disabled = true;
+  document.getElementById('transfer-btn').textContent = 'Đang xử lý...';
+
+  setStep('step-jwt', 'running');
+  await new Promise(r => setTimeout(r, 300));
+  setStep('step-jwt', 'ok');
+
+  setStep('step-opa', 'running');
+  await new Promise(r => setTimeout(r, 200));
+
+  try {
+    const resp = await fetch('/api/transfer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from_account: fromAccount, to_account: toAccount, amount, currency: 'VND' })
+    });
+    const data = await resp.json();
+
+    setStep('step-opa', 'ok');
+
+    if (resp.ok) {
+      setStep('step-fraud', 'ok');
+      setStep('step-mtls', 'ok');
+      setStep('step-account', 'ok');
+      setStep('step-ledger', 'ok');
+
+      const cb = data.core_banking || {};
+      resultBox.style.display = 'block';
+      resultBox.className = 'alert alert-success';
+      resultBox.innerHTML = `
+        <strong>✅ Chuyển tiền thành công!</strong><br>
+        <span style="font-size:12px;opacity:.8">
+          Mã GD: <code>${cb.transaction_id || data.trace_id}</code><br>
+          Số dư nguồn: <strong>${cb.from_balance !== undefined ? parseFloat(cb.from_balance).toLocaleString('vi-VN') + ' ₫' : '—'}</strong><br>
+          Số dư đích: <strong>${cb.to_balance !== undefined ? parseFloat(cb.to_balance).toLocaleString('vi-VN') + ' ₫' : '—'}</strong>
+        </span>`;
+      loadMyBalance();
+    } else {
+      const errMsg = typeof data.detail === 'string' ? data.detail
+        : (data.detail?.reason || data.error || JSON.stringify(data.detail || data));
+      if (resp.status === 403 || resp.status === 401) {
+        setStep('step-opa', 'err');
+      } else if (resp.status === 409) {
+        setStep('step-fraud', 'ok'); setStep('step-mtls', 'ok'); setStep('step-account', 'err');
+      } else {
+        setStep('step-fraud', resp.status === 403 ? 'err' : 'ok');
+        setStep('step-mtls', 'err');
+      }
+      resultBox.style.display = 'block';
+      resultBox.className = 'alert alert-error';
+      resultBox.innerHTML = `<strong>❌ Lỗi ${resp.status}:</strong> ${errMsg}`;
+    }
+  } catch(e) {
+    setStep('step-opa', 'err');
+    resultBox.style.display = 'block';
+    resultBox.className = 'alert alert-error';
+    resultBox.textContent = 'Lỗi kết nối: ' + e.message;
+  }
+
+  document.getElementById('transfer-btn').disabled = false;
+  document.getElementById('transfer-btn').textContent = 'Xác nhận chuyển tiền →';
+}
+
+loadMyBalance();
+</script>
+{% endblock %}

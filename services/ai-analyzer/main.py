@@ -31,8 +31,16 @@ ADMIN_APPROVAL_SEVERITY = os.getenv("AI_ANALYZER_ADMIN_APPROVAL_SEVERITY", "high
 LOKI_QUERY = os.getenv("AI_ANALYZER_LOKI_QUERY", '{job=~"kubernetes-pods|envoy-access|opa-decisions|system|demo-raw"}')
 SOAR_WEBHOOK_URL = os.getenv("SOAR_WEBHOOK_URL", "").strip()
 SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "").strip()
-# Webhook URL that receives pending alert notifications (Telegram bot, Slack, n8n, etc.)
+# Optional fallback webhook (Slack, n8n, Discord...). Primary notification is via Grafana Contact Points.
 ADMIN_WEBHOOK_URL = os.getenv("ADMIN_WEBHOOK_URL", "").strip()
+# Web portal base URL — included in webhook payload so admin can navigate directly to /alerts
+PORTAL_URL = os.getenv("PORTAL_URL", "").rstrip("/")
+THEHIVE_URL = os.getenv("THEHIVE_URL", "").rstrip("/")
+THEHIVE_API_KEY = os.getenv("THEHIVE_API_KEY", "").strip()
+THEHIVE_ORG = os.getenv("THEHIVE_ORG", "").strip()
+THEHIVE_API_BASE = os.getenv("THEHIVE_API_BASE", "/api/v1").strip().rstrip("/") or "/api/v1"
+THEHIVE_MIN_SEVERITY = os.getenv("THEHIVE_MIN_SEVERITY", "high").lower()
+THEHIVE_ENABLED = bool(THEHIVE_URL and THEHIVE_API_KEY)
 PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "900"))
 _provider_backoff_until = 0.0
 
@@ -47,6 +55,23 @@ MALICIOUS_PATTERNS = [
     (re.compile(r"sqlmap|union select|/etc/passwd|cmd=|powershell|curl .*http", re.I), "exploit_probe"),
     (re.compile(r"bytes_sent[=: ]([1-9]\d{6,})", re.I), "large_response"),
 ]
+
+IGNORED_ALERT_NAMESPACES = {item.strip() for item in os.getenv(
+    "AI_ANALYZER_IGNORED_ALERT_NAMESPACES",
+    "plg-stack,monitoring,identity,kube-system",
+).split(",") if item.strip()}
+IGNORED_ALERT_APPS = {item.strip() for item in os.getenv(
+    "AI_ANALYZER_IGNORED_ALERT_APPS",
+    "grafana,loki,promtail,ai-analyzer,soar-engine,prometheus,keycloak,keycloak-db",
+).split(",") if item.strip()}
+OBSERVABILITY_ALERT_HINTS = (
+    "ngalert",
+    "grafana",
+    "loki",
+    "promtail",
+    "ai_security_alert",
+    "pending_security_alert",
+)
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger(APP_NAME)
@@ -131,6 +156,8 @@ class PendingAlert(BaseModel):
     status: Literal["pending", "approved", "dismissed", "expired"] = "pending"
     reviewed_at: str | None = None
     note: str | None = None
+    thehive_alert_id: str | None = None
+    thehive_case_id: str | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -387,8 +414,8 @@ def _merge_result_with_heuristic(result: AnalyzeResult, heuristic: AnalyzeResult
         attack_type=",".join(merged_reasons) if merged_reasons else result.attack_type,
         summary=result.summary if result.summary else heuristic.summary,
         evidence=evidence,
-        recommended_action=result.recommended_action or heuristic.recommended_action,
-        recommended_playbook=result.recommended_playbook or heuristic.recommended_playbook,
+        recommended_action=(heuristic.recommended_action if heuristic.recommended_playbook else (result.recommended_action or heuristic.recommended_action)),
+        recommended_playbook=heuristic.recommended_playbook or result.recommended_playbook,
         affected_service=result.affected_service or heuristic.affected_service,
         source_ip=result.source_ip or heuristic.source_ip,
     )
@@ -476,6 +503,128 @@ async def analyze_logs(logs: list[LogEntry]) -> AnalyzeResult:
     return heuristic_analyze(logs)
 
 
+def _is_observability_log(entry: LogEntry) -> bool:
+    labels = {str(k).lower(): str(v) for k, v in entry.labels.items()}
+    namespace = labels.get("namespace") or labels.get("kubernetes_namespace_name") or labels.get("namespace_name")
+    app_label = labels.get("app") or labels.get("service") or labels.get("container") or labels.get("pod") or labels.get("job")
+    if namespace in IGNORED_ALERT_NAMESPACES:
+        return True
+    if app_label and app_label in IGNORED_ALERT_APPS:
+        return True
+    text = _flatten_log(entry).lower()
+    return any(hint in text for hint in OBSERVABILITY_ALERT_HINTS) and not any(
+        svc in text for svc in (
+            "api-gateway",
+            "payment-service",
+            "fraud-detection",
+            "notification-service",
+            "core-banking",
+            "account-service",
+            "transaction-service",
+        )
+    )
+
+
+def _filter_actionable_logs(logs: list[LogEntry]) -> list[LogEntry]:
+    filtered = [entry for entry in logs if not _is_observability_log(entry)]
+    dropped = len(logs) - len(filtered)
+    if dropped:
+        logger.info(json.dumps({
+            "event_type": "ai_logs_filtered",
+            "dropped": dropped,
+            "kept": len(filtered),
+            "reason": "observability_or_platform_noise",
+        }))
+    return filtered
+
+
+def _thehive_severity(severity: str) -> int:
+    return {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(severity.lower(), 2)
+
+
+def _thehive_headers() -> dict[str, str]:
+    headers = {"Authorization": f"Bearer {THEHIVE_API_KEY}", "Content-Type": "application/json"}
+    if THEHIVE_ORG:
+        headers["X-Organisation"] = THEHIVE_ORG
+    return headers
+
+
+def _thehive_description(alert: AlertRecord, alert_id: str) -> str:
+    evidence = "\n".join(f"- {item}" for item in alert.evidence[:5]) or "- none"
+    return (
+        f"AI pending alert: {alert_id}\n\n"
+        f"Severity: {alert.severity}\n"
+        f"Attack type: {alert.attack_type}\n"
+        f"Affected service: {alert.affected_service or 'unknown'}\n"
+        f"Source IP: {alert.source_ip or 'unknown'}\n"
+        f"Confidence: {alert.confidence}\n"
+        f"Recommended playbook: {alert.recommended_playbook or 'manual_review'}\n\n"
+        f"Summary:\n{alert.summary}\n\nEvidence:\n{evidence}\n"
+    )
+
+
+def _extract_thehive_id(data: Any) -> str | None:
+    if isinstance(data, dict):
+        for key in ("_id", "id", "caseId", "number"):
+            value = data.get(key)
+            if value is not None:
+                return str(value)
+    return None
+
+
+async def _thehive_post(client: httpx.AsyncClient, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+    bases = [THEHIVE_API_BASE]
+    if THEHIVE_API_BASE != "/api":
+        bases.append("/api")
+    last_exc: Exception | None = None
+    for base in bases:
+        try:
+            response = await client.post(f"{THEHIVE_URL}{base}{path}", headers=_thehive_headers(), json=payload, timeout=15)
+            response.raise_for_status()
+            data = response.json() if response.content else {}
+            return data if isinstance(data, dict) else {"raw": data}
+        except Exception as exc:
+            last_exc = exc
+    assert last_exc is not None
+    raise last_exc
+
+
+async def create_thehive_alert(alert: AlertRecord, alert_id: str) -> str | None:
+    if not THEHIVE_ENABLED or SEVERITY_RANK[alert.severity] < SEVERITY_RANK.get(THEHIVE_MIN_SEVERITY, 3):
+        return None
+    payload = {
+        "type": "ztlab-ai",
+        "source": alert.source or APP_NAME,
+        "sourceRef": f"{alert_id}-{alert.log_hash}",
+        "title": f"[{alert.severity.upper()}] {alert.attack_type} on {alert.affected_service or 'unknown service'}",
+        "description": _thehive_description(alert, alert_id),
+        "severity": _thehive_severity(alert.severity),
+        "tlp": 2,
+        "pap": 2,
+        "tags": ["ztlab", "ai", "soar", alert.attack_type, alert.severity],
+        "summary": alert.summary,
+    }
+    async with httpx.AsyncClient() as client:
+        data = await _thehive_post(client, "/alert", payload)
+    return _extract_thehive_id(data)
+
+
+async def create_thehive_case(alert: AlertRecord, alert_id: str) -> str | None:
+    if not THEHIVE_ENABLED:
+        return None
+    payload = {
+        "title": f"SOAR approved: {alert.attack_type} on {alert.affected_service or 'unknown service'}",
+        "description": _thehive_description(alert, alert_id),
+        "severity": _thehive_severity(alert.severity),
+        "tlp": 2,
+        "pap": 2,
+        "tags": ["ztlab", "soar-approved", alert.attack_type, alert.severity],
+    }
+    async with httpx.AsyncClient() as client:
+        data = await _thehive_post(client, "/case", payload)
+    return _extract_thehive_id(data)
+
+
 async def forward_alert_to_soar(alert: AlertRecord) -> None:
     if not SOAR_WEBHOOK_URL:
         return
@@ -510,16 +659,26 @@ async def push_alert_to_loki(alert: AlertRecord, extra_labels: dict[str, str] | 
 
 
 async def notify_admin(alert: AlertRecord, alert_id: str) -> None:
-    """Push pending alert notification to Loki (Grafana-visible) and optional webhook."""
-    # Push to Loki with special label so Grafana can alert on it
+    """
+    Notify admin of a pending high/critical alert requiring review before SOAR runs.
+
+    Primary channel: push to Loki with label pending_approval="true".
+    Grafana Alert Rule queries this label and fires through whichever Contact Point
+    the admin has configured in Grafana UI (email, Slack, Telegram, webhook, etc.).
+
+    Optional secondary channel: ADMIN_WEBHOOK_URL (n8n, Slack, custom endpoint).
+    """
+    # Push to Loki — Grafana Alert Rule picks this up and notifies admin
     try:
         await push_alert_to_loki(alert, extra_labels={"pending_approval": "true", "alert_id": alert_id})
+        logger.info(json.dumps({"event_type": "ai_admin_notify_loki_ok", "alert_id": alert_id}))
     except Exception as exc:
         logger.error(json.dumps({"event_type": "ai_admin_notify_loki_failed", "error": str(exc), "alert_id": alert_id}))
 
     if not ADMIN_WEBHOOK_URL:
         return
 
+    # Secondary: generic webhook (Slack, n8n, Discord, custom server...)
     payload = {
         "event": "pending_security_alert",
         "alert_id": alert_id,
@@ -530,13 +689,17 @@ async def notify_admin(alert: AlertRecord, alert_id: str) -> None:
         "source_ip": alert.source_ip,
         "confidence": alert.confidence,
         "evidence": alert.evidence[:3],
-        "approve_hint": f"POST /pending/{alert_id}/approve",
-        "dismiss_hint": f"POST /pending/{alert_id}/dismiss",
+        "recommended_action": alert.recommended_action,
+        "recommended_playbook": alert.recommended_playbook,
+        "approve_url": f"{PORTAL_URL}/alerts" if PORTAL_URL else "/alerts",
         "ts": alert.ts,
     }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(ADMIN_WEBHOOK_URL, json=payload, timeout=10)
-        response.raise_for_status()
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(ADMIN_WEBHOOK_URL, json=payload, timeout=10)
+            response.raise_for_status()
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "ai_admin_webhook_failed", "error": str(exc)[:300], "alert_id": alert_id}))
 
 
 def should_alert(result: AnalyzeResult) -> bool:
@@ -548,6 +711,18 @@ def requires_admin_approval(result: AnalyzeResult) -> bool:
 
 
 async def handle_logs(logs: list[LogEntry], source: str) -> AnalyzeResult:
+    actionable_logs = _filter_actionable_logs(logs)
+    if logs and not actionable_logs:
+        return AnalyzeResult(
+            verdict="normal",
+            severity="low",
+            confidence=0.95,
+            attack_type="platform_noise",
+            summary="Only observability/platform logs were present; no financial workload signal was analyzed.",
+            recommended_action="continue monitoring",
+        )
+
+    logs = actionable_logs
     result = await analyze_logs(logs)
 
     if not should_alert(result):
@@ -592,6 +767,14 @@ async def handle_logs(logs: list[LogEntry], source: str) -> AnalyzeResult:
             expires_at=expires_ts,
         )
         PENDING_ALERTS[alert_id] = pending
+        try:
+            thehive_alert_id = await create_thehive_alert(alert, alert_id)
+            if thehive_alert_id:
+                pending = pending.model_copy(update={"thehive_alert_id": thehive_alert_id})
+                PENDING_ALERTS[alert_id] = pending
+                logger.warning(json.dumps({"event_type": "thehive_alert_created", "alert_id": alert_id, "thehive_alert_id": thehive_alert_id}))
+        except Exception as exc:
+            logger.error(json.dumps({"event_type": "thehive_alert_create_failed", "error": str(exc), "alert_id": alert_id}))
         logger.warning(json.dumps({
             "event_type": "ai_pending_alert_created",
             "alert_id": alert_id,
@@ -713,6 +896,10 @@ async def health() -> dict[str, Any]:
         "admin_approval_severity": ADMIN_APPROVAL_SEVERITY,
         "pending_alerts_count": pending_count,
         "admin_webhook_configured": bool(ADMIN_WEBHOOK_URL),
+        "portal_url": PORTAL_URL or "",
+        "thehive_configured": THEHIVE_ENABLED,
+        "thehive_url": THEHIVE_URL if THEHIVE_ENABLED else "",
+        "ignored_alert_namespaces": sorted(IGNORED_ALERT_NAMESPACES),
     }
 
 
@@ -770,6 +957,15 @@ async def approve_pending(alert_id: str, body: ApproveRequest = ApproveRequest()
         "note": updated.note,
     }))
 
+    try:
+        thehive_case_id = await create_thehive_case(pending.alert, alert_id)
+        if thehive_case_id:
+            updated = updated.model_copy(update={"thehive_case_id": thehive_case_id})
+            PENDING_ALERTS[alert_id] = updated
+            logger.warning(json.dumps({"event_type": "thehive_case_created", "alert_id": alert_id, "thehive_case_id": thehive_case_id}))
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "thehive_case_create_failed", "error": str(exc), "alert_id": alert_id}))
+
     # Forward to SOAR
     try:
         await forward_alert_to_soar(pending.alert)
@@ -806,3 +1002,91 @@ async def dismiss_pending(alert_id: str, body: DismissRequest = DismissRequest()
     }))
 
     return updated
+
+
+class InvestigateResult(BaseModel):
+    alert_id: str
+    affected_service: str | None
+    source_ip: str | None
+    loki_evidence: list[str]
+    opa_denials: list[str]
+    summary: str
+    ts: str
+
+
+@app.post("/pending/{alert_id}/investigate", response_model=InvestigateResult)
+async def investigate_alert(alert_id: str) -> InvestigateResult:
+    """Query Loki for recent logs from the affected service and OPA denials to build an evidence summary."""
+    pending = PENDING_ALERTS.get(alert_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id!r} not found")
+
+    service = pending.alert.affected_service or ""
+    src_ip = pending.alert.source_ip or ""
+    now_ns = int(time.time() * 1e9)
+    start_ns = now_ns - int(30 * 60 * 1e9)  # last 30 minutes
+
+    loki_evidence: list[str] = []
+    opa_denials: list[str] = []
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # Query service logs
+        if service:
+            q = f'{{app="{service}"}}'
+            try:
+                resp = await client.get(
+                    f"{LOKI_URL}/loki/api/v1/query_range",
+                    params={"query": q, "start": start_ns, "end": now_ns, "limit": 20, "direction": "backward"},
+                )
+                if resp.status_code == 200:
+                    for stream in resp.json().get("data", {}).get("result", []):
+                        for _, line in stream.get("values", []):
+                            loki_evidence.append(line[:200])
+            except Exception:
+                pass
+
+        # Query OPA denial logs
+        opa_q = '{job=~"opa-decisions|kubernetes-pods",app="opa"}'
+        if src_ip:
+            opa_q = f'{{job=~"opa-decisions|envoy-access"}} |= "{src_ip}"'
+        try:
+            resp = await client.get(
+                f"{LOKI_URL}/loki/api/v1/query_range",
+                params={"query": opa_q, "start": start_ns, "end": now_ns, "limit": 10, "direction": "backward"},
+            )
+            if resp.status_code == 200:
+                for stream in resp.json().get("data", {}).get("result", []):
+                    for _, line in stream.get("values", []):
+                        if "deny" in line.lower() or "denied" in line.lower() or "opa" in line.lower():
+                            opa_denials.append(line[:200])
+        except Exception:
+            pass
+
+    # Build summary
+    parts: list[str] = []
+    if service:
+        parts.append(f"service={service}")
+    if src_ip:
+        parts.append(f"source_ip={src_ip}")
+    parts.append(f"loki_lines={len(loki_evidence)}")
+    parts.append(f"opa_denials={len(opa_denials)}")
+    parts.append(f"attack={pending.alert.attack_type}")
+    parts.append(f"severity={pending.alert.severity}")
+    summary = "Evidence collected: " + ", ".join(parts)
+
+    logger.info(json.dumps({
+        "event_type": "ai_investigate",
+        "alert_id": alert_id,
+        "loki_lines": len(loki_evidence),
+        "opa_denials": len(opa_denials),
+    }))
+
+    return InvestigateResult(
+        alert_id=alert_id,
+        affected_service=service or None,
+        source_ip=src_ip or None,
+        loki_evidence=loki_evidence,
+        opa_denials=opa_denials,
+        summary=summary,
+        ts=_now_iso(),
+    )

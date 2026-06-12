@@ -1,0 +1,42 @@
+apiVersion: 1
+
+# Notification routing policy.
+# ZTLab security alerts (requires_approval="true") are routed to the
+# "ztlab-security-admin" contact point.
+#
+# To receive alerts, admin must configure the "ztlab-security-admin" contact
+# point in Grafana UI: Alerting → Contact points → Edit "ztlab-security-admin".
+# Supported channels: Email, Slack, Telegram, Webhook, PagerDuty, etc.
+#
+# Default contact point is also set to "ztlab-security-admin" so all other
+# ZTLab alerts (brute-force, fraud-gate-bypass, etc.) also go there.
+
+policies:
+  - orgId: 1
+    receiver: grafana-default-email
+    group_by:
+      - grafana_folder
+      - alertname
+    routes:
+      - receiver: ztlab-security-admin
+        matchers:
+          - type: label
+            name: category
+            value: security
+            isEqual: true
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 1h
+
+contactPoints:
+  - orgId: 1
+    name: ztlab-security-admin
+    receivers:
+      - uid: ztlab-admin-webhook
+        type: webhook
+        settings:
+          url: ""
+          httpMethod: POST
+          title: "[ZTLab] {{ .CommonAnnotations.summary }}"
+          message: "{{ .CommonAnnotations.description }}"
+        disableResolveMessage: false

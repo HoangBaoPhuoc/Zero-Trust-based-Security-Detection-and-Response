@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — ZTLab{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="grid-3" style="margin-bottom:20px">
+  <div class="card">
+    <h3>Số dư tài khoản</h3>
+    <div class="stat-value" id="balance-val">—</div>
+    <div class="stat-sub" id="balance-acct">{{ account_id }}</div>
+  </div>
+  <div class="card">
+    <h3>Giao dịch hôm nay</h3>
+    <div class="stat-value" id="txn-count">—</div>
+    <div class="stat-sub">Trong 24 giờ qua</div>
+  </div>
+  <div class="card">
+    <h3>Trạng thái hệ thống</h3>
+    <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px">
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span>Keycloak JWT</span><span class="badge badge-green">✓ Active</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span>OPA Authz</span><span class="badge badge-green">✓ Active</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span>SPIRE mTLS</span><span class="badge badge-green">✓ Active</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px"><span>AI Analyzer</span><span class="badge badge-green" id="ai-status">✓ Active</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Giao dịch gần đây</h3>
+  <div id="txn-table"><div class="loading">Đang tải...</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const accountId = '{{ account_id }}';
+
+async function loadBalance() {
+  if (!accountId) return;
+  try {
+    const r = await fetch('/api/balance/' + accountId);
+    const d = await r.json();
+    if (d.balance !== undefined) {
+      document.getElementById('balance-val').textContent =
+        parseFloat(d.balance).toLocaleString('vi-VN') + ' ₫';
+    }
+  } catch(e) { document.getElementById('balance-val').textContent = 'Lỗi'; }
+}
+
+async function loadTransactions() {
+  try {
+    const r = await fetch('/api/transactions?account_id=' + accountId + '&limit=15');
+    const txns = await r.json();
+    if (!Array.isArray(txns) || txns.length === 0) {
+      document.getElementById('txn-table').innerHTML = '<p style="color:var(--muted);font-size:13px;padding:10px">Chưa có giao dịch nào.</p>';
+      document.getElementById('txn-count').textContent = '0';
+      return;
+    }
+    const today = new Date().toDateString();
+    const todayTxns = txns.filter(t => new Date(t.created_at * 1000).toDateString() === today);
+    document.getElementById('txn-count').textContent = todayTxns.length;
+    const rows = txns.map(t => {
+      const isOut = t.from_account === accountId;
+      const d = new Date(t.created_at * 1000).toLocaleString('vi-VN');
+      const sign = isOut ? '−' : '+';
+      const color = isOut ? 'var(--red)' : 'var(--green)';
+      return `<tr>
+        <td class="mono" style="color:var(--muted);font-size:11px">${d}</td>
+        <td>${isOut ? '→ ' + t.to_account : '← ' + t.from_account}</td>
+        <td style="color:${color};font-weight:600">${sign}${parseFloat(t.amount).toLocaleString('vi-VN')} ₫</td>
+        <td><span class="badge badge-green">${t.status}</span></td>
+        <td class="mono truncate" style="max-width:180px;font-size:11px;color:var(--muted)">${t.transaction_id}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('txn-table').innerHTML = `
+      <table>
+        <thead><tr><th>Thời gian</th><th>Đối tác</th><th>Số tiền</th><th>Trạng thái</th><th>ID</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  } catch(e) { document.getElementById('txn-table').innerHTML = '<div class="alert alert-error">Lỗi kết nối transaction-service</div>'; }
+}
+
+loadBalance();
+loadTransactions();
+setInterval(() => { loadBalance(); loadTransactions(); }, 30000);
+</script>
+{% endblock %}

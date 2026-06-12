@@ -70,6 +70,15 @@ spec:
       ports:
         - port: 8080
           protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 3100
+          protocol: TCP
     # Cross-cloud egress: AWS → OpenStack K3s node (core-banking NodePort)
     - to:
         - ipBlock:
@@ -122,6 +131,15 @@ spec:
         - port: 3100
           protocol: TCP
         - port: 3000
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 3100
           protocol: TCP
   egress:
     - to:
