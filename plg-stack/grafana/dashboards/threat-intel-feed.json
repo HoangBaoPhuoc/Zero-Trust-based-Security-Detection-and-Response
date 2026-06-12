@@ -1,0 +1,378 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_LOKI",
+      "label": "Loki",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "loki",
+      "pluginName": "Loki"
+    }
+  ],
+  "__requires": [
+    {"type": "panel", "id": "barchart", "name": "Bar chart", "version": ""},
+    {"type": "panel", "id": "piechart", "name": "Pie chart", "version": ""},
+    {"type": "panel", "id": "stat", "name": "Stat", "version": ""},
+    {"type": "panel", "id": "table", "name": "Table", "version": ""},
+    {"type": "panel", "id": "timeseries", "name": "Time series", "version": ""},
+    {"type": "grafana", "id": "grafana", "name": "Grafana", "version": "11.3.0"},
+    {"type": "datasource", "id": "loki", "name": "Loki", "version": "1.0.0"}
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "ZTLab Threat Intelligence Feed — attack types, source IPs, AI verdict distribution, MITRE ATT&CK techniques",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [
+          {"color": "green", "value": null},
+          {"color": "yellow", "value": 5},
+          {"color": "red", "value": 20}
+        ]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "Total Attacks (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"(?i)(malicious|fraud_gate_bypass|lateral_movement|port.scan|brute_force|xmrig|exploit_probe|data_exfil)\" [24h]))",
+          "instant": true,
+          "legendFormat": "Attacks",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [
+          {"color": "green", "value": null},
+          {"color": "red", "value": 1}
+        ]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 4, "y": 0},
+      "id": 2,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "Pending HITL Approvals",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods\"} |= \"pending_approval=\\\"true\\\"\" [1h]))",
+          "instant": true,
+          "legendFormat": "Pending",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [
+          {"color": "green", "value": null},
+          {"color": "yellow", "value": 1},
+          {"color": "red", "value": 5}
+        ]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 8, "y": 0},
+      "id": 3,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "Critical Alerts (1h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods\"} |= \"severity=\\\"critical\\\"\" [1h]))",
+          "instant": true,
+          "legendFormat": "Critical",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [
+          {"color": "green", "value": null},
+          {"color": "yellow", "value": 1}
+        ]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 12, "y": 0},
+      "id": 4,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "OPA Denials (1h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"opa-decisions|envoy-access\"} |~ \"(?i)(denied|deny|403)\" [1h]))",
+          "instant": true,
+          "legendFormat": "Denials",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [
+          {"color": "green", "value": null},
+          {"color": "yellow", "value": 3}
+        ]}},
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "id": 5,
+      "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto"},
+      "title": "SOAR Actions (24h)",
+      "type": "stat",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"soar-engine\"} |~ \"(?i)(isolate|quarantine|restrict)\" [24h]))",
+          "instant": true,
+          "legendFormat": "Actions",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+      "id": 10,
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "title": "Critical / High Alert Timeline",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum by (app) (count_over_time({job=~\"kubernetes-pods\"} |~ \"(?i)(severity=.critical|critical.*alert|CRITICAL)\" [$__interval]))",
+          "legendFormat": "Critical — {{app}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum by (app) (count_over_time({job=~\"kubernetes-pods\"} |~ \"(?i)(severity=.high|high.*alert|fraud_gate_bypass|lateral_movement)\" [$__interval]))",
+          "legendFormat": "High — {{app}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+      "id": 11,
+      "options": {
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "pieType": "pie",
+        "tooltip": {"mode": "multi", "sort": "none"}
+      },
+      "title": "AI Verdict Distribution",
+      "type": "piechart",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"ai-analyzer\"} |= \"\\\"verdict\\\": \\\"malicious\\\"\" [$__range]))",
+          "instant": true,
+          "legendFormat": "Malicious",
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"ai-analyzer\"} |= \"\\\"verdict\\\": \\\"suspicious\\\"\" [$__range]))",
+          "instant": true,
+          "legendFormat": "Suspicious",
+          "refId": "B"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"ai-analyzer\"} |= \"\\\"verdict\\\": \\\"clean\\\"\" [$__range]))",
+          "instant": true,
+          "legendFormat": "Clean",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "fillOpacity": 80, "gradientMode": "none", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "lineWidth": 1, "scaleDistribution": {"type": "linear"}, "thresholdsStyle": {"mode": "off"}},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+      "id": 20,
+      "options": {
+        "barRadius": 0.1,
+        "barWidth": 0.7,
+        "fullHighlight": false,
+        "groupWidth": 0.7,
+        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": true},
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "tooltip": {"mode": "multi", "sort": "none"},
+        "xTickLabelRotation": 0,
+        "xTickLabelSpacing": 100
+      },
+      "title": "MITRE ATT&CK Technique Frequency",
+      "type": "barchart",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |= \"brute_force\" [$__range]))",
+          "instant": true, "legendFormat": "T1110 Brute Force", "refId": "A"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"lateral_movement|invalid_svid\" [$__range]))",
+          "instant": true, "legendFormat": "T1021 Lateral Movement", "refId": "B"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |= \"port scan\" [$__range]))",
+          "instant": true, "legendFormat": "T1046 Port Scan", "refId": "C"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"privilege.escal|setuid|cap_sys_admin\" [$__range]))",
+          "instant": true, "legendFormat": "T1068 Privesc", "refId": "D"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"xmrig|cryptomin\" [$__range]))",
+          "instant": true, "legendFormat": "T1496 Cryptomining", "refId": "E"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"bytes_sent|data_exfil|data_staging\" [$__range]))",
+          "instant": true, "legendFormat": "T1041 Exfiltration", "refId": "F"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"sqlmap|union.select|sql.inject\" [$__range]))",
+          "instant": true, "legendFormat": "T1190 SQL Injection", "refId": "G"
+        },
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "sum(count_over_time({job=~\"kubernetes-pods|envoy-access\"} |~ \"jwt_replay|stolen_token|token_reuse\" [$__range]))",
+          "instant": true, "legendFormat": "T1539 Token Replay", "refId": "H"
+        }
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 10}]}},
+        "overrides": [
+          {"matcher": {"id": "byName", "options": "Count"}, "properties": [{"id": "custom.cellOptions", "value": {"type": "color-background"}}, {"id": "thresholds", "value": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 5}, {"color": "red", "value": 20}]}}]}
+        ]
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+      "id": 30,
+      "options": {"cellHeight": "sm", "footer": {"countRows": false, "fields": "", "reducer": ["sum"], "show": false}, "showHeader": true, "sortBy": [{"desc": true, "displayName": "Count"}]},
+      "title": "Top Attack Source IPs",
+      "type": "table",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "{job=~\"kubernetes-pods|envoy-access\"} |~ \"(?i)(denied|unauthorized|403|fraud_gate_bypass|lateral|malicious|brute_force)\" | logfmt | line_format \"{{.source_ip}}\" != \"\"",
+          "instant": false,
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        {"id": "extractFields", "options": {"format": "auto", "replace": false, "source": "labels"}},
+        {"id": "groupBy", "options": {"fields": {"source_ip": {"aggregations": ["count"], "operation": "groupby"}}}},
+        {"id": "organize", "options": {"excludeByName": {}, "indexByName": {}, "renameByName": {"source_ip": "Source IP", "source_ip count": "Count"}}},
+        {"id": "sortBy", "options": {"fields": [{"desc": true, "displayName": "Count"}]}}
+      ]
+    },
+    {
+      "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 20},
+      "id": 40,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "title": "Live Security Event Stream",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
+          "expr": "{job=~\"kubernetes-pods|envoy-access|opa-decisions\"} |~ \"(?i)(malicious|suspicious|denied|fraud_gate_bypass|lateral_movement|port.scan|privilege.escal|xmrig|bytes_sent|brute_force|jwt_replay|sql.inject|container_escape)\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["ztlab", "security", "threat-intel", "siem"],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "multi": false,
+        "name": "DS_LOKI",
+        "options": [],
+        "query": "loki",
+        "refresh": 1,
+        "type": "datasource",
+        "label": "Loki datasource"
+      }
+    ]
+  },
+  "time": {"from": "now-24h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ZTLab — Threat Intelligence Feed",
+  "uid": "ztlab-threat-intel",
+  "version": 1,
+  "weekStart": ""
+}

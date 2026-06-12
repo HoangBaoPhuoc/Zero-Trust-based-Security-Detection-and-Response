@@ -104,6 +104,15 @@ wait_daemonset() {
   kubectl --context "$ctx" rollout status "daemonset/$name" -n "$ns" --timeout="$timeout"
 }
 
+wait_statefulset() {
+  local ctx="$1"
+  local ns="$2"
+  local name="$3"
+  local timeout="${4:-240s}"
+
+  kubectl --context "$ctx" rollout status "statefulset/$name" -n "$ns" --timeout="$timeout"
+}
+
 apply_namespaces() {
   step "Step 1: Namespaces"
   kaws apply -f "$REPO_ROOT/k8s/namespaces.yaml"
@@ -169,6 +178,16 @@ deploy_financial_services() {
   ok "AWS services and OpenStack core banking ready"
 }
 
+create_keycloak_admin_secret() {
+  if kaws get secret keycloak-admin-secret -n plg-stack >/dev/null 2>&1; then
+    log "keycloak-admin-secret already exists"
+    return
+  fi
+  kaws create secret generic keycloak-admin-secret -n plg-stack \
+    --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
+  ok "keycloak-admin-secret created"
+}
+
 create_ai_secret() {
   if kaws get secret ai-secrets -n plg-stack >/dev/null 2>&1; then
     log "ai-secrets already exists"
@@ -193,7 +212,12 @@ create_ai_secret() {
     --from-literal=SOAR_NAMESPACE="financial" \
     --from-literal=SOAR_ALLOWED_CONTEXTS="${SOAR_ALLOWED_CONTEXTS:-ctx-aws,ctx-openstack}" \
     --from-literal=SOAR_API_TOKEN="${SOAR_API_TOKEN:-}" \
-    --from-literal=SOAR_CASE_STORE_PATH="/data/cases.jsonl"
+    --from-literal=SOAR_CASE_STORE_PATH="/data/cases.jsonl" \
+    --from-literal=THEHIVE_URL="${THEHIVE_URL:-http://thehive.plg-stack.svc.cluster.local:9000}" \
+    --from-literal=THEHIVE_ORG="${THEHIVE_ORG:-ztlab}" \
+    --from-literal=THEHIVE_API_KEY="${THEHIVE_API_KEY:-}" \
+    --from-literal=PORTAL_URL="${PORTAL_URL:-http://portal.ztlab.local}" \
+    --from-literal=ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-}"
 }
 
 provision_grafana_configmaps() {
@@ -209,19 +233,22 @@ provision_grafana_configmaps() {
     --from-file=zta-security-overview.json="$REPO_ROOT/plg-stack/grafana/dashboards/zta-security-overview.json" \
     --from-file=envoy-access-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/envoy-access-logs.json" \
     --from-file=opa-decision-log.json="$REPO_ROOT/plg-stack/grafana/dashboards/opa-decision-log.json" \
-    --from-file=ai-siem-soar.json="$REPO_ROOT/plg-stack/grafana/dashboards/ai-siem-soar.json"
+    --from-file=ai-siem-soar.json="$REPO_ROOT/plg-stack/grafana/dashboards/ai-siem-soar.json" \
+    --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json"
   kaws create configmap grafana-alerting -n plg-stack \
     --from-file=brute-force-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/brute-force-alert.yml" \
     --from-file=fraud-gate-bypass-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/fraud-gate-bypass-alert.yml" \
     --from-file=large-response-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/large-response-alert.yml" \
     --from-file=lateral-movement-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/lateral-movement-alert.yml" \
     --from-file=ai-analyzer-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/ai-analyzer-alert.yml" \
-    --from-file=soar-engine-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/soar-engine-alert.yml"
+    --from-file=soar-engine-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/soar-engine-alert.yml" \
+    --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
 }
 
 deploy_observability_response() {
   step "Step 6: PLG, AI/SOAR, Prometheus"
 
+  create_keycloak_admin_secret
   create_ai_secret
 
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki-configmap.yaml"
@@ -240,6 +267,9 @@ deploy_observability_response() {
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"
+  kaws apply -f "$REPO_ROOT/k8s/plg-stack/thehive.yaml"
+  wait_statefulset "$AWS_CONTEXT" plg-stack thehive-cassandra 300s
+  wait_deployment "$AWS_CONTEXT" plg-stack thehive 300s
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack ai-analyzer 180s
   wait_deployment "$AWS_CONTEXT" plg-stack soar-engine 180s

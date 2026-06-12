@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Security Logs — ZTLab{% endblock %}
+{% block page_title %}Security Logs (Loki){% endblock %}
+
+{% block content %}
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+  <button class="btn btn-primary" onclick="loadLogs()">🔄 Làm mới</button>
+  <select id="filter-job" class="btn" style="cursor:pointer" onchange="renderLogs()">
+    <option value="">Tất cả nguồn</option>
+    <option value="ai-analyzer">ai-analyzer</option>
+    <option value="soar-engine">soar-engine</option>
+    <option value="envoy-access">envoy-access</option>
+    <option value="opa-decisions">opa-decisions</option>
+    <option value="kubernetes-pods">kubernetes-pods</option>
+  </select>
+  <select id="filter-sev" class="btn" style="cursor:pointer" onchange="renderLogs()">
+    <option value="">Tất cả mức</option>
+    <option value="critical">critical</option>
+    <option value="high">high</option>
+    <option value="medium">medium</option>
+    <option value="low">low</option>
+    <option value="info">info</option>
+  </select>
+  <span style="font-size:12px;color:var(--muted)" id="log-count"></span>
+  <label style="margin-left:auto;display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer">
+    <input type="checkbox" id="auto-refresh" checked> Auto-refresh 30s
+  </label>
+</div>
+<div class="card" style="padding:0">
+  <div id="log-table" style="overflow-x:auto"><div class="loading" style="padding:20px">Đang tải logs từ Loki...</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let allLogs = [];
+let refreshTimer = null;
+
+const SEV_COLORS = { critical:'var(--red)', high:'var(--orange)', medium:'var(--yellow)', low:'var(--muted)', info:'var(--muted)', audit:'var(--green)' };
+const SEV_BADGES = { critical:'badge-red', high:'badge-yellow', medium:'badge-yellow', low:'', info:'', audit:'badge-green' };
+
+function severityBadge(sev) {
+  const s = (sev||'info').toLowerCase();
+  const cls = SEV_BADGES[s] || '';
+  return `<span class="badge ${cls}">${s}</span>`;
+}
+
+function renderLogs() {
+  const filterJob = document.getElementById('filter-job').value;
+  const filterSev = document.getElementById('filter-sev').value;
+  let filtered = allLogs;
+  if (filterJob) filtered = filtered.filter(l => l.job === filterJob);
+  if (filterSev) filtered = filtered.filter(l => (l.severity||'info').toLowerCase() === filterSev);
+  document.getElementById('log-count').textContent = filtered.length + ' entries';
+
+  if (filtered.length === 0) {
+    document.getElementById('log-table').innerHTML = '<p style="padding:20px;color:var(--muted);font-size:13px">Không có log nào.</p>';
+    return;
+  }
+  const rows = filtered.map(l => {
+    const sev = (l.severity||'info').toLowerCase();
+    const rowColor = sev === 'critical' ? 'rgba(248,81,73,.04)' : sev === 'high' ? 'rgba(255,166,87,.04)' : '';
+    const detail = l.event_type || l.message || '';
+    const msg = l.message || '';
+    return `<tr style="background:${rowColor}">
+      <td class="mono" style="font-size:11px;color:var(--muted);white-space:nowrap">${l.timestamp}</td>
+      <td><span class="badge" style="background:rgba(88,166,255,.1);color:var(--accent);border-color:rgba(88,166,255,.2)">${l.job}</span></td>
+      <td style="font-size:12px;color:var(--muted)">${l.service}</td>
+      <td>${severityBadge(sev)}</td>
+      <td style="font-size:12px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${detail}</td>
+      <td class="truncate" style="font-size:12px;max-width:350px">${msg}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('log-table').innerHTML = `
+    <table>
+      <thead><tr><th>Thời gian</th><th>Nguồn</th><th>Service</th><th>Mức</th><th>Loại sự kiện</th><th>Nội dung</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function loadLogs() {
+  document.getElementById('log-table').innerHTML = '<div class="loading" style="padding:20px">Đang tải...</div>';
+  try {
+    const r = await fetch('/api/logs?limit=100');
+    allLogs = await r.json();
+    if (!Array.isArray(allLogs)) { allLogs = []; }
+    renderLogs();
+  } catch(e) {
+    document.getElementById('log-table').innerHTML = '<div class="alert alert-error" style="margin:16px">Lỗi kết nối Loki: ' + e.message + '</div>';
+  }
+}
+
+function setupAutoRefresh() {
+  if (refreshTimer) clearInterval(refreshTimer);
+  if (document.getElementById('auto-refresh').checked) {
+    refreshTimer = setInterval(loadLogs, 30000);
+  }
+}
+
+document.getElementById('auto-refresh').addEventListener('change', setupAutoRefresh);
+loadLogs();
+setupAutoRefresh();
+</script>
+{% endblock %}

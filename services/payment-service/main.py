@@ -93,6 +93,33 @@ async def process_payment(req: Request, body: PaymentRequest):
         return {"status": "completed", "trace_id": trace_id, "fraud": fraud, "core_banking": result}
 
 
+@app.get("/accounts/{account_id}")
+async def proxy_get_account(account_id: str):
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.get(f"{CORE_BANKING_URL}/accounts/{account_id}")
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="core banking unavailable") from exc
+
+
+@app.get("/transactions")
+async def proxy_list_transactions(account_id: str = "", limit: int = 20):
+    params: dict = {"limit": min(limit, 100)}
+    if account_id:
+        params["account_id"] = account_id
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.get(f"{CORE_BANKING_URL}/transactions", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="core banking unavailable") from exc
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": SERVICE, "cloud": CLOUD, "ts": time.time()}

@@ -6,15 +6,124 @@ groups:
     folder: ZTLab
     interval: 1m
     rules:
-      - uid: ai-malicious-log-alert
-        title: AI Malicious Log Detected
+
+      # Fires when AI Analyzer creates a pending alert waiting for admin approval.
+      # Primary notification path: Grafana sends this alert via whatever Contact Point
+      # the admin has configured (email, Slack, Telegram, webhook, etc.).
+      # Admin then approves or dismisses at the web portal /alerts page.
+      - uid: ai-pending-approval-alert
+        title: "[ZTLab] Security Alert Requires Admin Approval"
         for: 0s
-        condition: A
+        condition: B
         data:
           - refId: A
             relativeTimeRange:
-              from: 600
+              from: 120
               to: 0
             datasourceUid: Loki
             model:
-              expr: '{job="ai-analyzer"} |= "ai_security_alert"'
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'count_over_time({job="ai-analyzer", pending_approval="true"}[2m])'
+              instant: true
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "High/Critical security alert detected — admin approval required before SOAR executes"
+          description: |
+            AI Analyzer has flagged one or more logs as high or critical severity.
+            The alert is in PENDING state — SOAR will NOT run until you approve.
+
+            Review and act at: Grafana → Explore (Loki) or the ZTLab Web Portal /alerts page.
+
+            Query pending alerts:
+              GET http://ai-analyzer.plg-stack.svc.cluster.local:8080/pending
+
+            To approve (triggers SOAR):
+              POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/pending/{alert_id}/approve
+
+            To dismiss:
+              POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/pending/{alert_id}/dismiss
+        labels:
+          severity: high
+          category: security
+          requires_approval: "true"
+
+      # Fires when any malicious verdict is logged by AI Analyzer (informational).
+      - uid: ai-malicious-log-alert
+        title: "[ZTLab] AI Analyzer — Malicious Activity Logged"
+        for: 0s
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'count_over_time({job="ai-analyzer"} |= "\"verdict\":\"malicious\"" [5m])'
+              instant: true
+              queryType: instant
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: B
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "AI Analyzer detected malicious activity in the last 5 minutes"
+          description: "Check the ai-siem-soar Grafana dashboard or query {job=\"ai-analyzer\"} in Loki Explore."
+        labels:
+          severity: high
+          category: security

@@ -8,7 +8,7 @@ both K3s clusters after the stack has been deployed.
 It is intentionally self-contained:
 - ports forward the required services locally
 - performs a baseline warm-up
-- exercises scenarios 1-11
+- exercises scenarios 1-20 (01-11 inline; 12-20 delegated to individual scripts)
 - queries Loki for the main SIEM signals where available
 - reports pass/fail/skipped per scenario
 
@@ -96,6 +96,15 @@ SCENARIO_ORDER = [
     "scenario_09_privesc",
     "scenario_10_portscan",
     "scenario_11_cryptomining",
+    "scenario_12_soar_response",
+    "scenario_13_sql_injection",
+    "scenario_14_command_injection",
+    "scenario_15_account_manipulation",
+    "scenario_16_credential_stuffing",
+    "scenario_17_impair_defenses",
+    "scenario_18_container_escape",
+    "scenario_19_data_staging",
+    "scenario_20_replay_attack",
 ]
 
 
@@ -862,6 +871,52 @@ def main() -> int:
     except Exception as exc:
         SCENARIO_RESULTS.append(ScenarioResult(name="scenario_11_cryptomining", status="FAIL", details=str(exc)))
         fail(f"scenario_11_cryptomining: FAIL - {exc}")
+
+    # Scenarios 12-20: delegate to individual shell/python scripts
+    _SHELL_SCENARIOS = [
+        ("scenario_12_soar_response",    "tests/scenario_12_soar_response.sh"),
+        ("scenario_13_sql_injection",    "tests/scenario_13_sql_injection.sh"),
+        ("scenario_14_command_injection","tests/scenario_14_command_injection.sh"),
+        ("scenario_15_account_manipulation","tests/scenario_15_account_manipulation.sh"),
+        ("scenario_16_credential_stuffing","tests/scenario_16_credential_stuffing.sh"),
+        ("scenario_17_impair_defenses",  "tests/scenario_17_impair_defenses.sh"),
+        ("scenario_18_container_escape", "tests/scenario_18_container_escape.sh"),
+        ("scenario_19_data_staging",     "tests/scenario_19_data_staging.sh"),
+        ("scenario_20_replay_attack",    "tests/scenario_20_replay_attack.sh"),
+    ]
+    _env = {
+        **os.environ,
+        "GW_URL": f"http://{endpoints.get('gateway_ip','localhost')}:18080",
+        "KC_URL": f"http://{endpoints.get('keycloak_ip','localhost')}:18443",
+        "AI_URL": f"http://{endpoints.get('gateway_ip','localhost')}:18082",
+        "LOKI_URL": DEFAULT_LOKI_URL,
+    }
+    for name, script in _SHELL_SCENARIOS:
+        script_path = REPO_ROOT / script
+        if not script_path.exists():
+            SCENARIO_RESULTS.append(ScenarioResult(name=name, status="SKIP", details="script not found"))
+            warn(f"{name}: SKIP — {script} not found")
+            continue
+        try:
+            result = subprocess.run(
+                ["bash", str(script_path)],
+                env=_env,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode == 0:
+                SCENARIO_RESULTS.append(ScenarioResult(name=name, status="PASS", details="ok"))
+            else:
+                stderr = (result.stderr or result.stdout or "")[:300]
+                SCENARIO_RESULTS.append(ScenarioResult(name=name, status="FAIL", details=stderr))
+                fail(f"{name}: FAIL — rc={result.returncode} {stderr}")
+        except subprocess.TimeoutExpired:
+            SCENARIO_RESULTS.append(ScenarioResult(name=name, status="FAIL", details="timeout"))
+            fail(f"{name}: FAIL — timeout")
+        except Exception as exc:
+            SCENARIO_RESULTS.append(ScenarioResult(name=name, status="FAIL", details=str(exc)))
+            fail(f"{name}: FAIL — {exc}")
 
     print("\n=== SUMMARY ===")
     failed = 0

@@ -19,7 +19,8 @@ allow if {
 
 allow if {
   startswith(input.attributes.source.principal, "spiffe://ztlab.local/openstack/")
-  input.attributes.request.http.method in ["GET", "OPTIONS"]
+  input.attributes.request.http.method in ["GET", "POST"]
+  not denied_path
 }
 
 denied_path if {

@@ -73,6 +73,14 @@ def _check_rate_limit(source_ip: str) -> None:
         raise HTTPException(status_code=429, detail="rate limit exceeded")
 
 
+def _require_role(claims: dict, role: str, source_ip: str) -> None:
+    roles = claims.get("realm_access", {}).get("roles", [])
+    if role not in roles:
+        AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="insufficient_role").inc()
+        logger.warn("authz_denied", required_role=role, user=claims.get("preferred_username","?"), source_ip=source_ip)
+        raise HTTPException(status_code=403, detail=f"role '{role}' required")
+
+
 def _verify_token(authorization: str | None, source_ip: str) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="missing_bearer").inc()
@@ -120,6 +128,7 @@ async def create_payment(request: Request, body: PaymentRequest, authorization: 
     source_ip = _source_ip(request)
     _check_rate_limit(source_ip)
     claims = _verify_token(authorization, source_ip)
+    _require_role(claims, "financial-write", source_ip)
     trace_id = request.headers.get("X-Trace-ID", str(uuid.uuid4()))
     async with httpx.AsyncClient(timeout=15) as client:
         try:
@@ -135,6 +144,42 @@ async def create_payment(request: Request, body: PaymentRequest, authorization: 
             logger.error("payment_route_failed", trace_id=trace_id, error=str(exc))
             raise HTTPException(status_code=503, detail="payment service unavailable") from exc
     return response.json()
+
+
+@app.get("/accounts/{account_id}")
+async def get_account(account_id: str, request: Request, authorization: str | None = Header(default=None)):
+    source_ip = _source_ip(request)
+    _check_rate_limit(source_ip)
+    claims = _verify_token(authorization, source_ip)
+    _require_role(claims, "financial-read", source_ip)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(f"{PAYMENT_SERVICE_URL}/accounts/{account_id}")
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="account service unavailable") from exc
+
+
+@app.get("/transactions")
+async def get_transactions(request: Request, account_id: str = "", limit: int = 20,
+                           authorization: str | None = Header(default=None)):
+    source_ip = _source_ip(request)
+    _check_rate_limit(source_ip)
+    claims = _verify_token(authorization, source_ip)
+    _require_role(claims, "financial-read", source_ip)
+    params: dict = {"limit": min(limit, 100)}
+    if account_id:
+        params["account_id"] = account_id
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(f"{PAYMENT_SERVICE_URL}/transactions", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="transaction service unavailable") from exc
 
 
 @app.get("/health")
