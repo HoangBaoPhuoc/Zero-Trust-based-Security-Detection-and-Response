@@ -39,10 +39,15 @@ let refreshTimer = null;
 const SEV_COLORS = { critical:'var(--red)', high:'var(--orange)', medium:'var(--yellow)', low:'var(--muted)', info:'var(--muted)', audit:'var(--green)' };
 const SEV_BADGES = { critical:'badge-red', high:'badge-yellow', medium:'badge-yellow', low:'', info:'', audit:'badge-green' };
 
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+
 function severityBadge(sev) {
   const s = (sev||'info').toLowerCase();
   const cls = SEV_BADGES[s] || '';
-  return `<span class="badge ${cls}">${s}</span>`;
+  return `<span class="badge ${cls}">${esc(s)}</span>`;
 }
 
 function renderLogs() {
@@ -63,12 +68,12 @@ function renderLogs() {
     const detail = l.event_type || l.message || '';
     const msg = l.message || '';
     return `<tr style="background:${rowColor}">
-      <td class="mono" style="font-size:11px;color:var(--muted);white-space:nowrap">${l.timestamp}</td>
-      <td><span class="badge" style="background:rgba(88,166,255,.1);color:var(--accent);border-color:rgba(88,166,255,.2)">${l.job}</span></td>
-      <td style="font-size:12px;color:var(--muted)">${l.service}</td>
+      <td class="mono" style="font-size:11px;color:var(--muted);white-space:nowrap">${esc(l.timestamp)}</td>
+      <td><span class="badge" style="background:rgba(88,166,255,.1);color:var(--accent);border-color:rgba(88,166,255,.2)">${esc(l.job)}</span></td>
+      <td style="font-size:12px;color:var(--muted)">${esc(l.service)}</td>
       <td>${severityBadge(sev)}</td>
-      <td style="font-size:12px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${detail}</td>
-      <td class="truncate" style="font-size:12px;max-width:350px">${msg}</td>
+      <td style="font-size:12px;color:var(--muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(detail)}</td>
+      <td class="truncate" style="font-size:12px;max-width:350px">${esc(msg)}</td>
     </tr>`;
   }).join('');
   document.getElementById('log-table').innerHTML = `
@@ -86,7 +91,7 @@ async function loadLogs() {
     if (!Array.isArray(allLogs)) { allLogs = []; }
     renderLogs();
   } catch(e) {
-    document.getElementById('log-table').innerHTML = '<div class="alert alert-error" style="margin:16px">Lỗi kết nối Loki: ' + e.message + '</div>';
+    document.getElementById('log-table').innerHTML = '<div class="alert alert-error" style="margin:16px">Lỗi kết nối Loki</div>';
   }
 }
 

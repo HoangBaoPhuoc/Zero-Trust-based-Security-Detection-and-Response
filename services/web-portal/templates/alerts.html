@@ -20,6 +20,11 @@
 <script>
 let currentStatus = 'pending';
 
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+
 const SEV_BADGE = {
   critical: '<span class="badge badge-red">CRITICAL</span>',
   high: '<span class="badge badge-yellow">HIGH</span>',
@@ -37,7 +42,7 @@ async function loadAlerts(status) {
   document.getElementById('alerts-list').innerHTML = '<div class="loading">Đang tải...</div>';
   document.getElementById('info-box').style.display = 'none';
   try {
-    const r = await fetch('/api/alerts?status=' + status);
+    const r = await fetch('/api/alerts?status=' + esc(status));
     const alerts = await r.json();
     if (!Array.isArray(alerts) || alerts.length === 0) {
       document.getElementById('alerts-list').innerHTML = '<div class="card"><p style="color:var(--muted);font-size:13px">Không có alert nào.</p></div>';
@@ -51,49 +56,60 @@ async function loadAlerts(status) {
       const created = a.created_at ? new Date(a.created_at).toLocaleString('vi-VN') : '';
       const expires = a.expires_at ? new Date(a.expires_at).toLocaleString('vi-VN') : '';
       const evidence = (a.alert.evidence || []).slice(0,2).map(e =>
-        `<div class="mono" style="font-size:11px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border)">${e.substring(0,200)}</div>`
+        `<div class="mono" style="font-size:11px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--border)">${esc(String(e).substring(0,200))}</div>`
       ).join('');
+      // Use data-id attributes instead of inline onclick to prevent XSS via alert_id
       const actionBtns = a.status === 'pending' ? `
-        <button class="btn btn-green" onclick="approveAlert('${a.alert_id}')">✅ Approve → SOAR</button>
-        <button class="btn btn-red" onclick="dismissAlert('${a.alert_id}')">❌ Dismiss</button>
-      ` : `<span class="badge ${a.status === 'approved' ? 'badge-green' : ''}">${a.status.toUpperCase()}</span>`;
+        <button class="btn btn-green" data-action="approve" data-id="${esc(a.alert_id)}">✅ Approve → SOAR</button>
+        <button class="btn btn-red" data-action="dismiss" data-id="${esc(a.alert_id)}">❌ Dismiss</button>
+      ` : `<span class="badge ${a.status === 'approved' ? 'badge-green' : ''}">${esc(a.status.toUpperCase())}</span>`;
       const theHiveMeta = (a.thehive_alert_id || a.thehive_case_id) ? `
         <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:10px">
-          ${a.thehive_alert_id ? `<span class="mono">TheHive alert: ${a.thehive_alert_id}</span>` : ''}
-          ${a.thehive_case_id ? `<span class="mono">TheHive case: ${a.thehive_case_id}</span>` : ''}
+          ${a.thehive_alert_id ? `<span class="mono">TheHive alert: ${esc(a.thehive_alert_id)}</span>` : ''}
+          ${a.thehive_case_id ? `<span class="mono">TheHive case: ${esc(a.thehive_case_id)}</span>` : ''}
         </div>` : '';
 
-      return `<div class="card" id="alert-${a.alert_id}" style="border-left:3px solid ${sev === 'critical' ? 'var(--red)' : sev === 'high' ? 'var(--orange)' : 'var(--yellow)'}">
+      return `<div class="card" id="alert-${esc(a.alert_id)}" style="border-left:3px solid ${sev === 'critical' ? 'var(--red)' : sev === 'high' ? 'var(--orange)' : 'var(--yellow)'}">
         <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
           <div>
             ${badge}
-            <span style="font-size:13px;font-weight:600;margin-left:8px">${a.alert.attack_type}</span>
+            <span style="font-size:13px;font-weight:600;margin-left:8px">${esc(a.alert.attack_type)}</span>
           </div>
-          <span class="mono" style="font-size:11px;color:var(--muted)">${a.alert_id}</span>
+          <span class="mono" style="font-size:11px;color:var(--muted)">${esc(a.alert_id)}</span>
         </div>
-        <p style="font-size:13px;margin-bottom:10px">${a.alert.summary}</p>
+        <p style="font-size:13px;margin-bottom:10px">${esc(a.alert.summary)}</p>
         <div style="display:flex;gap:16px;font-size:12px;color:var(--muted);margin-bottom:10px">
-          <span>🎯 ${a.alert.affected_service || '—'}</span>
-          <span>🌐 ${a.alert.source_ip || '—'}</span>
+          <span>🎯 ${esc(a.alert.affected_service || '—')}</span>
+          <span>🌐 ${esc(a.alert.source_ip || '—')}</span>
           <span>📊 Confidence: ${(a.alert.confidence * 100).toFixed(0)}%</span>
-          <span>🕐 ${created}</span>
-          ${a.status === 'pending' ? `<span style="color:var(--yellow)">⏰ Hết hạn: ${expires}</span>` : ''}
+          <span>🕐 ${esc(created)}</span>
+          ${a.status === 'pending' ? `<span style="color:var(--yellow)">⏰ Hết hạn: ${esc(expires)}</span>` : ''}
         </div>
         ${evidence ? `<div style="background:var(--bg);border-radius:4px;padding:8px;margin-bottom:10px">${evidence}</div>` : ''}
         ${theHiveMeta}
-        ${a.note ? `<p style="font-size:12px;color:var(--muted);font-style:italic;margin-bottom:10px">Ghi chú: ${a.note}</p>` : ''}
+        ${a.note ? `<p style="font-size:12px;color:var(--muted);font-style:italic;margin-bottom:10px">Ghi chú: ${esc(a.note)}</p>` : ''}
         <div style="display:flex;gap:8px">${actionBtns}</div>
       </div>`;
     }).join('');
     document.getElementById('alerts-list').innerHTML = html;
   } catch(e) {
-    document.getElementById('alerts-list').innerHTML = '<div class="alert alert-error">Lỗi: ' + e.message + '</div>';
+    document.getElementById('alerts-list').innerHTML = '<div class="alert alert-error">Lỗi tải alerts</div>';
   }
 }
 
+// Event delegation — avoids inline onclick with user-controlled data
+document.getElementById('alerts-list').addEventListener('click', async e => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const id = btn.dataset.id;
+  if (action === 'approve') await approveAlert(id);
+  else if (action === 'dismiss') await dismissAlert(id);
+});
+
 async function approveAlert(alertId) {
   const note = prompt('Ghi chú khi duyệt (tùy chọn):') || 'Đã xác minh bởi admin';
-  const r = await fetch('/api/alerts/' + alertId + '/approve', {
+  const r = await fetch('/api/alerts/' + encodeURIComponent(alertId) + '/approve', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ note })
   });
@@ -102,24 +118,25 @@ async function approveAlert(alertId) {
   infoBox.style.display = 'block';
   if (r.ok) {
     infoBox.className = 'alert alert-success';
-    infoBox.innerHTML = '✅ Đã duyệt và gửi tới SOAR. Alert ID: ' + alertId;
+    infoBox.textContent = '✅ Đã duyệt và gửi tới SOAR. Alert ID: ' + alertId;
     setTimeout(() => loadAlerts(currentStatus), 1000);
   } else {
     infoBox.className = 'alert alert-error';
-    infoBox.textContent = 'Lỗi: ' + (d.detail || d.error || JSON.stringify(d));
+    infoBox.textContent = 'Lỗi: ' + (d.detail || d.error || 'Không thể duyệt alert');
   }
 }
 
 async function dismissAlert(alertId) {
   const note = prompt('Lý do từ chối:') || 'Không phải mối đe dọa thực sự';
-  const r = await fetch('/api/alerts/' + alertId + '/dismiss', {
+  const r = await fetch('/api/alerts/' + encodeURIComponent(alertId) + '/dismiss', {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ note })
   });
   if (r.ok) {
-    document.getElementById('info-box').style.display = 'block';
-    document.getElementById('info-box').className = 'alert alert-success';
-    document.getElementById('info-box').textContent = '✓ Đã từ chối alert ' + alertId;
+    const infoBox = document.getElementById('info-box');
+    infoBox.style.display = 'block';
+    infoBox.className = 'alert alert-success';
+    infoBox.textContent = '✓ Đã từ chối alert ' + alertId;
     setTimeout(() => loadAlerts(currentStatus), 1000);
   }
 }

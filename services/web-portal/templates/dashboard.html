@@ -49,6 +49,11 @@
 <script>
 const accountId = '{{ account_id }}';
 
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+
 async function loadBalance() {
   if (!accountId) return;
   try {
@@ -79,11 +84,11 @@ async function loadTransactions() {
       const sign = isOut ? '−' : '+';
       const color = isOut ? 'var(--red)' : 'var(--green)';
       return `<tr>
-        <td class="mono" style="color:var(--muted);font-size:11px">${d}</td>
-        <td>${isOut ? '→ ' + t.to_account : '← ' + t.from_account}</td>
+        <td class="mono" style="color:var(--muted);font-size:11px">${esc(d)}</td>
+        <td>${isOut ? '→ ' + esc(t.to_account) : '← ' + esc(t.from_account)}</td>
         <td style="color:${color};font-weight:600">${sign}${parseFloat(t.amount).toLocaleString('vi-VN')} ₫</td>
-        <td><span class="badge badge-green">${t.status}</span></td>
-        <td class="mono truncate" style="max-width:180px;font-size:11px;color:var(--muted)">${t.transaction_id}</td>
+        <td><span class="badge badge-green">${esc(t.status)}</span></td>
+        <td class="mono truncate" style="max-width:180px;font-size:11px;color:var(--muted)">${esc(t.transaction_id)}</td>
       </tr>`;
     }).join('');
     document.getElementById('txn-table').innerHTML = `

@@ -65,6 +65,11 @@
 <script>
 const myAccountId = '{{ account_id }}';
 
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+
 async function loadMyBalance() {
   if (!myAccountId) return;
   const r = await fetch('/api/balance/' + myAccountId);
@@ -137,7 +142,7 @@ async function doTransfer() {
       resultBox.innerHTML = `
         <strong>✅ Chuyển tiền thành công!</strong><br>
         <span style="font-size:12px;opacity:.8">
-          Mã GD: <code>${cb.transaction_id || data.trace_id}</code><br>
+          Mã GD: <code>${esc(cb.transaction_id || data.trace_id)}</code><br>
           Số dư nguồn: <strong>${cb.from_balance !== undefined ? parseFloat(cb.from_balance).toLocaleString('vi-VN') + ' ₫' : '—'}</strong><br>
           Số dư đích: <strong>${cb.to_balance !== undefined ? parseFloat(cb.to_balance).toLocaleString('vi-VN') + ' ₫' : '—'}</strong>
         </span>`;
@@ -155,7 +160,7 @@ async function doTransfer() {
       }
       resultBox.style.display = 'block';
       resultBox.className = 'alert alert-error';
-      resultBox.innerHTML = `<strong>❌ Lỗi ${resp.status}:</strong> ${errMsg}`;
+      resultBox.innerHTML = `<strong>❌ Lỗi ${resp.status}:</strong> ${esc(errMsg)}`;
     }
   } catch(e) {
     setStep('step-opa', 'err');

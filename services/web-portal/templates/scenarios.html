@@ -220,7 +220,7 @@ async function runScenario(scenarioId) {
     const data = await resp.json();
     renderResult(scenarioId, data, card, resultBox);
   } catch(e) {
-    if (resultBox) { resultBox.innerHTML = '<span class="result-block">Lỗi kết nối: ' + e.message + '</span>'; }
+    if (resultBox) { resultBox.innerHTML = '<span class="result-block">Lỗi kết nối đến server</span>'; }
     if (card) { card.className = card.className.replace('running','blocked'); }
   } finally {
     if (btn) {
@@ -232,13 +232,16 @@ async function runScenario(scenarioId) {
 }
 
 function fmtJson(obj) {
-  return JSON.stringify(obj, null, 2)
-    .replace(/("verdict":\s*"malicious")/g, '<span class="result-block">$1</span>')
-    .replace(/("verdict":\s*"suspicious")/g, '<span style="color:var(--yellow)">$1</span>')
-    .replace(/("verdict":\s*"normal")/g, '<span class="result-ok">$1</span>')
-    .replace(/("status":\s*"completed")/g, '<span class="result-ok">$1</span>')
-    .replace(/("gate":\s*"blocked")/g, '<span class="result-block">$1</span>')
-    .replace(/("gate":\s*"passed")/g, '<span class="result-ok">$1</span>');
+  // Escape HTML first, then apply safe color-coding patterns
+  const escaped = JSON.stringify(obj, null, 2)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return escaped
+    .replace(/"verdict": "malicious"/g, '<span class="result-block">"verdict": "malicious"</span>')
+    .replace(/"verdict": "suspicious"/g, '<span style="color:var(--yellow)">"verdict": "suspicious"</span>')
+    .replace(/"verdict": "normal"/g, '<span class="result-ok">"verdict": "normal"</span>')
+    .replace(/"status": "completed"/g, '<span class="result-ok">"status": "completed"</span>')
+    .replace(/"gate": "blocked"/g, '<span class="result-block">"gate": "blocked"</span>')
+    .replace(/"gate": "passed"/g, '<span class="result-ok">"gate": "passed"</span>');
 }
 
 function renderResult(id, data, card, box) {
@@ -283,7 +286,8 @@ function renderResult(id, data, card, box) {
     html += `<span style="color:${color};font-weight:bold">HTTP ${sc}</span>  `;
   }
   if (data.expected) {
-    html += `<span style="color:var(--muted)">expected: ${data.expected}</span>\n\n`;
+    const expEsc = String(data.expected).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    html += `<span style="color:var(--muted)">expected: ${expEsc}</span>\n\n`;
   }
 
   // Result payload
