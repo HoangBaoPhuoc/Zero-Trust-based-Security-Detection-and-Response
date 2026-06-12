@@ -4,73 +4,109 @@
 > Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)  
 > GVHD: Đỗ Thị Phương Uyên
 
-Hệ thống triển khai kiến trúc **Zero Trust** kết hợp **SIEM/SOAR tích hợp AI** trên môi trường **Multi-Cloud thực tế** (AWS + OpenStack), minh họa bằng ứng dụng tài chính microservices.
+ZTLab triển khai kiến trúc **Zero Trust** kết hợp **SIEM/SOAR tích hợp AI** trên môi trường **multi-cloud thực tế** gồm AWS và OpenStack. Ứng dụng minh họa là hệ thống tài chính microservices có luồng thanh toán cross-cloud, định danh workload bằng SPIFFE/SPIRE, policy enforcement bằng Envoy + OPA, log tập trung bằng Promtail/Loki/Grafana, phát hiện bằng AI Analyzer và phản ứng bằng SOAR Engine.
 
 ---
 
 ## Kiến trúc
 
-```
-Internet
-  └─▶ Nginx Ingress (api.ztlab.local)
-        └─▶ [AWS K3s Cluster — ctx-aws]
-              ├─ api-gateway   (JWT verify, rate limit)
-              ├─ payment-service ─── Envoy ──▶ OPA ext_authz
-              │    └─────────────────────────────────────────▶ 10.10.1.12:30081
-              ├─ fraud-detection  (velocity + amount scoring)         │
-              ├─ notification-service                                  │
-              ├─ opa-server / redis / keycloak                        │
-              └─ loki / grafana / ai-analyzer / soar-engine           │
-                                                                      │
-                              [OpenStack K3s Cluster — ctx-openstack] │
-                               └─ core-banking ◀────────────────────-─┘
-                               └─ account-service
-                               └─ transaction-service
-                               └─ postgres-accounts / postgres-txn
-                               └─ promtail ──▶ Loki (AWS:31000)
+```text
+Browser / curl
+  └─▶ SSH tunnel / Traefik Ingress (AWS)
+        ├─▶ portal.ztlab.local  ──▶ web-portal
+        ├─▶ api.ztlab.local     ──▶ api-gateway
+        ├─▶ grafana.ztlab.local ──▶ Grafana
+        ├─▶ keycloak.ztlab.local──▶ Keycloak
+        ├─▶ ai.ztlab.local      ──▶ AI Analyzer
+        └─▶ soar.ztlab.local    ──▶ SOAR Engine
+
+[AWS K3s Cluster — ctx-aws]
+  ├─ web-portal
+  ├─ api-gateway        (JWT verify, role check, rate limit)
+  ├─ payment-service    (payment orchestration)
+  ├─ fraud-detection    (Redis velocity + amount/channel/country scoring)
+  ├─ notification-service
+  ├─ Keycloak / OPA / SPIRE / Redis
+  └─ Loki / Grafana / Prometheus / AI Analyzer / SOAR Engine / TheHive
+             │
+             │ Envoy mTLS + SPIRE SVID
+             ▼
+        10.10.1.12:30081
+             │
+[OpenStack K3s Cluster — ctx-openstack]
+  ├─ core-banking       (fraud gate validation, transaction execution)
+  ├─ account-service    (PostgreSQL accounts)
+  ├─ transaction-service(PostgreSQL ledger)
+  └─ promtail           (push log về Loki trên AWS)
 ```
 
-**Luồng thanh toán cross-cloud:**  
-`API Gateway → JWT verify → OPA allow → payment-service → Fraud score → Envoy STATIC 10.10.1.12:30081 → core-banking (OpenStack)`
+**Luồng thanh toán chính:**
 
-Cùng `trace_id` xuất hiện trong log của cả hai cloud để đảm bảo khả năng truy vết xuyên suốt.
+```text
+Web Portal/API client
+  -> API Gateway
+  -> Envoy + OPA
+  -> Payment Service
+  -> Fraud Detection
+  -> Envoy mTLS cross-cloud
+  -> Core Banking trên OpenStack
+  -> Account Service + Transaction Service
+  -> Notification Service
+```
+
+Cùng một `trace_id` được truyền qua toàn bộ chain để truy vết log từ AWS sang OpenStack.
+
+---
+
+## Gateway trong hệ thống
+
+Hệ thống có 3 lớp gateway khác nhau:
+
+| Lớp | Thành phần | Vai trò |
+|---|---|---|
+| Infrastructure Gateway | SSH tunnel, WireGuard, Traefik Ingress | Đưa traffic vào AWS cluster và nối AWS với OpenStack |
+| API Gateway | `services/api-gateway` | Verify JWT, kiểm role, rate limit, tạo/truyền `X-Trace-ID`, forward sang payment |
+| Envoy Sidecar Gateway | `envoy/configmap.yaml` | Policy Enforcement Point, gọi OPA ext_authz, mTLS bằng SPIRE SVID, route service-to-service |
+
+Chi tiết input/output từng điểm được mô tả trong [BAOCAO_FLOW_HE_THONG.md](BAOCAO_FLOW_HE_THONG.md).
 
 ---
 
 ## Thành phần bảo mật
 
 | Tầng | Công nghệ | Vai trò |
-|------|-----------|---------|
-| Định danh workload | SPIFFE/SPIRE | Cấp X.509 SVID cho mỗi microservice, TTL 1h |
-| Kiểm soát truy cập | OPA + Envoy ext_authz | Policy as code, chặn request tại Envoy sidecar |
-| Xác thực người dùng | Keycloak OIDC | JWT RS256, claim-based authorization |
-| mTLS | Envoy + SPIRE SDS | Service-to-service encryption |
-| Network segmentation | Kubernetes NetworkPolicy | Phân tách traffic AWS↔OpenStack |
-| SIEM | PLG Stack (Promtail + Loki + Grafana) | Log tập trung từ cả hai cloud |
-| AI Detection | OpenAI GPT-4o-mini / Gemini / Heuristic | Phân loại log theo MITRE ATT&CK |
-| SOAR | SOAR Engine (FastAPI + Kubernetes SDK) | Playbook tự động: isolate, restrict, quarantine |
-| Metrics | Prometheus + Grafana | 6/9 services (3 OS services — expected) |
+|---|---|---|
+| Định danh workload | SPIFFE/SPIRE | Cấp X.509 SVID cho workload, trust domain `ztlab.local` |
+| Kiểm soát truy cập | OPA + Envoy ext_authz | Policy-as-code, chặn request tại sidecar trước khi vào app |
+| Xác thực người dùng | Keycloak OIDC | JWT RS256, role `financial-read`, `financial-write`, `security-analyst` |
+| mTLS | Envoy + SPIRE SDS | Mã hóa và xác thực service-to-service |
+| Network segmentation | Kubernetes NetworkPolicy | Giới hạn đường đi AWS -> OpenStack và traffic nội bộ namespace |
+| SIEM | Promtail + Loki + Grafana | Log tập trung từ cả hai cloud |
+| AI Detection | OpenAI/Gemini/Heuristic | Phân loại log, suy luận attack type, đề xuất playbook |
+| HITL | Web Portal + Grafana alert | High/critical alert cần admin approve trước SOAR |
+| SOAR | FastAPI + Kubernetes SDK | `isolate_workload`, `restrict_egress`, `quarantine_workload`, `block_source_ip`, `revoke_user_sessions` |
+| Case management | TheHive | Tạo alert/case điều tra sự cố |
 
 ---
 
 ## Hạ tầng
 
-### AWS Cluster (`ctx-aws`, port 6444)
+### AWS Cluster (`ctx-aws`, tunnel port 6444)
 
 | Node | IP | Vai trò |
-|------|----|---------|
-| bastion | 54.254.145.86 (EIP) | SSH jump host |
-| aws-master | 10.10.1.10 | K3s control plane |
-| aws-worker-1 | 10.10.1.11 | K3s worker |
+|---|---|---|
+| bastion | `54.254.145.86` | SSH jump host |
+| aws-master | `10.10.1.10` | K3s control plane, Traefik ingress |
+| aws-worker-1 | `10.10.1.11` | K3s worker, Loki relay/proxy |
 
-### OpenStack Cluster (`ctx-openstack`, port 6445)
+### OpenStack Cluster (`ctx-openstack`, tunnel port 6445)
 
 | Node | IP | Vai trò |
-|------|----|---------|
-| os-master | 10.10.1.12 | K3s control plane (standalone) |
+|---|---|---|
+| os-master | `10.10.1.12` | K3s standalone, core banking workloads |
 
-```
-SSH Key    : ~/.ssh/zta-siem-soar-key
+```text
+SSH key    : ~/.ssh/zta-siem-soar-key
 Kubeconfig : ~/.kube/ztlab/aws-tunnel.yaml
 ```
 
@@ -78,63 +114,53 @@ Kubeconfig : ~/.kube/ztlab/aws-tunnel.yaml
 
 ## Cấu trúc repo
 
-```
+```text
 .
-├── terraform/               # IaC — provision AWS và OpenStack
-├── ansible/                 # Configuration management (K3s, WireGuard, Promtail)
+├── terraform/                    # IaC provision AWS và OpenStack
+├── ansible/                      # Baseline, WireGuard, K3s, Promtail
 ├── k8s/
-│   ├── financial/           # Kubernetes manifests dịch vụ tài chính
-│   │   ├── aws-services.yaml      # api-gateway, payment, fraud, notification
-│   │   ├── os-services.yaml       # core-banking, account, transaction (OpenStack)
-│   │   ├── redis.yaml / postgres-*.yaml
-│   │   └── network-policies/      # aws-allow-list.yaml, os-allow-list.yaml
-│   ├── plg-stack/           # Loki, Grafana, Promtail, AI Analyzer, SOAR Engine
-│   ├── monitoring/          # Prometheus
-│   ├── ingress.yaml / namespaces.yaml
-│   └── rbac/                # SOAR RBAC (patch deployments/services)
+│   ├── financial/
+│   │   ├── aws-services.yaml             # api-gateway, payment, fraud, notification
+│   │   ├── os-services.yaml              # core-banking, account, transaction trên OpenStack
+│   │   ├── web-portal.yaml               # portal.ztlab.local
+│   │   ├── aws-backend-services.yaml     # manifest hỗ trợ local/single-cluster
+│   │   ├── redis.yaml
+│   │   ├── postgres-accounts.yaml
+│   │   ├── postgres-txn.yaml
+│   │   └── network-policies/
+│   ├── keycloak/                 # Realm ztlab, users, roles, clients
+│   ├── plg-stack/                # Loki, Grafana, Promtail, AI, SOAR, TheHive
+│   ├── monitoring/               # Prometheus
+│   ├── ingress.yaml
+│   └── rbac/
 ├── envoy/
-│   └── configmap.yaml       # Envoy sidecar config (ext_authz, cross-cloud upstream)
+│   └── configmap.yaml            # Envoy inbound/outbound, ext_authz, mTLS, cross-cloud upstream
 ├── opa/
 │   ├── policies/
-│   │   ├── zta_policy.rego        # JWT + SVID verification
-│   │   ├── fraud_gate.rego        # Fraud gate header validation
-│   │   └── cross_cloud.rego       # AWS→OpenStack identity policy
+│   │   ├── zta_policy.rego       # Main allow/deny policy
+│   │   ├── fraud_gate.rego       # Fraud gate validation
+│   │   └── cross_cloud.rego      # AWS/OpenStack identity policy
 │   └── deployment.yaml
-├── spire/
-│   ├── server/              # SPIRE Server config (trust_domain: ztlab.local)
-│   ├── agent/               # SPIRE Agent config (aws + openstack)
-│   ├── k8s/                 # SPIRE Kubernetes manifests
-│   └── scripts/             # register-aws-workloads.sh, register-os-workloads.sh
+├── spire/                        # SPIRE server/agent config và workload registration
 ├── services/
-│   ├── api-gateway/         # FastAPI — JWT verify, rate limit, forward
-│   ├── payment-service/     # FastAPI — Điều phối thanh toán, cross-cloud latency metric
-│   ├── fraud-detection/     # FastAPI — Velocity + amount + channel scoring
-│   ├── core-banking/        # FastAPI — Thực thi giao dịch, validate fraud gate
-│   ├── account-service/     # FastAPI — Quản lý tài khoản
-│   ├── transaction-service/ # FastAPI — Lịch sử giao dịch
-│   ├── notification-service/# FastAPI — Thông báo sự kiện
-│   ├── soar-engine/         # FastAPI — SOAR playbook execution
-│   └── Dockerfile           # Multi-stage build, shared base
-├── shared/
-│   ├── logging.py           # ZTLabLogger (JSON structured, cloud-aware)
-│   └── metrics.py           # Prometheus metrics definitions
-├── plg-stack/
-│   ├── grafana/
-│   │   ├── dashboards/      # ZTA Overview, AI SIEM SOAR, OPA, Envoy Access
-│   │   └── alerting/        # 6 alert rules (brute-force, fraud, lateral-movement, ...)
-│   └── loki/loki-config.yml
-├── scripts/
-│   ├── deploy-all.sh        # Deploy toàn bộ (cả hai cluster)
-│   ├── deploy-security-stack.sh  # SPIRE + OPA + Envoy + Keycloak
-│   ├── setup-os-cluster.sh  # Khởi tạo OpenStack K3s cluster từ đầu
-│   ├── k8s-tunnel.sh        # Quản lý SSH tunnel (up/down/status/verify)
-│   ├── sync-financial-images.sh  # Build + sync images vào K3s nodes
-│   ├── gen-dev-token.sh     # Tạo JWT dev token (HS256)
-│   ├── health-check.sh      # Kiểm tra sức khỏe toàn hệ thống
-│   └── run-demo.sh          # Script demo tự động
-├── tests/                   # 12 test scenarios (brute force, JWT forgery, SOAR, ...)
-├── BAOCAO.md                # Báo cáo đồ án đầy đủ
-└── HUONG_DAN.md             # Hướng dẫn vận hành và demo
+│   ├── web-portal/               # FastAPI + Jinja UI: dashboard, transfer, logs, alerts, scenarios
+│   ├── api-gateway/              # JWT verify, role check, rate limit
+│   ├── payment-service/          # Điều phối thanh toán
+│   ├── fraud-detection/          # Fraud scoring
+│   ├── core-banking/             # Execute transaction + fraud gate check
+│   ├── account-service/          # Account DB + transfer
+│   ├── transaction-service/      # Ledger DB
+│   ├── notification-service/     # Notification event queue/log
+│   ├── ai-analyzer/              # AI SOC analyst
+│   ├── soar-engine/              # SOAR playbook runner
+│   └── Dockerfile
+├── shared/                       # Logging và Prometheus metrics dùng chung
+├── plg-stack/                    # Grafana dashboard/alerting, Loki config
+├── scripts/                      # Deploy, tunnel, health-check, demo, image sync
+├── tests/                        # scenario_00 đến scenario_20 + metrics/perf
+├── BAOCAO.md                     # Báo cáo đồ án đầy đủ
+├── BAOCAO_FLOW_HE_THONG.md       # Báo cáo flow/gateway/input-output
+└── HUONG_DAN.md                  # Hướng dẫn vận hành và demo
 ```
 
 ---
@@ -144,39 +170,42 @@ Kubeconfig : ~/.kube/ztlab/aws-tunnel.yaml
 ### Yêu cầu
 
 - SSH key tại `~/.ssh/zta-siem-soar-key`
-- `kubectl`, `ansible`, `ssh` đã cài sẵn
-- EC2 instances đang running (AWS Console)
+- `kubectl`, `ssh`, `ansible`, `docker` đã cài sẵn
+- Các VM/EC2 đang chạy
+- Kubeconfig dùng tunnel: `~/.kube/ztlab/aws-tunnel.yaml`
 
-### 1. Mở tunnels
+### 1. Mở tunnel Kubernetes
 
 ```bash
 bash scripts/k8s-tunnel.sh up all
 export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
 
-kubectl --context ctx-aws get nodes        # 2 nodes Ready
-kubectl --context ctx-openstack get nodes  # 1 node Ready (os-master)
+kubectl --context ctx-aws get nodes
+kubectl --context ctx-openstack get nodes
 ```
 
-### 2. Mở UI tunnel (terminal riêng, để block)
+### 2. Mở UI tunnel
+
+Chạy ở terminal riêng và để lệnh này giữ kết nối:
 
 ```bash
-ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no \
-  -L 8080:10.10.1.10:80 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10
+ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no   -L 8080:10.10.1.10:80 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10
 ```
 
-### 3. Mở port-forward AI / SOAR / Loki
+### 3. Mở port-forward cho API nội bộ cần debug
 
 ```bash
 kubectl --context ctx-aws port-forward -n plg-stack svc/ai-analyzer 8090:8080 --address=127.0.0.1 &
 kubectl --context ctx-aws port-forward -n plg-stack svc/soar-engine 8091:8080 --address=127.0.0.1 &
 kubectl --context ctx-aws port-forward -n plg-stack svc/loki 3100:3100 --address=127.0.0.1 &
+kubectl --context ctx-aws port-forward -n plg-stack svc/thehive 19000:9000 --address=127.0.0.1 &
 ```
 
-### 4. Thêm /etc/hosts (1 lần)
+### 4. Thêm `/etc/hosts`
 
 ```bash
 grep -q "api.ztlab.local" /etc/hosts || sudo tee -a /etc/hosts <<'EOF'
-127.0.0.1  api.ztlab.local grafana.ztlab.local keycloak.ztlab.local prometheus.ztlab.local
+127.0.0.1  api.ztlab.local portal.ztlab.local grafana.ztlab.local keycloak.ztlab.local prometheus.ztlab.local ai.ztlab.local soar.ztlab.local
 EOF
 ```
 
@@ -184,84 +213,184 @@ EOF
 
 ```bash
 curl -s -H "Host: api.ztlab.local" http://127.0.0.1:8080/health
-# {"status":"ok","service":"api-gateway","cloud":"aws"}
-
-curl -s http://127.0.0.1:8090/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['status'], d['provider'])"
-# ok openai
+curl -s -H "Host: portal.ztlab.local" http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8090/health | python3 -m json.tool
+curl -s http://127.0.0.1:8091/health | python3 -m json.tool
 ```
 
 ---
 
-## URLs sau khi mở tunnel
+## URL sau khi mở tunnel
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Grafana | http://grafana.ztlab.local:8080 | admin / ZTALab2026! |
-| Keycloak | http://keycloak.ztlab.local:8080 | admin / ztlab-admin-2026 |
-| API Gateway | http://api.ztlab.local:8080/health | — |
-| Prometheus | http://prometheus.ztlab.local:8080/targets | — |
-| AI Analyzer | http://127.0.0.1:8090/health | port-forward |
-| SOAR Engine | http://127.0.0.1:8091/cases | port-forward |
-| Loki | http://127.0.0.1:3100/ready | port-forward |
+| Thành phần | URL | Ghi chú |
+|---|---|---|
+| Web Portal | http://portal.ztlab.local:8080 | Đăng nhập, chuyển tiền, logs, alerts, scenarios |
+| API Gateway | http://api.ztlab.local:8080/health | API tài chính |
+| Grafana | http://grafana.ztlab.local:8080 | `admin / ZTALab2026!` |
+| Keycloak | http://keycloak.ztlab.local:8080 | `admin / ztlab-admin-2026` |
+| Prometheus | http://prometheus.ztlab.local:8080/targets | Monitoring |
+| AI Analyzer | http://127.0.0.1:8090/health | Port-forward |
+| SOAR Engine | http://127.0.0.1:8091/cases | Port-forward |
+| Loki | http://127.0.0.1:3100/ready | Port-forward |
+| TheHive | http://127.0.0.1:19000 | Port-forward |
+
+Tài khoản demo trong Keycloak:
+
+| User | Password | Role |
+|---|---|---|
+| `testuser01` | `Test1234!` | `financial-read`, `financial-write` |
+| `merchant01` | `Merchant1234!` | `financial-read` |
+| `analyst01` | `Analyst1234!` | `security-analyst` |
 
 ---
 
 ## Test payment flow
 
+Tạo token dev HS256:
+
 ```bash
 TOKEN=$(bash scripts/gen-dev-token.sh testuser01 financial-write 2>/dev/null | head -1)
-
-curl -s \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "Host: api.ztlab.local" \
-  -d '{"from_account":"acc001","to_account":"acc002","amount":100000,"currency":"VND"}' \
-  -X POST http://127.0.0.1:8080/payments | python3 -m json.tool
 ```
 
-Kết quả mong đợi: `status=completed`, `fraud.score=5`, `core_banking.status=completed`
+Gửi giao dịch qua API Gateway:
+
+```bash
+curl -s   -H "Authorization: Bearer $TOKEN"   -H "Content-Type: application/json"   -H "Host: api.ztlab.local"   -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":100000,"currency":"VND","channel":"api"}'   -X POST http://127.0.0.1:8080/payments | python3 -m json.tool
+```
+
+Kết quả mong đợi:
+
+```json
+{
+  "status": "completed",
+  "trace_id": "<uuid>",
+  "fraud": {
+    "score": 5,
+    "verdict": "allow",
+    "gate": "passed"
+  },
+  "core_banking": {
+    "status": "completed"
+  }
+}
+```
 
 ---
 
 ## Fraud scoring model
 
 | Yếu tố | Ngưỡng | Điểm |
-|--------|--------|------|
+|---|---|---|
 | Baseline | Luôn có | +5 |
-| Velocity cao | > 30 txn/60s | +40 |
-| Critical amount | ≥ 500M VND | +55 |
-| High amount | ≥ 100M VND | +30 |
-| Risky channel | tor / unknown / script | +15 |
-| Unusual country | Ngoài VN, SG, TH | +10 |
+| Velocity trung bình | Count > `FRAUD_VELOCITY_SOFT_LIMIT / 2` | +10 |
+| Velocity cao | Count > `FRAUD_VELOCITY_SOFT_LIMIT` | +25 |
+| Velocity rất cao | Count > `FRAUD_VELOCITY_SOFT_LIMIT * 3` | +40 |
+| High amount | `amount >= 100000000` | +30 |
+| Critical amount | `amount >= 500000000` | +55 |
+| Risky channel | `tor`, `unknown`, `script` | +15 |
+| Unusual country | Ngoài `VN`, `SG`, `TH` | +10 |
 
-`score < 40` → allow · `40–74` → review (passed) · `≥ 75` → **block**
+Kết quả:
+
+- `score < 40`: `allow`, gate `passed`
+- `40 <= score < 75`: `review`, gate `passed`
+- `score >= 75`: `block`, gate `blocked`
+
+Core Banking chỉ nhận `/transactions/execute` khi có `X-Fraud-Gate: passed` và `X-Fraud-Score < 75`; service này vẫn tự validate lại trong code để chống bypass.
+
+---
+
+## AI/SOAR/HITL flow
+
+```text
+Service/Envoy logs
+  -> Promtail
+  -> Loki
+  -> AI Analyzer
+  -> pending alert nếu severity high/critical
+  -> Grafana/Web Portal/TheHive
+  -> Admin approve
+  -> SOAR Engine
+  -> Kubernetes/Keycloak action
+  -> cases.jsonl + Loki audit
+```
+
+Playbook hiện có:
+
+| Playbook | Hành động |
+|---|---|
+| `isolate_workload` | Patch Service selector để ngắt traffic vào workload |
+| `restrict_egress` | Scale deployment xuống 0 cho tình huống exfiltration |
+| `quarantine_workload` | Scale deployment xuống 0 cho workload bị compromise |
+| `block_source_ip` | Tạo NetworkPolicy chặn source IP |
+| `revoke_user_sessions` | Revoke session user qua Keycloak Admin API |
+| `monitor_only` | Chỉ ghi nhận và giám sát |
 
 ---
 
 ## Attack scenarios
 
-Xem chi tiết tại [HUONG_DAN.md — Section 4](HUONG_DAN.md#4-demo-attack-scenarios-hành-vi-thật--log-thật):
+Repo hiện có bộ scenario từ `scenario_00` đến `scenario_20`.
 
-| Scenario | Kỹ thuật MITRE | Kết quả |
-|----------|----------------|---------|
-| Không có JWT | — | HTTP 403, OPA deny |
-| Brute force JWT sai | T1110.001 | HTTP 401×15, Alert Firing |
-| channel=tor + 500M VND | T1078 | HTTP 403, fraud.score=75 |
-| Vượt giới hạn 500M+ | — | HTTP 400, amount limit |
-| Velocity 35 txn/60s | T1496 | Block từ txn thứ 31 |
-| JWT sai secret | T1550.001 | HTTP 401, sig fail |
+| File | Nội dung |
+|---|---|
+| `scenario_00_full_suite.py` | Chạy full suite |
+| `scenario_01_brute_force.sh` | Brute force/JWT failure |
+| `scenario_02_jwt_forgery.py` | JWT forgery |
+| `scenario_03_lateral_movement.sh` | Lateral movement/SVID sai |
+| `scenario_04_fraud_gate_bypass.py` | Bypass fraud gate |
+| `scenario_05_high_velocity.py` | High-velocity transaction |
+| `scenario_06_exfiltration.py` | Data exfiltration/large response |
+| `scenario_07_svid_expiry.sh` | SPIRE/SVID expiry/impair identity |
+| `scenario_08_cross_cloud.sh` | Cross-cloud policy test |
+| `scenario_09_privesc.sh` | Privilege escalation |
+| `scenario_10_portscan.sh` | Port scan |
+| `scenario_11_cryptomining.sh` | Cryptomining |
+| `scenario_12_soar_response.sh` | SOAR response validation |
+| `scenario_13_sql_injection.sh` | SQL injection probe |
+| `scenario_14_command_injection.sh` | Command injection probe |
+| `scenario_15_account_manipulation.sh` | Account manipulation |
+| `scenario_16_credential_stuffing.sh` | Credential stuffing |
+| `scenario_17_impair_defenses.sh` | Impair defenses |
+| `scenario_18_container_escape.sh` | Container escape signal |
+| `scenario_19_data_staging.sh` | Data staging |
+| `scenario_20_replay_attack.sh` | Replay attack |
+
+Chạy full suite:
+
+```bash
+python3 tests/scenario_00_full_suite.py
+```
+
+Hoặc chạy demo script:
+
+```bash
+LOKI_URL=http://127.0.0.1:3100 bash scripts/run-demo.sh
+```
 
 ---
 
 ## Deploy từ đầu
 
 ```bash
-# Sau khi có hạ tầng + K3s sẵn trên cả hai cluster:
 export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml
-bash scripts/deploy-all.sh --skip-images
 
-# Nếu cần setup OpenStack cluster từ đầu:
-bash scripts/setup-os-cluster.sh
+# Mở tunnel nếu chưa có
+bash scripts/k8s-tunnel.sh up all
+
+# Deploy toàn bộ stack
+bash scripts/deploy-all.sh
+
+# Nếu image đã sync/build rồi
+bash scripts/deploy-all.sh --skip-images
+```
+
+Các option chính:
+
+```text
+--skip-images
+--skip-tunnel
+--skip-security-stack
 ```
 
 ---
@@ -280,5 +409,7 @@ ztlab_service_up{service, cloud}
 
 ## Tài liệu
 
-- [HUONG_DAN.md](HUONG_DAN.md) — Hướng dẫn vận hành, khởi động, troubleshooting, demo step-by-step
-- [BAOCAO.md](BAOCAO.md) — Báo cáo đồ án đầy đủ (tổng quan, thiết kế, triển khai, kết quả)
+- [BAOCAO_FLOW_HE_THONG.md](BAOCAO_FLOW_HE_THONG.md) — Flow hệ thống, gateway, input/output từng điểm
+- [BAOCAO.md](BAOCAO.md) — Báo cáo đồ án đầy đủ
+- [HUONG_DAN.md](HUONG_DAN.md) — Hướng dẫn vận hành, demo và troubleshooting
+- [MAP.md](MAP.md) — Bản đồ file và logic hệ thống
