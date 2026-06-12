@@ -159,6 +159,49 @@ async def create_payment(request: Request, body: PaymentRequest, authorization: 
     return response.json()
 
 
+@app.post("/accounts")
+async def create_account(request: Request, authorization: str | None = Header(default=None)):
+    source_ip = _source_ip(request)
+    _check_rate_limit(source_ip)
+    claims = _verify_token(authorization, source_ip)
+    _require_role(claims, "financial-write", source_ip)
+    body = await request.json()
+    # Enforce: new account must belong to the authenticated user
+    if body.get("owner") and body["owner"] != claims.get("preferred_username"):
+        raise HTTPException(status_code=403, detail="cannot create account for another user")
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(f"{PAYMENT_SERVICE_URL}/accounts", json=body)
+            if resp.status_code == 409:
+                raise HTTPException(status_code=409, detail="account_id already exists")
+            resp.raise_for_status()
+            return resp.json()
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="account service unavailable") from exc
+
+
+@app.get("/accounts")
+async def list_accounts(request: Request, authorization: str | None = Header(default=None)):
+    source_ip = _source_ip(request)
+    _check_rate_limit(source_ip)
+    claims = _verify_token(authorization, source_ip)
+    _require_role(claims, "financial-read", source_ip)
+    owner = claims.get("preferred_username", "")
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(f"{PAYMENT_SERVICE_URL}/accounts", params={"owner": owner})
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail="account service error") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="account service unavailable") from exc
+
+
 @app.get("/accounts/{account_id}")
 async def get_account(account_id: str, request: Request, authorization: str | None = Header(default=None)):
     source_ip = _source_ip(request)

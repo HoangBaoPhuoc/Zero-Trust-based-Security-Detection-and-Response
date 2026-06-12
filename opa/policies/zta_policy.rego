@@ -10,13 +10,19 @@ method := input.attributes.request.http.method
 path := input.attributes.request.http.path
 source_principal := object.get(object.get(input.attributes, "source", {}), "principal", object.get(object.get(input, "source", {}), "principal", ""))
 
+has_bearer_token if {
+  token := headers["authorization"]
+  startswith(token, "Bearer ")
+}
+
 allow if {
   public_path
 }
 
-# External users can enter only through the API Gateway business endpoint.
-# The API service performs Keycloak/JWKS or dev-token verification; OPA only gates
-# the edge path and prevents a bearer string from authorizing internal services.
+# External user requests are allowed only on edge API paths and only when a
+# bearer token is present. JWT signature, issuer, expiry, audience, and roles
+# are enforced by api-gateway with Keycloak JWKS; OPA must not authorize based
+# on decoded-but-unverified JWT claims.
 allow if {
   external_api_request
 }
@@ -42,6 +48,14 @@ public_path if {
 external_api_request if {
   method == "POST"
   path == "/payments"
+  has_bearer_token
+  not valid_svid
+}
+
+# Allow external users to create bank accounts via api-gateway with JWT
+external_api_request if {
+  method == "POST"
+  path == "/accounts"
   has_bearer_token
   not valid_svid
 }
@@ -86,11 +100,6 @@ core_transaction_with_fraud_gate if {
 
 valid_svid if {
   startswith(source_principal, "spiffe://ztlab.local/")
-}
-
-has_bearer_token if {
-  token := headers["authorization"]
-  startswith(token, "Bearer ")
 }
 
 fraud_gate_valid if {

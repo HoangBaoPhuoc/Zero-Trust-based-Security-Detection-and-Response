@@ -28,6 +28,7 @@ KEYCLOAK_ADMIN_PASS = os.getenv("KEYCLOAK_ADMIN_PASS", "")
 
 API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", "http://api-gateway.financial.svc.cluster.local:8080").rstrip("/")
 ACCOUNT_SERVICE_URL = os.getenv("ACCOUNT_SERVICE_URL", "http://account-service.financial.svc.cluster.local:8080").rstrip("/")
+PAYMENT_SERVICE_INTERNAL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service.financial.svc.cluster.local:8080").rstrip("/")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc.cluster.local:8080").rstrip("/")
 
@@ -177,6 +178,26 @@ async def _get_admin_token() -> str | None:
     return None
 
 
+async def _get_user_token(username: str, password: str) -> str | None:
+    """Get a Keycloak access token for a regular user. Returns access_token or None."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(
+                _token_url(),
+                data={
+                    "grant_type": "password",
+                    "client_id": KEYCLOAK_CLIENT_ID,
+                    "username": username,
+                    "password": password,
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json().get("access_token")
+        except Exception as exc:
+            logger.error(json.dumps({"event": "user_token_error", "error": str(exc)}))
+    return None
+
+
 async def _keycloak_create_user(
     admin_token: str,
     username: str,
@@ -244,42 +265,49 @@ async def _keycloak_create_user(
     return True, ""
 
 
-async def _create_bank_account(username: str) -> tuple[str, str]:
-    """Create a bank account in account-service. Returns (account_id, error)."""
+async def _create_bank_account(username: str, password: str) -> tuple[str, str]:
+    """Create a bank account via api-gateway (OpenStack chain). Returns (account_id, error)."""
+    user_token = await _get_user_token(username, password)
+    if not user_token:
+        return "", "Không lấy được token người dùng để tạo tài khoản"
+    headers = {"Authorization": f"Bearer {user_token}"}
     for _ in range(5):
         account_id = _gen_account_id()
         async with httpx.AsyncClient(timeout=10) as client:
             try:
                 resp = await client.post(
-                    f"{ACCOUNT_SERVICE_URL}/accounts",
+                    f"{API_GATEWAY_URL}/accounts",
                     json={
                         "account_id": account_id,
                         "owner": username,
                         "balance": INITIAL_BALANCE,
                         "currency": "VND",
                     },
+                    headers=headers,
                 )
-                if resp.status_code == 201:
+                if resp.status_code in (200, 201):
                     return account_id, ""
                 if resp.status_code == 409:
                     continue  # collision, retry with new ID
-                return "", f"account-service error {resp.status_code}: {resp.text[:100]}"
+                return "", f"api-gateway error {resp.status_code}: {resp.text[:100]}"
             except Exception as exc:
-                return "", f"account-service unavailable: {exc}"
+                return "", f"api-gateway unavailable: {exc}"
     return "", "Không thể tạo tài khoản ngân hàng (collision)"
 
 
-async def _lookup_account(username: str) -> str:
-    """Look up the first bank account for this user. Returns account_id or empty string."""
+async def _lookup_account(username: str, access_token: str = "") -> str:
+    """Look up the first bank account via api-gateway (requires user JWT)."""
+    if not access_token:
+        return ""
     async with httpx.AsyncClient(timeout=8) as client:
         try:
             resp = await client.get(
-                f"{ACCOUNT_SERVICE_URL}/accounts",
-                params={"owner": username},
+                f"{API_GATEWAY_URL}/accounts",
+                headers={"Authorization": f"Bearer {access_token}"},
             )
             if resp.status_code == 200:
                 accounts = resp.json()
-                if accounts:
+                if isinstance(accounts, list) and accounts:
                     return accounts[0]["account_id"]
         except Exception:
             pass
@@ -353,8 +381,8 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
     realm_roles = claims.get("realm_access", {}).get("roles", [])
     full_name = " ".join(filter(None, [claims.get("given_name", ""), claims.get("family_name", "")])) or preferred_username
 
-    # Dynamically look up bank account
-    account_id = await _lookup_account(preferred_username)
+    # Dynamically look up bank account via api-gateway (OpenStack chain)
+    account_id = await _lookup_account(preferred_username, access_token)
 
     # Invalidate any previous sessions for this user before creating a new one
     stale = [sid for sid, rec in list(_sessions.items())
@@ -468,8 +496,8 @@ async def do_register(
         from urllib.parse import quote
         return RedirectResponse(f"/register?error={quote(err)}", status_code=302)
 
-    # Create bank account
-    account_id, acc_err = await _create_bank_account(username)
+    # Create bank account in OpenStack via api-gateway (requires user JWT)
+    account_id, acc_err = await _create_bank_account(username, password)
     if acc_err:
         logger.error(json.dumps({"event": "account_create_failed", "username": username, "error": acc_err}))
 
@@ -636,9 +664,13 @@ async def get_my_account(request: Request):
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     username = session.get("username", "")
+    access_token = session.get("access_token", "")
     async with httpx.AsyncClient(timeout=8) as client:
         try:
-            resp = await client.get(f"{ACCOUNT_SERVICE_URL}/accounts", params={"owner": username})
+            resp = await client.get(
+                f"{API_GATEWAY_URL}/accounts",
+                headers={"Authorization": f"Bearer {access_token}"} if access_token else {},
+            )
             if resp.status_code == 200:
                 accounts = resp.json()
                 return JSONResponse({"accounts": accounts, "username": username})

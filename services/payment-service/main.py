@@ -93,6 +93,38 @@ async def process_payment(req: Request, body: PaymentRequest):
         return {"status": "completed", "trace_id": trace_id, "fraud": fraud, "core_banking": result}
 
 
+@app.post("/accounts")
+async def proxy_create_account(request: Request):
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.post(f"{CORE_BANKING_URL}/accounts", json=body)
+            if resp.status_code == 409:
+                raise HTTPException(status_code=409, detail="account_id already exists")
+            resp.raise_for_status()
+            return resp.json()
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="core banking unavailable") from exc
+
+
+@app.get("/accounts")
+async def proxy_list_accounts(owner: str = ""):
+    params = {"owner": owner} if owner else {}
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.get(f"{CORE_BANKING_URL}/accounts", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="core banking unavailable") from exc
+
+
 @app.get("/accounts/{account_id}")
 async def proxy_get_account(account_id: str):
     async with httpx.AsyncClient(timeout=5) as client:
