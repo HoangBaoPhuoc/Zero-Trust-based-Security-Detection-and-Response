@@ -79,7 +79,7 @@ AI Analyzer — poll Loki mỗi 120s bằng LogQL
 Grafana rule "ai-pending-approval-alert"
      │ Condition: {pending_approval="true"} trong 2 phút > 0
      │ → fire → Contact Point "ztlab-security-admin"
-     │          (Email / Slack / Telegram / Webhook — cấu hình trong UI)
+     │          (Webhook: POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/grafana-webhook)
      ▼
 Admin xem Web Portal /alerts
      │ approve  → AI tạo TheHive case → gọi SOAR
@@ -93,6 +93,24 @@ SOAR Engine
 Audit trail → /data/cases.jsonl + Loki
 ```
 
+### OPA — Kiểm tra JWT
+
+OPA xác thực mỗi request tại Envoy sidecar theo 3 lớp:
+
+1. **JWT hợp lệ** — `io.jwt.decode(bearer_token)` thành công
+2. **Issuer đúng** — `jwt_payload.iss == "http://keycloak.ztlab.local/realms/ztlab"`
+3. **Chưa hết hạn** — `jwt_payload.exp > time.now_ns() / 1e9`
+4. **Role có quyền** — `jwt_payload.realm_access.roles` chứa role phù hợp method HTTP
+
+Role → method được phép:
+
+| Role | GET | POST | PUT | DELETE |
+|------|-----|------|-----|--------|
+| `financial-read` | ✓ | — | — | — |
+| `financial-write` | ✓ | ✓ | ✓ | — |
+| `security-analyst` | ✓ | — | — | — |
+| `security-admin` | ✓ | ✓ | ✓ | ✓ |
+
 ### Credentials
 
 | Dịch vụ | User | Password |
@@ -102,6 +120,7 @@ Audit trail → /data/cases.jsonl + Loki
 | TheHive Admin | admin@thehive.local | secret |
 | TheHive AI user | ai-soar2@ztlab.local | API key trong secret `ai-secrets` |
 | testuser01 (ACC-1001) | testuser01 | Test1234! |
+| testuser02 | testuser02 | Test1234! |
 | merchant01 (ACC-2001) | merchant01 | Merchant1234! |
 | analyst01 | analyst01 | Analyst1234! |
 
@@ -300,7 +319,7 @@ Pod không Running → xem [Phần 4 Xử lý sự cố](#phần-4--xử-lý-s�
 ### Bước 5 — Kiểm tra cross-cloud mTLS (bắt buộc)
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:18443/realms/ztlab/protocol/openid-connect/token \
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234!" \
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token','ERROR'))")
 
@@ -524,7 +543,7 @@ kubectl --context ctx-openstack rollout restart deployment/transaction-service -
 kubectl --context ctx-aws rollout restart deployment/keycloak -n identity
 kubectl --context ctx-aws rollout status deployment/keycloak -n identity --timeout=120s
 # Keycloak khởi động lâu (~60s)
-curl -sf http://localhost:18443/realms/ztlab/.well-known/openid-configuration \
+curl -sf http://localhost:8180/realms/ztlab/.well-known/openid-configuration \
   | python3 -c "import json,sys; print('issuer:', json.load(sys.stdin)['issuer'])"
 ```
 
@@ -593,7 +612,7 @@ kubectl --context ctx-openstack rollout status deployment/opa-server -n financia
 ### Sự cố: Keycloak trả về issuer sai
 
 ```bash
-curl -s http://localhost:18443/realms/ztlab/.well-known/openid-configuration \
+curl -s http://localhost:8180/realms/ztlab/.well-known/openid-configuration \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['issuer'])"
 # Phải là: http://keycloak.ztlab.local/realms/ztlab
 
@@ -740,7 +759,7 @@ kubectl --context ctx-aws rollout restart deployment/<name> -n <ns>
 
 > **Chuẩn bị:** Bước 1–5 (Phần 1) phải hoàn tất. Lấy TOKEN một lần dùng cho mọi demo:
 > ```bash
-> TOKEN=$(curl -s -X POST http://localhost:18443/realms/ztlab/protocol/openid-connect/token \
+> TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
 >   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234!" \
 >   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token','ERR'))")
 > ```
@@ -797,7 +816,7 @@ kubectl --context ctx-aws logs -n financial -l app=opa-server --since=1m \
 ```bash
 for i in $(seq 1 20); do
   code=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST http://localhost:18443/realms/ztlab/protocol/openid-connect/token \
+    -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
     -d "grant_type=password&client_id=web-portal&username=admin&password=wrong$i")
   printf "attempt %-2s → %s\n" "$i" "$code"
 done
@@ -1072,7 +1091,7 @@ blocked=0
 for user in admin operator superuser root banking_admin test; do
   for pass in "Password123" "Admin@2024" "P@ssw0rd"; do
     code=$(curl -s -o /dev/null -w "%{http_code}" \
-      -X POST http://localhost:18443/realms/ztlab/protocol/openid-connect/token \
+      -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
       -d "grant_type=password&client_id=web-portal&username=$user&password=$pass")
     [[ "$code" =~ ^(400|401)$ ]] && blocked=$((blocked+1))
   done
@@ -1525,7 +1544,7 @@ for c in cases[-5:]: print(c['case_id'][:16], c['status'], c.get('playbook'))
 ```bash
 # Lấy token testuser01 — dùng cho tất cả flows bên dưới
 TOKEN=$(curl -s -X POST \
-  http://localhost:18443/realms/ztlab/protocol/openid-connect/token \
+  http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234!" \
   | python3 -c "import sys,json; t=json.load(sys.stdin); print(t.get('access_token','ERROR'))")
@@ -1976,7 +1995,7 @@ echo "Flow 4 hoàn tất ✓"
 echo "=== BƯỚC 1: Tạo session cho testuser01 ==="
 # Lấy token testuser01 (tạo session)
 TOKEN2=$(curl -s -X POST \
-  http://localhost:18443/realms/ztlab/protocol/openid-connect/token \
+  http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234!" \
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token','ERROR'))")

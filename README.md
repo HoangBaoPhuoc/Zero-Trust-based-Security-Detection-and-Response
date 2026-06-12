@@ -77,13 +77,13 @@ Chi tiết input/output từng điểm được mô tả trong [BAOCAO_FLOW_HE_T
 | Tầng | Công nghệ | Vai trò |
 |---|---|---|
 | Định danh workload | SPIFFE/SPIRE | Cấp X.509 SVID cho workload, trust domain `ztlab.local` |
-| Kiểm soát truy cập | OPA + Envoy ext_authz | Policy-as-code, chặn request tại sidecar trước khi vào app |
-| Xác thực người dùng | Keycloak OIDC | JWT RS256, role `financial-read`, `financial-write`, `security-analyst` |
+| Kiểm soát truy cập | OPA + Envoy ext_authz | Policy-as-code: verify JWT issuer + expiry + realm role, chặn request tại sidecar |
+| Xác thực người dùng | Keycloak OIDC | JWT RS256, issuer `keycloak.ztlab.local/realms/ztlab`, roles `financial-read/write`, `security-analyst/admin` |
 | mTLS | Envoy + SPIRE SDS | Mã hóa và xác thực service-to-service |
 | Network segmentation | Kubernetes NetworkPolicy | Giới hạn đường đi AWS -> OpenStack và traffic nội bộ namespace |
 | SIEM | Promtail + Loki + Grafana | Log tập trung từ cả hai cloud |
 | AI Detection | OpenAI/Gemini/Heuristic | Phân loại log, suy luận attack type, đề xuất playbook |
-| HITL | Web Portal + Grafana alert | High/critical alert cần admin approve trước SOAR |
+| HITL | Grafana alert → AI Analyzer webhook → Web Portal | Severity ≥ high tạo PendingAlert, Grafana POST `/grafana-webhook`, admin approve/reject trước khi SOAR chạy |
 | SOAR | FastAPI + Kubernetes SDK | `isolate_workload`, `restrict_egress`, `quarantine_workload`, `block_source_ip`, `revoke_user_sessions` |
 | Case management | TheHive | Tạo alert/case điều tra sự cố |
 
@@ -95,7 +95,7 @@ Chi tiết input/output từng điểm được mô tả trong [BAOCAO_FLOW_HE_T
 
 | Node | IP | Vai trò |
 |---|---|---|
-| bastion | `54.254.145.86` | SSH jump host |
+| bastion | `54.254.252.106` | SSH jump host — EIP tĩnh |
 | aws-master | `10.10.1.10` | K3s control plane, Traefik ingress |
 | aws-worker-1 | `10.10.1.11` | K3s worker, Loki relay/proxy |
 
@@ -189,7 +189,7 @@ kubectl --context ctx-openstack get nodes
 Chạy ở terminal riêng và để lệnh này giữ kết nối:
 
 ```bash
-ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no   -L 8080:10.10.1.10:80 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10
+ssh -N -i ~/.ssh/zta-siem-soar-key -o StrictHostKeyChecking=no   -L 18080:10.10.1.10:80 -J ubuntu@54.254.252.106 ubuntu@10.10.1.10
 ```
 
 ### 3. Mở port-forward cho API nội bộ cần debug
@@ -212,8 +212,8 @@ EOF
 ### 5. Kiểm tra sức khỏe
 
 ```bash
-curl -s -H "Host: api.ztlab.local" http://127.0.0.1:8080/health
-curl -s -H "Host: portal.ztlab.local" http://127.0.0.1:8080/health
+curl -s -H "Host: api.ztlab.local" http://127.0.0.1:18080/health
+curl -s -H "Host: portal.ztlab.local" http://127.0.0.1:18080/health
 curl -s http://127.0.0.1:8090/health | python3 -m json.tool
 curl -s http://127.0.0.1:8091/health | python3 -m json.tool
 ```
@@ -224,11 +224,11 @@ curl -s http://127.0.0.1:8091/health | python3 -m json.tool
 
 | Thành phần | URL | Ghi chú |
 |---|---|---|
-| Web Portal | http://portal.ztlab.local:8080 | Đăng nhập, chuyển tiền, logs, alerts, scenarios |
-| API Gateway | http://api.ztlab.local:8080/health | API tài chính |
-| Grafana | http://grafana.ztlab.local:8080 | `admin / ZTALab2026!` |
-| Keycloak | http://keycloak.ztlab.local:8080 | `admin / ztlab-admin-2026` |
-| Prometheus | http://prometheus.ztlab.local:8080/targets | Monitoring |
+| Web Portal | http://portal.ztlab.local:18080 | Đăng nhập, chuyển tiền, logs, alerts, scenarios |
+| API Gateway | http://api.ztlab.local:18080/health | API tài chính |
+| Grafana | http://grafana.ztlab.local:18080 | `admin / ZTALab2026!` |
+| Keycloak | http://keycloak.ztlab.local:18080 | `admin / ztlab-admin-2026` |
+| Prometheus | http://prometheus.ztlab.local:18080/targets | Monitoring |
 | AI Analyzer | http://127.0.0.1:8090/health | Port-forward |
 | SOAR Engine | http://127.0.0.1:8091/cases | Port-forward |
 | Loki | http://127.0.0.1:3100/ready | Port-forward |
@@ -239,6 +239,7 @@ Tài khoản demo trong Keycloak:
 | User | Password | Role |
 |---|---|---|
 | `testuser01` | `Test1234!` | `financial-read`, `financial-write` |
+| `testuser02` | `Test1234!` | `financial-read`, `financial-write` |
 | `merchant01` | `Merchant1234!` | `financial-read` |
 | `analyst01` | `Analyst1234!` | `security-analyst` |
 
@@ -306,13 +307,15 @@ Core Banking chỉ nhận `/transactions/execute` khi có `X-Fraud-Gate: passed`
 Service/Envoy logs
   -> Promtail
   -> Loki
-  -> AI Analyzer
-  -> pending alert nếu severity high/critical
-  -> Grafana/Web Portal/TheHive
-  -> Admin approve
-  -> SOAR Engine
+  -> AI Analyzer (poll mỗi 120s, lookback 300s)
+  -> Nếu severity >= high: tạo PendingAlert, push log pending_approval=true lên Loki
+  -> Grafana alert rule detect log pending_approval=true
+  -> Grafana Contact Point "ztlab-security-admin" POST /grafana-webhook trên AI Analyzer
+  -> Admin nhận thông báo, review tại Web Portal (GET /pending)
+  -> Admin approve: POST /approve/{alert_id}
+  -> SOAR Engine thực thi playbook (isolate/restrict/quarantine/block/revoke)
   -> Kubernetes/Keycloak action
-  -> cases.jsonl + Loki audit
+  -> cases.jsonl + Loki audit log
 ```
 
 Playbook hiện có:
