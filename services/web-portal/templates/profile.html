@@ -106,6 +106,11 @@
 <script>
 const loginAt = {{ logged_in_at | int }};
 
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+}
+
 // Show login time
 document.getElementById('login-time').textContent =
   new Date(loginAt * 1000).toLocaleString('vi-VN');
@@ -142,9 +147,9 @@ async function loadAccounts() {
     const tbody = document.getElementById('accounts-body');
     tbody.innerHTML = accounts.map(a => `
       <tr>
-        <td><code style="font-family:monospace;font-size:13px">${a.account_id}</code></td>
+        <td><code style="font-family:monospace;font-size:13px">${esc(a.account_id)}</code></td>
         <td style="font-weight:600;color:var(--green)">${parseFloat(a.balance).toLocaleString('vi-VN')} ₫</td>
-        <td>${a.currency}</td>
+        <td>${esc(a.currency)}</td>
       </tr>
     `).join('');
   } catch(e) {

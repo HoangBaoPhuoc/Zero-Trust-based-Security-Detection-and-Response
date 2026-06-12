@@ -38,6 +38,7 @@ SESSION_MAX_AGE = 3600
 INITIAL_BALANCE = float(os.getenv("INITIAL_BALANCE", "10000000"))  # 10 triệu VND
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
 REGISTER_LIMIT_PER_HOUR = int(os.getenv("REGISTER_LIMIT_PER_HOUR", "5"))
+ENABLE_SCENARIOS = os.getenv("ENABLE_SCENARIOS", "true").lower() == "true"  # disable in prod
 
 _register_attempts: dict[str, deque] = defaultdict(deque)
 _sessions: dict[str, dict[str, Any]] = {}
@@ -48,6 +49,19 @@ logger = logging.getLogger(SERVICE)
 app = FastAPI(title="ZTLab Web Portal")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    if HTTPS_ENABLED:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 _signer = URLSafeTimedSerializer(SESSION_SECRET)
 
@@ -194,10 +208,11 @@ async def _keycloak_create_user(
             },
         )
         if resp.status_code == 409:
-            return False, "Tên đăng nhập hoặc email đã tồn tại"
+            # Generic message — prevents username/email enumeration
+            return False, "Đăng ký không thành công. Thông tin đã được sử dụng hoặc không hợp lệ."
         if resp.status_code not in (201, 200):
-            err = resp.json().get("errorMessage", resp.text[:200])
-            return False, f"Không thể tạo tài khoản Keycloak: {err}"
+            logger.warning(json.dumps({"event": "keycloak_create_user_failed", "status": resp.status_code}))
+            return False, "Không thể tạo tài khoản. Vui lòng thử lại sau."
 
         # Fetch the user ID
         search = await client.get(
@@ -324,9 +339,9 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
                 },
             )
             if resp.status_code != 200:
-                err_data = resp.json()
-                err_msg = err_data.get("error_description", err_data.get("error", "Sai tên đăng nhập hoặc mật khẩu"))
-                return RedirectResponse(f"/login?error={err_msg}", status_code=302)
+                # Generic message — prevents credential/account enumeration
+                logger.warning(json.dumps({"event": "login_failed", "status": resp.status_code}))
+                return RedirectResponse("/login?error=Sai+tên+đăng+nhập+hoặc+mật+khẩu", status_code=302)
             token_data = resp.json()
         except Exception as exc:
             logger.error(json.dumps({"event": "keycloak_error", "error": str(exc)}))
@@ -340,6 +355,12 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
 
     # Dynamically look up bank account
     account_id = await _lookup_account(preferred_username)
+
+    # Invalidate any previous sessions for this user before creating a new one
+    stale = [sid for sid, rec in list(_sessions.items())
+             if rec.get("data", {}).get("username") == preferred_username]
+    for sid in stale:
+        _sessions.pop(sid, None)
 
     session_data = {
         "username": preferred_username,
@@ -419,14 +440,21 @@ async def do_register(
         return RedirectResponse("/register?error=Quá+nhiều+yêu+cầu+đăng+ký.+Thử+lại+sau+1+giờ.", status_code=302)
 
     # Validate
+    import re as _re
     username = username.strip().lower()
-    if len(username) < 3:
-        return RedirectResponse("/register?error=Tên+đăng+nhập+phải+có+ít+nhất+3+ký+tự", status_code=302)
-    if len(password) < 8:
-        return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+8+ký+tự", status_code=302)
+    if len(username) < 3 or not _re.match(r'^[a-z0-9_\-\.]+$', username):
+        return RedirectResponse("/register?error=Tên+đăng+nhập+phải+có+ít+nhất+3+ký+tự+và+chỉ+gồm+chữ+thường,+số,+dấu+gạch+dưới", status_code=302)
+    if len(password) < 12:
+        return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+12+ký+tự", status_code=302)
+    if not _re.search(r'[A-Z]', password):
+        return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+1+chữ+hoa", status_code=302)
+    if not _re.search(r'[0-9]', password):
+        return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+1+chữ+số", status_code=302)
+    if not _re.search(r'[^A-Za-z0-9]', password):
+        return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+1+ký+tự+đặc+biệt", status_code=302)
     if password != confirm_password:
         return RedirectResponse("/register?error=Mật+khẩu+xác+nhận+không+khớp", status_code=302)
-    if not email or "@" not in email:
+    if not email or "@" not in email or "." not in email.split("@")[-1]:
         return RedirectResponse("/register?error=Email+không+hợp+lệ", status_code=302)
 
     # Get admin token
@@ -542,6 +570,13 @@ async def get_balance(account_id: str, request: Request):
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
+    # IDOR protection: only allow querying the session's own account
+    if account_id != session.get("account_id", ""):
+        logger.warning(json.dumps({
+            "event": "idor_attempt", "endpoint": "/api/balance",
+            "requested": account_id, "user": session.get("username"),
+        }))
+        return JSONResponse({"error": "access denied"}, status_code=403)
     access_token = session.get("access_token", "")
     async with httpx.AsyncClient(timeout=10) as client:
         try:
@@ -729,6 +764,8 @@ async def dismiss_alert(alert_id: str, request: Request):
 
 @app.get("/scenarios", response_class=HTMLResponse)
 async def scenarios_page(request: Request):
+    if not ENABLE_SCENARIOS:
+        raise HTTPException(status_code=404, detail="not found")
     session = _get_session(request)
     if not session:
         return RedirectResponse("/login", status_code=302)
@@ -791,6 +828,8 @@ def _now_iso() -> str:
 
 @app.post("/api/scenarios/{scenario_id}/run")
 async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
+    if not ENABLE_SCENARIOS:
+        raise HTTPException(status_code=404, detail="not found")
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
