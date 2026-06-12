@@ -52,18 +52,7 @@ services:
     environment:
       LOKI_URL: ${LOKI_URL:-http://127.0.0.1:3100}
       SOAR_WEBHOOK_URL: ${SOAR_WEBHOOK_URL:-http://127.0.0.1:8091/alerts}
-      AI_PROVIDER: ${AI_PROVIDER:-heuristic}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
-      AI_ANALYZER_POLL_ENABLED: ${AI_ANALYZER_POLL_ENABLED:-true}
-      AI_ANALYZER_POLL_INTERVAL_SECONDS: ${AI_ANALYZER_POLL_INTERVAL_SECONDS:-30}
-      AI_ANALYZER_LOOKBACK_SECONDS: ${AI_ANALYZER_LOOKBACK_SECONDS:-90}
-      AI_ANALYZER_MAX_LOGS_PER_BATCH: ${AI_ANALYZER_MAX_LOGS_PER_BATCH:-25}
-      AI_ANALYZER_MIN_ALERT_SEVERITY: ${AI_ANALYZER_MIN_ALERT_SEVERITY:-medium}
       AI_ANALYZER_LOKI_QUERY: ${AI_ANALYZER_LOKI_QUERY:-{job=~"kubernetes-pods|envoy-access|opa-decisions|system|demo-raw"}}
-      SOAR_API_TOKEN: ${SOAR_API_TOKEN:-}
     restart: unless-stopped
 
   soar-engine:
@@ -82,14 +71,6 @@ services:
         required: false
     environment:
       LOKI_URL: ${LOKI_URL:-http://127.0.0.1:3100}
-      SOAR_DRY_RUN: ${SOAR_DRY_RUN:-true}
-      SOAR_AUTO_EXECUTE: ${SOAR_AUTO_EXECUTE:-true}
-      SOAR_MIN_SEVERITY: ${SOAR_MIN_SEVERITY:-high}
-      SOAR_MIN_CONFIDENCE: ${SOAR_MIN_CONFIDENCE:-0.70}
-      SOAR_NAMESPACE: ${SOAR_NAMESPACE:-financial}
-      SOAR_ALLOWED_CONTEXTS: ${SOAR_ALLOWED_CONTEXTS:-ctx-aws,ctx-openstack}
-      SOAR_API_TOKEN: ${SOAR_API_TOKEN:-}
-      SOAR_CASE_STORE_PATH: ${SOAR_CASE_STORE_PATH:-/data/cases.jsonl}
     volumes:
       - ${HOME}/.kube:/root/.kube:ro
       - soar-data:/data

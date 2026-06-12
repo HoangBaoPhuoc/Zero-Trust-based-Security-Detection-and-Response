@@ -194,10 +194,15 @@ def _attack_tokens(attack_type: str) -> list[str]:
 
 
 def _first_known_attack(alert: SecurityAlert) -> str:
-    for token in _attack_tokens(alert.attack_type):
-        if token in PLAYBOOK_BY_ATTACK:
-            return token
-    return "unknown"
+    tokens = [t for t in _attack_tokens(alert.attack_type) if t in PLAYBOOK_BY_ATTACK]
+    if not tokens:
+        return "unknown"
+    # Prefer the token whose playbook matches AI's recommended_playbook
+    if alert.recommended_playbook:
+        for token in tokens:
+            if PLAYBOOK_BY_ATTACK.get(token) == alert.recommended_playbook:
+                return token
+    return tokens[0]
 
 
 def _infer_target(alert: SecurityAlert, attack: str) -> dict[str, str | None]:
@@ -211,6 +216,9 @@ def _infer_target(alert: SecurityAlert, attack: str) -> dict[str, str | None]:
 
 
 def _select_playbook(alert: SecurityAlert, attack: str) -> str:
+    # AI recommended_playbook takes priority — it has full log context
+    if alert.recommended_playbook in ALLOWED_PLAYBOOKS and alert.recommended_playbook != "monitor_only":
+        return alert.recommended_playbook
     if attack in PLAYBOOK_BY_ATTACK:
         return PLAYBOOK_BY_ATTACK[attack]
     if alert.recommended_playbook in ALLOWED_PLAYBOOKS:
@@ -758,10 +766,13 @@ async def rollback_case(case_id: str, authorization: str | None = Header(default
     case = CASES.get(case_id)
     if not case:
         raise HTTPException(status_code=404, detail="case not found")
-    if case.status not in {"executed", "rollback_failed"}:
+    if case.status not in {"executed", "dry_run", "rollback_failed"}:
         raise HTTPException(status_code=409, detail=f"case status {case.status} is not rollbackable")
     try:
-        action = rollback_playbook(case)
+        if case.dry_run:
+            action = f"dry_run: would rollback {case.playbook} on {case.target_context}/{SOAR_NAMESPACE}/{case.target_workload or case.source_ip}"
+        else:
+            action = rollback_playbook(case)
         rollback = case.model_copy(update={"status": "rolled_back", "action": action, "error": None, "ts": _now_iso()})
     except Exception as exc:
         rollback = case.model_copy(update={"status": "rollback_failed", "action": "rollback failed", "error": str(exc), "ts": _now_iso()})

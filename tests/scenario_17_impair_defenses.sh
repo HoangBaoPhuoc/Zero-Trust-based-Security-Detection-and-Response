@@ -6,8 +6,8 @@
 set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
-AI_URL="${AI_URL:-http://localhost:18082}"
-LOKI_URL="${LOKI_URL:-http://localhost:13100}"
+AI_URL="${AI_URL:-http://localhost:8090}"
+LOKI_URL="${LOKI_URL:-http://localhost:3100}"
 GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
 SCENARIO="scenario_17_impair_defenses"
 
@@ -37,7 +37,8 @@ log "attempting Loki push without auth..."
 code=$(curl -s -o /dev/null -w "%{http_code}" \
   -X POST "$LOKI_URL/loki/api/v1/push" \
   -H "Content-Type: application/json" \
-  -d '{"streams":[{"stream":{"job":"attacker"},"values":[["'"$(date +%s%N)"'","impair_defenses_test"]]}]}')
+  -d '{"streams":[{"stream":{"job":"attacker"},"values":[["'"$(date +%s%N)"'","impair_defenses_test"]]}]}' \
+  2>/dev/null || echo "000")
 log "Loki push → HTTP $code"
 [[ "$code" =~ ^(401|403|204|200)$ ]] && protected=$((protected + 1)) \
   || log "NOTE: Loki may be open for push (expected in lab — restrict in prod)"
