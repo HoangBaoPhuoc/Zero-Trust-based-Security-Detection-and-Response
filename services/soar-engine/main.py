@@ -20,7 +20,7 @@ AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak.identity.svc.cluster.local:8080").rstrip("/")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ztlab")
 KEYCLOAK_ADMIN_USER = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
-KEYCLOAK_ADMIN_PASSWORD = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "ztlab-admin-2026")
+KEYCLOAK_ADMIN_PASSWORD = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "")
 SOAR_DRY_RUN = os.getenv("SOAR_DRY_RUN", "true").lower() == "true"
 SOAR_AUTO_EXECUTE = os.getenv("SOAR_AUTO_EXECUTE", "true").lower() == "true"
 SOAR_MIN_SEVERITY = os.getenv("SOAR_MIN_SEVERITY", "high").lower()
@@ -147,7 +147,7 @@ CASES: dict[str, CaseRecord] = {}
 
 def require_soar_token(authorization: str | None) -> None:
     if not SOAR_API_TOKEN:
-        return
+        raise HTTPException(status_code=503, detail="SOAR API token not configured")
     expected = f"Bearer {SOAR_API_TOKEN}"
     if authorization != expected:
         raise HTTPException(status_code=401, detail="invalid SOAR API token")
@@ -425,6 +425,8 @@ def _unblock_source_ip(context: str, source_ip: str) -> str:
 # ── Playbook: revoke_user_sessions ───────────────────────────────────────────
 
 async def _get_keycloak_admin_token() -> str:
+    if not KEYCLOAK_ADMIN_PASSWORD:
+        raise RuntimeError("KEYCLOAK_ADMIN_PASSWORD is not configured")
     async with httpx.AsyncClient(timeout=10) as h:
         resp = await h.post(
             f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token",

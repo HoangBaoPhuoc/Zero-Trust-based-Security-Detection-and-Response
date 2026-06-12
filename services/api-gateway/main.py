@@ -17,11 +17,12 @@ from shared.metrics import AUTH_FAILURES, SERVICE_UP
 SERVICE = "api-gateway"
 CLOUD = "aws"
 PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8080").rstrip("/")
-JWT_SECRET = os.getenv("JWT_DEV_SECRET", "ztlab-dev-secret")
+JWT_SECRET = os.getenv("JWT_DEV_SECRET", "")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "")
 JWT_ISSUER = os.getenv("JWT_ISSUER", "http://keycloak.ztlab.local/realms/ztlab")
 JWKS_URL = os.getenv("JWKS_URL", "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs")
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+ALLOW_DEV_TOKENS = os.getenv("ALLOW_DEV_TOKENS", "false").lower() == "true"
 
 app = FastAPI(title="ZTLab API Gateway")
 app.add_middleware(trace_middleware(SERVICE, CLOUD))
@@ -56,9 +57,7 @@ class PaymentRequest(BaseModel):
 
 
 def _source_ip(request: Request) -> str:
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
+    # Use TCP-level peer address — not X-Forwarded-For, which is user-controllable
     return request.client.host if request.client else "unknown"
 
 
@@ -81,6 +80,18 @@ def _require_role(claims: dict, role: str, source_ip: str) -> None:
         raise HTTPException(status_code=403, detail=f"role '{role}' required")
 
 
+def _decode_jwt(token: str, key, algorithms: list[str]) -> dict:
+    kwargs = {
+        "algorithms": algorithms,
+        "issuer": JWT_ISSUER,
+    }
+    if JWT_AUDIENCE:
+        kwargs["audience"] = JWT_AUDIENCE
+    else:
+        kwargs["options"] = {"verify_aud": False}
+    return jwt.decode(token, key, **kwargs)
+
+
 def _verify_token(authorization: str | None, source_ip: str) -> dict:
     if not authorization or not authorization.startswith("Bearer "):
         AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="missing_bearer").inc()
@@ -88,30 +99,32 @@ def _verify_token(authorization: str | None, source_ip: str) -> dict:
         raise HTTPException(status_code=401, detail="missing bearer token")
     token = authorization.removeprefix("Bearer ").strip()
 
-    # Try RS256 via Keycloak JWKS first
+    # RS256 via Keycloak JWKS (primary path)
     if _jwks_keys:
         for key in _jwks_keys:
             try:
-                claims = jwt.decode(
-                    token,
-                    key,
-                    algorithms=["RS256"],
-                    issuer=JWT_ISSUER,
-                    options={"verify_aud": False},
-                )
+                claims = _decode_jwt(token, key, ["RS256"])
                 return claims
             except JWTError:
                 continue
+        # JWKS keys are loaded — token is invalid, do NOT fall back to HS256
+        AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="invalid_jwt").inc()
+        logger.warn("jwt_verification_failed", reason="invalid_rs256", source_ip=source_ip)
+        raise HTTPException(status_code=401, detail="invalid token")
 
-    # Fallback: HS256 dev token
+    if not ALLOW_DEV_TOKENS:
+        AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="jwks_unavailable").inc()
+        logger.warn("jwt_verification_failed", reason="jwks_unavailable_fail_closed", source_ip=source_ip)
+        raise HTTPException(status_code=503, detail="token verifier unavailable")
+
+    if not JWT_SECRET:
+        AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="dev_secret_missing").inc()
+        logger.warn("jwt_verification_failed", reason="dev_secret_missing", source_ip=source_ip)
+        raise HTTPException(status_code=503, detail="dev token verifier unavailable")
+
+    # HS256 dev token is opt-in only. Do not enable this in production.
     try:
-        return jwt.decode(
-            token,
-            JWT_SECRET,
-            algorithms=["HS256"],
-            issuer=JWT_ISSUER,
-            options={"verify_aud": False},
-        )
+        return _decode_jwt(token, JWT_SECRET, ["HS256"])
     except JWTError as exc:
         AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="invalid_jwt").inc()
         logger.warn("jwt_verification_failed", reason="invalid_jwt", source_ip=source_ip, error=str(exc))
@@ -139,7 +152,7 @@ async def create_payment(request: Request, body: PaymentRequest, authorization: 
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+            raise HTTPException(status_code=exc.response.status_code, detail="upstream payment service error") from exc
         except Exception as exc:
             logger.error("payment_route_failed", trace_id=trace_id, error=str(exc))
             raise HTTPException(status_code=503, detail="payment service unavailable") from exc
@@ -156,9 +169,18 @@ async def get_account(account_id: str, request: Request, authorization: str | No
         try:
             resp = await client.get(f"{PAYMENT_SERVICE_URL}/accounts/{account_id}")
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            # IDOR check: account must belong to the authenticated user
+            if data.get("owner") != claims.get("preferred_username"):
+                AUTH_FAILURES.labels(service=SERVICE, cloud=CLOUD, reason="idor_attempt").inc()
+                logger.warn("idor_attempt", account_id=account_id,
+                            user=claims.get("preferred_username"), source_ip=source_ip)
+                raise HTTPException(status_code=403, detail="access denied")
+            return data
+        except HTTPException:
+            raise
         except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+            raise HTTPException(status_code=exc.response.status_code, detail="account not found") from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="account service unavailable") from exc
 
