@@ -56,7 +56,6 @@ Thị trường đã có các giải pháp như Cloudflare One, Zscaler, Palo Al
 - Xây dựng SIEM tập trung với PLG Stack thu thập log từ hai cloud
 - Triển khai AI Analyzer với LLM để suy luận ngữ nghĩa từ log, nhận diện MITRE ATT&CK techniques
 - Tự động hóa phản ứng sự cố với SOAR Engine, có cơ chế HITL và rollback
-- Xây dựng hệ thống quản lý case sự cố với TheHive
 
 ### 1.3 Phạm vi và giới hạn
 
@@ -64,7 +63,7 @@ Thị trường đã có các giải pháp như Cloudflare One, Zscaler, Palo Al
 - Hạ tầng: 2 K3s cluster tách biệt — AWS (master + worker) và OpenStack (standalone)
 - Ứng dụng: 7 microservice mô phỏng luồng thanh toán ngân hàng
 - Bảo mật: SPIFFE/SPIRE mTLS, Envoy ext_authz, OPA policy, Keycloak OIDC, NetworkPolicy
-- Quan sát: PLG Stack (Promtail-Loki-Grafana), Prometheus, AI Analyzer, SOAR Engine, TheHive
+- Quan sát: PLG Stack (Promtail-Loki-Grafana), Prometheus, AI Analyzer, SOAR Engine
 
 **Giới hạn:**
 - Môi trường lab: 3 EC2 t3.medium + 1 OpenStack node; không mô phỏng traffic thực tế quy mô lớn
@@ -196,7 +195,7 @@ AI Analyzer là FastAPI service đóng vai trò **AI-driven SOC analyst**, tích
 
 **Xử lý theo ngưỡng severity:**
 - `low/medium` → ghi verdict vào Loki, không tạo alert
-- `high/critical` → tạo pending alert (in-memory, TTL 3600s) + TheHive alert + push Loki `{pending_approval="true"}` → HITL flow
+- `high/critical` → tạo pending alert (in-memory, TTL 3600s) + push Loki `{pending_approval="true"}` → HITL flow
 
 ### 2.8 SOAR Engine — Automated Response
 
@@ -210,9 +209,11 @@ SOAR Engine nhận alert đã được admin approve và thực thi playbook tr�
 
 Mọi action được append vào `cases.jsonl` (PVC 1Gi) — audit trail bền vững qua pod restart. `POST /cases/{id}/rollback` khôi phục trạng thái trước.
 
-### 2.9 TheHive — Incident Response Platform
+### 2.9 Case Management
 
-TheHive là nền tảng quản lý sự cố mã nguồn mở, backend Cassandra. AI Analyzer tự động tạo TheHive **alert** khi phát hiện high/critical threat. Khi admin approve, AI tạo thêm TheHive **case** để lưu dấu điều tra (IR timeline, observables, tasks).
+Case management thực hiện qua SOAR Engine — mỗi alert được approve tạo ra một `case` lưu tại `/data/cases.jsonl` và push vào Loki. SOAR cung cấp endpoint `GET /cases`, `POST /cases/{id}/rollback` để xem và rollback action.
+
+> **Lưu ý triển khai:** TheHive (và Cassandra backend) ban đầu được tích hợp nhưng đã gỡ bỏ để tiết kiệm RAM trên K3s master (t3.medium, 4GB RAM). Tiết kiệm ~1.6GB. AI Analyzer vẫn hoạt động bình thường với `thehive_configured: false`.
 
 ---
 
@@ -239,7 +240,6 @@ TheHive là nền tảng quản lý sự cố mã nguồn mở, backend Cassandr
 ├─────────────────────────────────────────────────────────────────────────┤
 │  LỚP 3: QUAN SÁT & PHẢN ỨNG (SIEM/SOAR)                                │
 │  Promtail → Loki → AI Analyzer (LLM) → Grafana Alerting (HITL)         │
-│                                      → TheHive (Case IR)                │
 │                                      → SOAR Engine → Kubernetes         │
 │  Prometheus → Grafana (dashboards)                                      │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -293,7 +293,7 @@ Toàn bộ traffic cross-cloud (payment-service → core-banking) đi qua tunnel
 |-------|---------|--------------|
 | **AWS** | api-gateway, payment-service, fraud-detection, notification-service | Tiếp nhận external traffic, xử lý logic nghiệp vụ thông thường |
 | **AWS** | Keycloak, OPA, Redis, Web Portal | Identity provider, policy engine, session store |
-| **AWS** | Loki, Grafana, AI Analyzer, SOAR, TheHive, Prometheus | SIEM/SOAR — quản lý tập trung |
+| **AWS** | Loki, Grafana, AI Analyzer, SOAR, Prometheus | SIEM/SOAR — quản lý tập trung |
 | **OpenStack** | core-banking, account-service, transaction-service | **Dữ liệu nhạy cảm** — core banking, số dư tài khoản, lịch sử giao dịch |
 | **OpenStack** | PostgreSQL (accounts_db + transactions_db) | Database persist cho tài khoản và ledger |
 
@@ -547,7 +547,7 @@ Image được build từ `services/Dockerfile` và sync vào containerd K3s b�
 - ZTA Security Overview: tổng quan OPA decisions, JWT failures, fraud blocks
 - Envoy Access Logs: HTTP matrix, response time, error rate
 - OPA Decision Log: allow/deny rate theo service, top denied paths
-- AI SIEM SOAR: AI verdicts, attack types, SOAR cases, TheHive cases
+- AI SIEM SOAR: AI verdicts, attack types, SOAR cases
 - **Threat Intelligence Feed** (mới): MITRE heatmap, top source IPs, verdict distribution, live event stream
 
 ### 4.8 AI Analyzer — Cấu hình và triển khai
@@ -561,8 +561,8 @@ Image được build từ `services/Dockerfile` và sync vào containerd K3s b�
 - name: AI_ANALYZER_MIN_ALERT_SEVERITY       # "medium" — dưới ngưỡng này bỏ qua
 - name: AI_ANALYZER_ADMIN_APPROVAL_SEVERITY  # "high" — cần admin approve
 - name: AI_ANALYZER_PENDING_TTL_SECONDS      # "3600" — pending alert tự expire sau 1h
-- name: THEHIVE_URL                          # http://thehive.plg-stack.svc.cluster.local:9000
 - name: SOAR_WEBHOOK_URL                     # http://soar-engine.plg-stack.svc.cluster.local:8080/alerts
+# THEHIVE_URL đã được gỡ bỏ — thehive_configured: false
 ```
 
 **Heuristic fallback patterns (khi không có API key):**
@@ -975,19 +975,7 @@ BƯỚC 3: HITL — Human-in-the-Loop
   │     status = "pending"
   │     expires_at = now + 3600s
   │
-  │  2. Tạo TheHive alert:
-  │     POST http://thehive.plg-stack.svc.cluster.local:9000/api/v1/alert
-  │     {
-  │       "type": "ztlab-ai",
-  │       "source": "ai-analyzer",
-  │       "sourceRef": f"{alert_id}-{log_hash[:8]}",
-  │       "title": f"[{severity.upper()}] {attack_type} detected",
-  │       "severity": 3 (high) / 4 (critical),
-  │       "tags": ["ztlab", attack_type, affected_service]
-  │     }
-  │     → Nhận: thehive_alert_id = "~4108320"
-  │
-  │  3. Push Loki — gắn label pending_approval="true":
+  │  2. Push Loki — gắn label pending_approval="true":
   │     POST /loki/api/v1/push
   │     stream labels: { job="ai-analyzer", pending_approval="true",
   │                      alert_id=alert_id }
@@ -1014,7 +1002,6 @@ Admin nhận thông báo → mở Web Portal http://portal/alerts
   │
   │  Mỗi alert hiển thị:
   │  - attack_type, severity, affected_service, source_ip
-  │  - TheHive alert link
   │  - reasoning từ AI
   │  - thời gian tạo và thời gian hết hạn
   │
@@ -1037,14 +1024,7 @@ BƯỚC 4: SOAR Execution
 ────────────────────────────────────────────────────────────────
 [AI Analyzer — sau khi admin approve]
   │
-  │  1. Tạo TheHive case (từ alert đã có):
-  │     POST /api/v1/case
-  │     {"title": f"[IR] {attack_type} — {affected_service}",
-  │      "description": reasoning,
-  │      "severity": 3/4, "tags": [...]}
-  │     → thehive_case_id = "~5120448"
-  │
-  │  2. Gọi SOAR webhook:
+  │  1. Gọi SOAR webhook:
   │     POST http://soar-engine.plg-stack.svc.cluster.local:8080/alerts
   │     {
   │       "verdict": "malicious",
@@ -1284,14 +1264,13 @@ confidence=0.82
 2. Pending alert tạo:
    alert_id: "7668c451-3e9"
    status: "pending"
-   thehive_alert_id: "~4108320"
+   thehive_alert_id: null  (thehive_configured=false)
 
 3. Grafana rule "ai-pending-approval-alert" FIRING
    → Contact Point "ztlab-security-admin" notified
 
 4. Admin approve:
    POST /pending/7668c451-3e9/approve
-   → thehive_case_id: "~5120448" (TheHive case created)
    → SOAR case created: case-20260612-001
 
 5. SOAR execute isolate_workload:
@@ -1350,8 +1329,6 @@ AI: verdict=malicious, attack_type=container_escape, T1611
 | plg-stack | grafana | 1/1 | Running |
 | plg-stack | ai-analyzer | 1/1 | Running |
 | plg-stack | soar-engine | 1/1 | Running |
-| plg-stack | thehive | 1/1 | Running |
-| plg-stack | thehive-cassandra | 1/1 | Running |
 | plg-stack | promtail | DaemonSet/2 | Running |
 | monitoring | prometheus | 1/1 | Running |
 | spire | spire-server | 1/1 | Running |
@@ -1401,7 +1378,7 @@ AI: verdict=malicious, attack_type=container_escape, T1611
 | **Fraud Detection** | Đạt | Velocity + amount + channel scoring; Redis sliding window 60s; double-check tại core-banking |
 | **AI Detection** | Đạt | 20 kịch bản tấn công; confidence 0.78–0.92; MITRE ATT&CK mapping; heuristic fallback |
 | **HITL + SOAR** | Đạt | Pending alert → Grafana alert POST `/grafana-webhook` → admin approve qua Web Portal → SOAR execute; rollback hoạt động |
-| **TheHive Integration** | Đạt | Alert và Case tự động tạo khi high/critical; IR timeline trong TheHive UI |
+| **Case Management** | Đạt (SOAR) | SOAR Engine `/cases` lưu case audit trail; TheHive đã gỡ để tiết kiệm RAM |
 | **Grafana Alerting** | Đạt | 7 rules active; Contact Point `ztlab-security-admin`; Threat Intel Feed dashboard |
 | **Prometheus** | Đạt (9/9) | Tất cả services, cả hai cloud |
 | **Database persistence** | Đạt | PostgreSQL (account, txn), Redis (velocity) — data qua pod restart |
@@ -1417,7 +1394,7 @@ AI: verdict=malicious, attack_type=container_escape, T1611
 **Vòng lặp SIEM-AI-SOAR hoàn chỉnh:**
 - Từ log xuất hiện → AI phát hiện → Grafana notify → admin approve → SOAR cô lập workload: toàn bộ trong < 5 phút (với HITL) hoặc < 30s (nếu SOAR auto-execute, không qua HITL)
 - AI không chỉ match pattern cứng mà suy luận ngữ nghĩa từ chuỗi log — ví dụ nhận ra lateral movement từ sequence "SVID lạ + endpoint ngoài topology bình thường"
-- Audit trail đầy đủ: cases.jsonl persist qua pod restart; TheHive lưu alert + case cho IR
+- Audit trail đầy đủ: cases.jsonl persist qua pod restart; SOAR `/cases` endpoint cho IR
 
 **Multi-Cloud trace visibility:**
 - Cùng `trace_id` trong log AWS và OpenStack — không còn "black box" ở boundary cloud
@@ -1482,8 +1459,7 @@ AI: verdict=malicious, attack_type=container_escape, T1611
 11. K3s Documentation — https://docs.k3s.io/
 12. FastAPI Documentation — https://fastapi.tiangolo.com/
 13. OpenAI API Documentation — https://platform.openai.com/docs/
-14. TheHive Project Documentation — https://docs.strangebee.com/thehive/
-15. WireGuard VPN — https://www.wireguard.com/
+14. WireGuard VPN — https://www.wireguard.com/
 
 ---
 
