@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import random
+import string
 import time
 from typing import Any
 
@@ -18,14 +20,19 @@ CLOUD = os.getenv("CLOUD_PROVIDER", "aws")
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak.identity.svc.cluster.local:8080").rstrip("/")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ztlab")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "web-portal")
+KEYCLOAK_ADMIN_USER = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
+KEYCLOAK_ADMIN_PASS = os.getenv("KEYCLOAK_ADMIN_PASS", "ztlab-admin-2026")
+
 API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", "http://api-gateway.financial.svc.cluster.local:8080").rstrip("/")
 ACCOUNT_SERVICE_URL = os.getenv("ACCOUNT_SERVICE_URL", "http://account-service.financial.svc.cluster.local:8080").rstrip("/")
-TRANSACTION_SERVICE_URL = os.getenv("TRANSACTION_SERVICE_URL", "http://transaction-service.financial.svc.cluster.local:8080").rstrip("/")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc.cluster.local:8080").rstrip("/")
+
 SESSION_SECRET = os.getenv("SESSION_SECRET", "ztlab-web-portal-secret-2026")
 SESSION_COOKIE = "ztlab_session"
 SESSION_MAX_AGE = 3600
+
+INITIAL_BALANCE = float(os.getenv("INITIAL_BALANCE", "10000000"))  # 10 triệu VND
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger(SERVICE)
@@ -35,11 +42,6 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
 _signer = URLSafeTimedSerializer(SESSION_SECRET)
-
-ACCOUNT_OWNER_MAP = {
-    "testuser01": "ACC-1001",
-    "merchant01": "ACC-2001",
-}
 
 
 def _sign_session(data: dict) -> str:
@@ -73,6 +75,10 @@ def _token_url() -> str:
     return f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/token"
 
 
+def _admin_token_url() -> str:
+    return f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
+
+
 def _fmt_vnd(amount) -> str:
     try:
         return f"{float(amount):,.0f} ₫"
@@ -82,6 +88,157 @@ def _fmt_vnd(amount) -> str:
 
 templates.env.filters["fmt_vnd"] = _fmt_vnd
 
+
+def _gen_account_id() -> str:
+    suffix = "".join(random.choices(string.digits, k=4))
+    return f"ACC-{suffix}"
+
+
+def _decode_jwt_payload(access_token: str) -> dict:
+    import base64
+    try:
+        parts = access_token.split(".")
+        padding = 4 - len(parts[1]) % 4
+        payload_json = base64.urlsafe_b64decode(parts[1] + "=" * padding)
+        return json.loads(payload_json)
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Keycloak Admin helpers
+# ---------------------------------------------------------------------------
+
+async def _get_admin_token() -> str | None:
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.post(
+                _admin_token_url(),
+                data={
+                    "grant_type": "password",
+                    "client_id": "admin-cli",
+                    "username": KEYCLOAK_ADMIN_USER,
+                    "password": KEYCLOAK_ADMIN_PASS,
+                },
+            )
+            if resp.status_code == 200:
+                return resp.json().get("access_token")
+        except Exception as exc:
+            logger.error(json.dumps({"event": "admin_token_error", "error": str(exc)}))
+    return None
+
+
+async def _keycloak_create_user(
+    admin_token: str,
+    username: str,
+    email: str,
+    full_name: str,
+    password: str,
+) -> tuple[bool, str]:
+    """Create user in Keycloak. Returns (success, error_message)."""
+    parts = full_name.strip().split(" ", 1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else ""
+
+    admin_base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        # Create user
+        resp = await client.post(
+            f"{admin_base}/users",
+            headers=headers,
+            json={
+                "username": username,
+                "email": email,
+                "firstName": first_name,
+                "lastName": last_name,
+                "enabled": True,
+                "emailVerified": True,
+                "credentials": [{"type": "password", "value": password, "temporary": False}],
+            },
+        )
+        if resp.status_code == 409:
+            return False, "Tên đăng nhập hoặc email đã tồn tại"
+        if resp.status_code not in (201, 200):
+            err = resp.json().get("errorMessage", resp.text[:200])
+            return False, f"Không thể tạo tài khoản Keycloak: {err}"
+
+        # Fetch the user ID
+        search = await client.get(
+            f"{admin_base}/users",
+            headers=headers,
+            params={"username": username, "exact": "true"},
+        )
+        users = search.json()
+        if not users:
+            return False, "Tạo user thành công nhưng không tìm được ID"
+        user_id = users[0]["id"]
+
+        # Fetch roles
+        roles_to_assign = []
+        for role_name in ("financial-read", "financial-write"):
+            r = await client.get(f"{admin_base}/roles/{role_name}", headers=headers)
+            if r.status_code == 200:
+                roles_to_assign.append(r.json())
+
+        # Assign roles
+        if roles_to_assign:
+            await client.post(
+                f"{admin_base}/users/{user_id}/role-mappings/realm",
+                headers=headers,
+                json=roles_to_assign,
+            )
+
+    logger.info(json.dumps({"event": "keycloak_user_created", "username": username}))
+    return True, ""
+
+
+async def _create_bank_account(username: str) -> tuple[str, str]:
+    """Create a bank account in account-service. Returns (account_id, error)."""
+    for _ in range(5):
+        account_id = _gen_account_id()
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                resp = await client.post(
+                    f"{ACCOUNT_SERVICE_URL}/accounts",
+                    json={
+                        "account_id": account_id,
+                        "owner": username,
+                        "balance": INITIAL_BALANCE,
+                        "currency": "VND",
+                    },
+                )
+                if resp.status_code == 201:
+                    return account_id, ""
+                if resp.status_code == 409:
+                    continue  # collision, retry with new ID
+                return "", f"account-service error {resp.status_code}: {resp.text[:100]}"
+            except Exception as exc:
+                return "", f"account-service unavailable: {exc}"
+    return "", "Không thể tạo tài khoản ngân hàng (collision)"
+
+
+async def _lookup_account(username: str) -> str:
+    """Look up the first bank account for this user. Returns account_id or empty string."""
+    async with httpx.AsyncClient(timeout=8) as client:
+        try:
+            resp = await client.get(
+                f"{ACCOUNT_SERVICE_URL}/accounts",
+                params={"owner": username},
+            )
+            if resp.status_code == 200:
+                accounts = resp.json()
+                if accounts:
+                    return accounts[0]["account_id"]
+        except Exception:
+            pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Core routes
+# ---------------------------------------------------------------------------
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
@@ -116,46 +273,124 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
             )
             if resp.status_code != 200:
                 err_data = resp.json()
-                err_msg = err_data.get("error_description", err_data.get("error", "Authentication failed"))
+                err_msg = err_data.get("error_description", err_data.get("error", "Sai tên đăng nhập hoặc mật khẩu"))
                 return RedirectResponse(f"/login?error={err_msg}", status_code=302)
             token_data = resp.json()
         except Exception as exc:
             logger.error(json.dumps({"event": "keycloak_error", "error": str(exc)}))
-            return RedirectResponse("/login?error=Keycloak+unavailable", status_code=302)
+            return RedirectResponse("/login?error=Không+thể+kết+nối+Keycloak", status_code=302)
 
     access_token = token_data.get("access_token", "")
-    import base64
-    try:
-        parts = access_token.split(".")
-        padding = 4 - len(parts[1]) % 4
-        payload_json = base64.urlsafe_b64decode(parts[1] + "=" * padding)
-        claims = json.loads(payload_json)
-        preferred_username = claims.get("preferred_username", username)
-        realm_roles = claims.get("realm_access", {}).get("roles", [])
-    except Exception:
-        preferred_username = username
-        realm_roles = []
+    claims = _decode_jwt_payload(access_token)
+    preferred_username = claims.get("preferred_username", username)
+    realm_roles = claims.get("realm_access", {}).get("roles", [])
+    full_name = " ".join(filter(None, [claims.get("given_name", ""), claims.get("family_name", "")])) or preferred_username
+
+    # Dynamically look up bank account
+    account_id = await _lookup_account(preferred_username)
 
     session_data = {
         "username": preferred_username,
+        "full_name": full_name,
+        "email": claims.get("email", ""),
         "access_token": access_token,
         "refresh_token": token_data.get("refresh_token", ""),
         "roles": realm_roles,
-        "account_id": ACCOUNT_OWNER_MAP.get(preferred_username, ""),
+        "account_id": account_id,
         "logged_in_at": time.time(),
     }
     response = RedirectResponse("/dashboard", status_code=302)
     _set_session(response, session_data)
-    logger.info(json.dumps({"event": "user_login", "username": preferred_username}))
+    logger.info(json.dumps({"event": "user_login", "username": preferred_username, "account_id": account_id}))
     return response
 
 
 @app.get("/auth/logout")
 async def logout(request: Request):
+    session = _get_session(request)
+    # Revoke Keycloak session (best-effort)
+    if session:
+        refresh_token = session.get("refresh_token", "")
+        if refresh_token:
+            async with httpx.AsyncClient(timeout=5) as client:
+                try:
+                    await client.post(
+                        f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/logout",
+                        data={
+                            "client_id": KEYCLOAK_CLIENT_ID,
+                            "refresh_token": refresh_token,
+                        },
+                    )
+                except Exception:
+                    pass
     response = RedirectResponse("/login", status_code=302)
     _clear_session(response)
     return response
 
+
+# ---------------------------------------------------------------------------
+# Registration
+# ---------------------------------------------------------------------------
+
+@app.get("/register", response_class=HTMLResponse)
+async def register_page(request: Request, error: str = "", success: str = ""):
+    return templates.TemplateResponse("register.html", {
+        "request": request,
+        "error": error,
+        "success": success,
+    })
+
+
+@app.post("/auth/register", response_class=HTMLResponse)
+async def do_register(
+    request: Request,
+    full_name: str = Form(...),
+    email: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    confirm_password: str = Form(...),
+):
+    # Validate
+    username = username.strip().lower()
+    if len(username) < 3:
+        return RedirectResponse("/register?error=Tên+đăng+nhập+phải+có+ít+nhất+3+ký+tự", status_code=302)
+    if len(password) < 8:
+        return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+8+ký+tự", status_code=302)
+    if password != confirm_password:
+        return RedirectResponse("/register?error=Mật+khẩu+xác+nhận+không+khớp", status_code=302)
+    if not email or "@" not in email:
+        return RedirectResponse("/register?error=Email+không+hợp+lệ", status_code=302)
+
+    # Get admin token
+    admin_token = await _get_admin_token()
+    if not admin_token:
+        return RedirectResponse("/register?error=Hệ+thống+tạm+thời+không+khả+dụng", status_code=302)
+
+    # Create Keycloak user
+    ok, err = await _keycloak_create_user(admin_token, username, email, full_name, password)
+    if not ok:
+        from urllib.parse import quote
+        return RedirectResponse(f"/register?error={quote(err)}", status_code=302)
+
+    # Create bank account
+    account_id, acc_err = await _create_bank_account(username)
+    if acc_err:
+        logger.error(json.dumps({"event": "account_create_failed", "username": username, "error": acc_err}))
+
+    logger.info(json.dumps({
+        "event": "user_registered",
+        "username": username,
+        "account_id": account_id,
+    }))
+    return RedirectResponse(
+        f"/login?success=Đăng+ký+thành+công!+Tài+khoản+ngân+hàng+{account_id}+đã+được+tạo.+Hãy+đăng+nhập.",
+        status_code=302,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Protected pages
+# ---------------------------------------------------------------------------
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard(request: Request):
@@ -165,6 +400,7 @@ async def dashboard(request: Request):
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
         "roles": session.get("roles", []),
         "account_id": session.get("account_id", ""),
         "page": "dashboard",
@@ -179,6 +415,7 @@ async def transfer_page(request: Request):
     return templates.TemplateResponse("transfer.html", {
         "request": request,
         "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
         "account_id": session.get("account_id", ""),
         "page": "transfer",
     })
@@ -192,6 +429,7 @@ async def logs_page(request: Request):
     return templates.TemplateResponse("logs.html", {
         "request": request,
         "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
         "page": "logs",
     })
 
@@ -204,7 +442,26 @@ async def alerts_page(request: Request):
     return templates.TemplateResponse("alerts.html", {
         "request": request,
         "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
+        "roles": session.get("roles", []),
         "page": "alerts",
+    })
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("profile.html", {
+        "request": request,
+        "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
+        "email": session.get("email", ""),
+        "roles": session.get("roles", []),
+        "account_id": session.get("account_id", ""),
+        "logged_in_at": session.get("logged_in_at", 0),
+        "page": "profile",
     })
 
 
@@ -265,6 +522,24 @@ async def do_transfer(request: Request):
                 headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
             )
             return JSONResponse(resp.json(), status_code=resp.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.get("/api/account/me")
+async def get_my_account(request: Request):
+    """Return current user's account info (refreshes from account-service)."""
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    username = session.get("username", "")
+    async with httpx.AsyncClient(timeout=8) as client:
+        try:
+            resp = await client.get(f"{ACCOUNT_SERVICE_URL}/accounts", params={"owner": username})
+            if resp.status_code == 200:
+                accounts = resp.json()
+                return JSONResponse({"accounts": accounts, "username": username})
+            return JSONResponse({"accounts": [], "username": username})
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
 
@@ -375,6 +650,7 @@ async def scenarios_page(request: Request):
     return templates.TemplateResponse("scenarios.html", {
         "request": request,
         "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
         "page": "scenarios",
     })
 
@@ -437,8 +713,6 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
     token = session.get("access_token", "")
     account_id = session.get("account_id", "ACC-1001")
 
-    # ── Nhóm 1: Zero Trust enforcement ──────────────────────────────────
-
     if scenario_id == "no_jwt":
         sc, body = await _call_gateway("POST", "/payments",
             json_body={"from_account": account_id, "to_account": "ACC-2001", "amount": 1000, "currency": "VND"})
@@ -460,8 +734,6 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
             json_body={"from_account": account_id, "to_account": "ACC-2001",
                        "amount": 500_000_000, "currency": "VND", "channel": "tor"})
         return JSONResponse({"status_code": sc, "result": body, "expected": "403 – fraud_block (score=75)"})
-
-    # ── Nhóm 2: Velocity & Rate Limit ────────────────────────────────────
 
     if scenario_id == "high_velocity":
         results = []
@@ -496,8 +768,6 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
         blocked = sum(1 for r in results if r["status_code"] == 429)
         return JSONResponse({"results": results, "blocked_count": blocked,
                              "expected": "req 61+ → 429 Too Many Requests"})
-
-    # ── Nhóm 3: AI Detection (inject log) ────────────────────────────────
 
     if scenario_id == "inject_brute_force":
         sc, body = await _inject_ai([{
@@ -552,11 +822,9 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
                              "expected": "verdict=malicious, attack_type=cryptomining, playbook=quarantine_workload"})
 
     if scenario_id == "sqli_probe":
-        # Try actual bad input first
         sc_live, body_live = await _call_gateway("POST", "/payments", token=token,
             json_body={"from_account": "1' OR '1'='1", "to_account": "ACC-2001",
                        "amount": 100, "currency": "VND"})
-        # Also inject AI log for the pattern
         _, ai_body = await _inject_ai([{
             "timestamp": _now_iso(),
             "message": (

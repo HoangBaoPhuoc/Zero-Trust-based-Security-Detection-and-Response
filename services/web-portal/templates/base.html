@@ -75,12 +75,14 @@
       <a href="/logs" class="nav-item {% if page=='logs' %}active{% endif %}"><span class="icon">📋</span>Security Logs</a>
       <a href="/alerts" class="nav-item {% if page=='alerts' %}active{% endif %}"><span class="icon">🚨</span>AI Alerts</a>
       <a href="/scenarios" class="nav-item {% if page=='scenarios' %}active{% endif %}"><span class="icon">⚔️</span>Kịch bản</a>
+      <a href="/profile" class="nav-item {% if page=='profile' %}active{% endif %}"><span class="icon">👤</span>Hồ sơ</a>
     </nav>
     <div class="sidebar-footer">
-      {% if username %}
-        <div style="margin-bottom:8px">👤 {{ username }}</div>
+      {% if full_name or username %}
+        <div style="margin-bottom:4px;font-weight:500;color:var(--text);font-size:13px">{{ full_name or username }}</div>
+        <div style="margin-bottom:8px;font-size:11px;color:var(--muted)">@{{ username }}</div>
       {% endif %}
-      <a href="/auth/logout" class="btn" style="font-size:12px;padding:5px 10px">Đăng xuất</a>
+      <a href="/auth/logout" class="btn" style="font-size:12px;padding:5px 10px;display:block;text-align:center;text-decoration:none">Đăng xuất</a>
     </div>
   </aside>
   <div class="main">

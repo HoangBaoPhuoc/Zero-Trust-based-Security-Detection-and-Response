@@ -3,60 +3,69 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZTLab - Đăng nhập</title>
+  <title>ZTLab — Đăng nhập</title>
   <style>
     :root { --bg:#0f1117;--card:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--red:#f85149;--green:#3fb950; }
     * { box-sizing:border-box; margin:0; padding:0; }
     body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; }
-    .login-box { width:380px; }
+    .login-box { width:400px; }
     .logo { text-align:center; margin-bottom:32px; }
-    .logo h1 { font-size:28px; margin-bottom:6px; }
-    .logo p { color:var(--muted); font-size:14px; }
-    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:28px; }
-    .card h2 { font-size:18px; margin-bottom:20px; }
-    .form-group { margin-bottom:16px; }
+    .logo h1 { font-size:28px; margin-bottom:6px; letter-spacing:-0.5px; }
+    .logo p { color:var(--muted); font-size:13px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:32px; }
+    .card h2 { font-size:18px; margin-bottom:24px; font-weight:600; }
+    .form-group { margin-bottom:18px; }
     .form-group label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
     .form-group input { width:100%; padding:10px 14px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:14px; outline:none; transition:border .15s; }
     .form-group input:focus { border-color:var(--accent); }
-    .btn { width:100%; padding:10px; background:var(--accent); color:#000; border:none; border-radius:6px; font-size:15px; font-weight:600; cursor:pointer; transition:background .15s; margin-top:4px; }
+    .btn { width:100%; padding:11px; background:var(--accent); color:#000; border:none; border-radius:6px; font-size:15px; font-weight:600; cursor:pointer; transition:background .15s; margin-top:4px; }
     .btn:hover { background:#79b8ff; }
-    .alert-error { background:rgba(248,81,73,.1); border:1px solid rgba(248,81,73,.3); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:16px; font-size:13px; }
-    .users-hint { margin-top:20px; padding:14px; background:rgba(88,166,255,.06); border:1px solid rgba(88,166,255,.15); border-radius:6px; font-size:12px; color:var(--muted); }
-    .users-hint strong { color:var(--text); }
-    .users-hint table { width:100%; border-collapse:collapse; margin-top:8px; }
-    .users-hint td { padding:4px 6px; }
-    .badge { display:inline-block; padding:1px 6px; border-radius:10px; font-size:10px; font-weight:600; background:rgba(63,185,80,.15); color:var(--green); border:1px solid rgba(63,185,80,.3); }
+    .alert-error { background:rgba(248,81,73,.1); border:1px solid rgba(248,81,73,.3); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:18px; font-size:13px; }
+    .alert-success { background:rgba(63,185,80,.1); border:1px solid rgba(63,185,80,.3); color:var(--green); padding:10px 14px; border-radius:6px; margin-bottom:18px; font-size:13px; }
+    .footer-link { margin-top:20px; text-align:center; font-size:13px; color:var(--muted); }
+    .footer-link a { color:var(--accent); text-decoration:none; }
+    .footer-link a:hover { text-decoration:underline; }
+    .divider { border:none; border-top:1px solid var(--border); margin:20px 0; }
+    .security-note { font-size:11px; color:var(--muted); text-align:center; margin-top:16px; line-height:1.5; }
   </style>
 </head>
 <body>
   <div class="login-box">
     <div class="logo">
-      <h1>🔐 ZTLab</h1>
-      <p>Zero Trust Security Lab — Đồ án chuyên ngành</p>
+      <h1>🔐 ZTLab Banking</h1>
+      <p>Hệ thống ngân hàng bảo mật Zero Trust</p>
     </div>
     <div class="card">
       <h2>Đăng nhập</h2>
+
       {% if error %}
         <div class="alert-error">{{ error }}</div>
       {% endif %}
+
+      {% if request.query_params.get('success') %}
+        <div class="alert-success">{{ request.query_params.get('success') }}</div>
+      {% endif %}
+
       <form method="POST" action="/auth/login">
         <div class="form-group">
           <label>Tên đăng nhập</label>
-          <input type="text" name="username" placeholder="testuser01" autofocus required>
+          <input type="text" name="username" placeholder="Nhập tên đăng nhập" autofocus required autocomplete="username">
         </div>
         <div class="form-group">
           <label>Mật khẩu</label>
-          <input type="password" name="password" placeholder="••••••••" required>
+          <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
         </div>
-        <button type="submit" class="btn">Đăng nhập qua Keycloak →</button>
+        <button type="submit" class="btn">Đăng nhập →</button>
       </form>
-      <div class="users-hint">
-        <strong>Tài khoản demo:</strong>
-        <table>
-          <tr><td><strong>testuser01</strong></td><td>Test1234!</td><td><span class="badge">financial-write</span></td></tr>
-          <tr><td><strong>merchant01</strong></td><td>Merchant1234!</td><td><span class="badge" style="background:rgba(88,166,255,.15);color:#58a6ff;border-color:rgba(88,166,255,.3)">financial-read</span></td></tr>
-          <tr><td><strong>analyst01</strong></td><td>Analyst1234!</td><td><span class="badge" style="background:rgba(188,140,255,.15);color:#bc8cff;border-color:rgba(188,140,255,.3)">security-analyst</span></td></tr>
-        </table>
+
+      <hr class="divider">
+
+      <div class="footer-link">
+        Chưa có tài khoản? <a href="/register">Đăng ký ngay</a>
+      </div>
+
+      <div class="security-note">
+        Phiên đăng nhập được bảo vệ bởi Keycloak OIDC · OPA · mTLS SPIRE
       </div>
     </div>
   </div>
