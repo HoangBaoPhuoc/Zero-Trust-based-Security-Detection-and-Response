@@ -1,9 +1,12 @@
+import asyncio
 import json
 import logging
 import os
 import random
+import secrets
 import string
 import time
+from collections import defaultdict, deque
 from typing import Any
 
 import httpx
@@ -21,18 +24,23 @@ KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak.identity.svc.cluster.l
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ztlab")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "web-portal")
 KEYCLOAK_ADMIN_USER = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
-KEYCLOAK_ADMIN_PASS = os.getenv("KEYCLOAK_ADMIN_PASS", "ztlab-admin-2026")
+KEYCLOAK_ADMIN_PASS = os.getenv("KEYCLOAK_ADMIN_PASS", "")
 
 API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", "http://api-gateway.financial.svc.cluster.local:8080").rstrip("/")
 ACCOUNT_SERVICE_URL = os.getenv("ACCOUNT_SERVICE_URL", "http://account-service.financial.svc.cluster.local:8080").rstrip("/")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc.cluster.local:8080").rstrip("/")
 
-SESSION_SECRET = os.getenv("SESSION_SECRET", "ztlab-web-portal-secret-2026")
+SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 SESSION_COOKIE = "ztlab_session"
 SESSION_MAX_AGE = 3600
 
 INITIAL_BALANCE = float(os.getenv("INITIAL_BALANCE", "10000000"))  # 10 triệu VND
+HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
+REGISTER_LIMIT_PER_HOUR = int(os.getenv("REGISTER_LIMIT_PER_HOUR", "5"))
+
+_register_attempts: dict[str, deque] = defaultdict(deque)
+_sessions: dict[str, dict[str, Any]] = {}
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger(SERVICE)
@@ -59,15 +67,39 @@ def _get_session(request: Request) -> dict | None:
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return None
-    return _load_session(token)
+    envelope = _load_session(token)
+    sid = envelope.get("sid") if isinstance(envelope, dict) else None
+    if not sid:
+        return None
+    record = _sessions.get(sid)
+    if not record:
+        return None
+    if time.time() - record.get("created_at", 0) > SESSION_MAX_AGE:
+        _sessions.pop(sid, None)
+        return None
+    return record.get("data")
 
 
 def _set_session(response: Response, data: dict) -> None:
-    token = _sign_session(data)
-    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax")
+    sid = secrets.token_urlsafe(32)
+    _sessions[sid] = {"data": data, "created_at": time.time()}
+    token = _sign_session({"sid": sid})
+    response.set_cookie(
+        SESSION_COOKIE, token,
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=HTTPS_ENABLED,
+    )
 
 
-def _clear_session(response: Response) -> None:
+def _clear_session(response: Response, request: Request | None = None) -> None:
+    if request:
+        token = request.cookies.get(SESSION_COOKIE)
+        envelope = _load_session(token) if token else None
+        sid = envelope.get("sid") if isinstance(envelope, dict) else None
+        if sid:
+            _sessions.pop(sid, None)
     response.delete_cookie(SESSION_COOKIE)
 
 
@@ -110,6 +142,9 @@ def _decode_jwt_payload(access_token: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def _get_admin_token() -> str | None:
+    if not KEYCLOAK_ADMIN_PASS:
+        logger.error(json.dumps({"event": "admin_token_error", "error": "KEYCLOAK_ADMIN_PASS is not configured"}))
+        return None
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.post(
@@ -236,6 +271,23 @@ async def _lookup_account(username: str) -> str:
     return ""
 
 
+async def _cleanup_sessions() -> None:
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        now = time.time()
+        expired = [sid for sid, rec in list(_sessions.items())
+                   if now - rec.get("created_at", 0) > SESSION_MAX_AGE]
+        for sid in expired:
+            _sessions.pop(sid, None)
+        if expired:
+            logger.info(json.dumps({"event": "session_cleanup", "expired_count": len(expired)}))
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    asyncio.create_task(_cleanup_sessions())
+
+
 # ---------------------------------------------------------------------------
 # Core routes
 # ---------------------------------------------------------------------------
@@ -324,7 +376,7 @@ async def logout(request: Request):
                 except Exception:
                     pass
     response = RedirectResponse("/login", status_code=302)
-    _clear_session(response)
+    _clear_session(response, request)
     return response
 
 
@@ -341,6 +393,17 @@ async def register_page(request: Request, error: str = "", success: str = ""):
     })
 
 
+def _check_register_rate(ip: str) -> bool:
+    now = time.time()
+    bucket = _register_attempts[ip]
+    while bucket and now - bucket[0] > 3600:
+        bucket.popleft()
+    if len(bucket) >= REGISTER_LIMIT_PER_HOUR:
+        return False
+    bucket.append(now)
+    return True
+
+
 @app.post("/auth/register", response_class=HTMLResponse)
 async def do_register(
     request: Request,
@@ -350,6 +413,11 @@ async def do_register(
     password: str = Form(...),
     confirm_password: str = Form(...),
 ):
+    # Rate limit: max 5 registrations per IP per hour
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_register_rate(client_ip):
+        return RedirectResponse("/register?error=Quá+nhiều+yêu+cầu+đăng+ký.+Thử+lại+sau+1+giờ.", status_code=302)
+
     # Validate
     username = username.strip().lower()
     if len(username) < 3:
@@ -483,7 +551,7 @@ async def get_balance(account_id: str, request: Request):
             )
             return JSONResponse(resp.json(), status_code=resp.status_code)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.get("/api/transactions")
@@ -504,7 +572,7 @@ async def get_transactions(request: Request, account_id: str = "", limit: int = 
             )
             return JSONResponse(resp.json(), status_code=resp.status_code)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.post("/api/transfer")
@@ -523,7 +591,7 @@ async def do_transfer(request: Request):
             )
             return JSONResponse(resp.json(), status_code=resp.status_code)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.get("/api/account/me")
@@ -541,7 +609,7 @@ async def get_my_account(request: Request):
                 return JSONResponse({"accounts": accounts, "username": username})
             return JSONResponse({"accounts": [], "username": username})
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.get("/api/logs")
@@ -586,7 +654,7 @@ async def get_security_logs(request: Request, limit: int = 50):
             entries.sort(key=lambda e: e["ts_ns"], reverse=True)
             return JSONResponse(entries[:limit])
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.get("/api/alerts")
@@ -599,7 +667,12 @@ async def get_ai_alerts(request: Request, status: str = "pending"):
             resp = await client.get(f"{AI_ANALYZER_URL}/pending", params={"status": status} if status else {})
             return JSONResponse(resp.json(), status_code=resp.status_code)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
+def _has_security_role(session: dict) -> bool:
+    roles = session.get("roles", [])
+    return any(r in roles for r in ("security-admin", "security-analyst"))
 
 
 @app.post("/api/alerts/{alert_id}/approve")
@@ -607,6 +680,12 @@ async def approve_alert(alert_id: str, request: Request):
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if not _has_security_role(session):
+        logger.warning(json.dumps({
+            "event": "rbac_denied", "action": "approve_alert",
+            "user": session.get("username"), "alert_id": alert_id,
+        }))
+        return JSONResponse({"error": "security-admin or security-analyst role required"}, status_code=403)
     body = {}
     try:
         body = await request.json()
@@ -616,8 +695,8 @@ async def approve_alert(alert_id: str, request: Request):
         try:
             resp = await client.post(f"{AI_ANALYZER_URL}/pending/{alert_id}/approve", json=body)
             return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+        except Exception:
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.post("/api/alerts/{alert_id}/dismiss")
@@ -625,6 +704,12 @@ async def dismiss_alert(alert_id: str, request: Request):
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if not _has_security_role(session):
+        logger.warning(json.dumps({
+            "event": "rbac_denied", "action": "dismiss_alert",
+            "user": session.get("username"), "alert_id": alert_id,
+        }))
+        return JSONResponse({"error": "security-admin or security-analyst role required"}, status_code=403)
     body = {}
     try:
         body = await request.json()
@@ -634,8 +719,8 @@ async def dismiss_alert(alert_id: str, request: Request):
         try:
             resp = await client.post(f"{AI_ANALYZER_URL}/pending/{alert_id}/dismiss", json=body)
             return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+        except Exception:
+            return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 # ---------------------------------------------------------------------------
