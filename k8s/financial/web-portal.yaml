@@ -50,6 +50,12 @@ spec:
               value: "http://loki.plg-stack.svc.cluster.local:3100"
             - name: AI_ANALYZER_URL
               value: "http://ai-analyzer.plg-stack.svc.cluster.local:8080"
+            - name: KEYCLOAK_ADMIN_USER
+              value: "admin"
+            - name: KEYCLOAK_ADMIN_PASS
+              value: "ztlab-admin-2026"
+            - name: INITIAL_BALANCE
+              value: "10000000"
             - name: SESSION_SECRET
               value: "ztlab-portal-secret-2026-change-in-prod"
           readinessProbe:

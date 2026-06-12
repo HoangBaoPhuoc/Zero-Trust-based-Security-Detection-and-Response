@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ZTLab — Đăng ký tài khoản</title>
+  <style>
+    :root { --bg:#0f1117;--card:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--red:#f85149;--green:#3fb950;--yellow:#d29922; }
+    * { box-sizing:border-box; margin:0; padding:0; }
+    body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; padding:32px 16px; }
+    .register-box { width:460px; }
+    .logo { text-align:center; margin-bottom:28px; }
+    .logo h1 { font-size:26px; margin-bottom:6px; letter-spacing:-0.5px; }
+    .logo p { color:var(--muted); font-size:13px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:32px; }
+    .card h2 { font-size:18px; margin-bottom:6px; font-weight:600; }
+    .card .subtitle { font-size:13px; color:var(--muted); margin-bottom:24px; }
+    .form-group { margin-bottom:16px; }
+    .form-group label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
+    .form-group input { width:100%; padding:10px 14px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:14px; outline:none; transition:border .15s; }
+    .form-group input:focus { border-color:var(--accent); }
+    .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .btn { width:100%; padding:11px; background:var(--accent); color:#000; border:none; border-radius:6px; font-size:15px; font-weight:600; cursor:pointer; transition:background .15s; margin-top:8px; }
+    .btn:hover { background:#79b8ff; }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .alert-error { background:rgba(248,81,73,.1); border:1px solid rgba(248,81,73,.3); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:18px; font-size:13px; }
+    .alert-success { background:rgba(63,185,80,.1); border:1px solid rgba(63,185,80,.3); color:var(--green); padding:10px 14px; border-radius:6px; margin-bottom:18px; font-size:13px; }
+    .divider { border:none; border-top:1px solid var(--border); margin:20px 0; }
+    .footer-link { text-align:center; font-size:13px; color:var(--muted); }
+    .footer-link a { color:var(--accent); text-decoration:none; }
+    .footer-link a:hover { text-decoration:underline; }
+    .info-box { background:rgba(88,166,255,.06); border:1px solid rgba(88,166,255,.2); border-radius:6px; padding:12px 14px; margin-bottom:20px; font-size:12px; color:var(--muted); line-height:1.6; }
+    .info-box strong { color:var(--accent); }
+    .strength-bar { height:3px; border-radius:2px; margin-top:6px; background:var(--border); overflow:hidden; }
+    .strength-fill { height:100%; border-radius:2px; transition:width .3s, background .3s; width:0; }
+    .hint { font-size:11px; color:var(--muted); margin-top:4px; }
+  </style>
+</head>
+<body>
+  <div class="register-box">
+    <div class="logo">
+      <h1>🔐 ZTLab Banking</h1>
+      <p>Mở tài khoản ngân hàng Zero Trust</p>
+    </div>
+    <div class="card">
+      <h2>Đăng ký tài khoản</h2>
+      <p class="subtitle">Tạo tài khoản để sử dụng hệ thống thanh toán bảo mật</p>
+
+      {% if error %}
+        <div class="alert-error">⚠ {{ error }}</div>
+      {% endif %}
+      {% if success %}
+        <div class="alert-success">✓ {{ success }}</div>
+      {% endif %}
+
+      <div class="info-box">
+        Sau khi đăng ký, tài khoản ngân hàng sẽ được tạo tự động với <strong>số dư ban đầu 10,000,000 ₫</strong>.
+      </div>
+
+      <form method="POST" action="/auth/register" id="reg-form">
+        <div class="form-group">
+          <label>Họ và tên <span style="color:var(--red)">*</span></label>
+          <input type="text" name="full_name" placeholder="Nguyễn Văn An" required autocomplete="name">
+        </div>
+
+        <div class="form-group">
+          <label>Email <span style="color:var(--red)">*</span></label>
+          <input type="email" name="email" placeholder="example@email.com" required autocomplete="email">
+        </div>
+
+        <div class="form-group">
+          <label>Tên đăng nhập <span style="color:var(--red)">*</span></label>
+          <input type="text" name="username" id="username-input"
+                 placeholder="nguyenvana" required autocomplete="username"
+                 pattern="[a-zA-Z0-9_\-]{3,32}"
+                 title="3–32 ký tự, chỉ dùng chữ cái, số, dấu gạch dưới hoặc gạch ngang">
+          <div class="hint">3–32 ký tự · chỉ a–z, 0–9, _ hoặc -</div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Mật khẩu <span style="color:var(--red)">*</span></label>
+            <input type="password" name="password" id="pwd-input"
+                   placeholder="••••••••" required minlength="8"
+                   autocomplete="new-password">
+            <div class="strength-bar"><div class="strength-fill" id="strength-fill"></div></div>
+            <div class="hint" id="strength-label">Nhập mật khẩu (tối thiểu 8 ký tự)</div>
+          </div>
+          <div class="form-group">
+            <label>Xác nhận mật khẩu <span style="color:var(--red)">*</span></label>
+            <input type="password" name="confirm_password" id="pwd-confirm"
+                   placeholder="••••••••" required
+                   autocomplete="new-password">
+            <div class="hint" id="match-label">&nbsp;</div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn" id="submit-btn">Tạo tài khoản →</button>
+      </form>
+
+      <hr class="divider">
+      <div class="footer-link">
+        Đã có tài khoản? <a href="/login">Đăng nhập</a>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const pwdInput = document.getElementById('pwd-input');
+    const pwdConfirm = document.getElementById('pwd-confirm');
+    const strengthFill = document.getElementById('strength-fill');
+    const strengthLabel = document.getElementById('strength-label');
+    const matchLabel = document.getElementById('match-label');
+    const submitBtn = document.getElementById('submit-btn');
+
+    function calcStrength(pwd) {
+      if (pwd.length === 0) return 0;
+      let score = 0;
+      if (pwd.length >= 8) score += 25;
+      if (pwd.length >= 12) score += 15;
+      if (/[A-Z]/.test(pwd)) score += 20;
+      if (/[0-9]/.test(pwd)) score += 20;
+      if (/[^a-zA-Z0-9]/.test(pwd)) score += 20;
+      return Math.min(score, 100);
+    }
+
+    pwdInput.addEventListener('input', () => {
+      const score = calcStrength(pwdInput.value);
+      strengthFill.style.width = score + '%';
+      if (score < 40) {
+        strengthFill.style.background = 'var(--red)';
+        strengthLabel.textContent = 'Mật khẩu yếu';
+        strengthLabel.style.color = 'var(--red)';
+      } else if (score < 70) {
+        strengthFill.style.background = 'var(--yellow)';
+        strengthLabel.textContent = 'Mật khẩu trung bình';
+        strengthLabel.style.color = 'var(--yellow)';
+      } else {
+        strengthFill.style.background = 'var(--green)';
+        strengthLabel.textContent = 'Mật khẩu mạnh';
+        strengthLabel.style.color = 'var(--green)';
+      }
+      checkMatch();
+    });
+
+    function checkMatch() {
+      if (!pwdConfirm.value) { matchLabel.textContent = ' '; return; }
+      if (pwdInput.value === pwdConfirm.value) {
+        matchLabel.textContent = '✓ Khớp';
+        matchLabel.style.color = 'var(--green)';
+      } else {
+        matchLabel.textContent = '✗ Không khớp';
+        matchLabel.style.color = 'var(--red)';
+      }
+    }
+    pwdConfirm.addEventListener('input', checkMatch);
+
+    document.getElementById('reg-form').addEventListener('submit', function(e) {
+      if (pwdInput.value !== pwdConfirm.value) {
+        e.preventDefault();
+        matchLabel.textContent = '✗ Mật khẩu không khớp — vui lòng kiểm tra lại';
+        matchLabel.style.color = 'var(--red)';
+        return;
+      }
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Đang tạo tài khoản...';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Hồ sơ — ZTLab{% endblock %}
+{% block page_title %}Hồ sơ tài khoản{% endblock %}
+
+{% block content %}
+<div class="grid-2" style="max-width:900px">
+
+  <div>
+    <div class="card">
+      <h3>Thông tin cá nhân</h3>
+      <table>
+        <tr>
+          <td style="color:var(--muted);width:140px">Họ và tên</td>
+          <td><strong>{{ full_name }}</strong></td>
+        </tr>
+        <tr>
+          <td style="color:var(--muted)">Tên đăng nhập</td>
+          <td><code style="font-family:monospace;font-size:13px">{{ username }}</code></td>
+        </tr>
+        <tr>
+          <td style="color:var(--muted)">Email</td>
+          <td>{{ email or '—' }}</td>
+        </tr>
+        <tr>
+          <td style="color:var(--muted)">Đăng nhập lúc</td>
+          <td id="login-time" class="mono" style="font-size:12px">—</td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Quyền truy cập</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">
+        {% for role in roles %}
+          {% if role in ('financial-read','financial-write','security-analyst','security-admin') %}
+            <span class="badge
+              {% if 'write' in role or 'admin' in role %}badge-green
+              {% elif 'analyst' in role %}badge-purple
+              {% else %}badge-yellow{% endif %}">
+              {{ role }}
+            </span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.7">
+        Quyền được xác thực tại Keycloak → OPA policy enforcement → Envoy sidecar.
+        Mỗi request đều qua kiểm tra issuer + expiry + role.
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h3>Tài khoản ngân hàng</h3>
+      <div id="accounts-loading" class="loading">Đang tải...</div>
+      <div id="accounts-content" style="display:none">
+        <table id="accounts-table">
+          <thead>
+            <tr>
+              <th>Số tài khoản</th>
+              <th>Số dư</th>
+              <th>Tiền tệ</th>
+            </tr>
+          </thead>
+          <tbody id="accounts-body"></tbody>
+        </table>
+        <div id="no-account" style="display:none;font-size:13px;color:var(--muted);padding:8px 0">
+          Chưa có tài khoản ngân hàng nào.<br>
+          Liên hệ quản trị viên để được cấp tài khoản.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Bảo mật phiên</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Xác thực JWT</span>
+          <span class="badge badge-green">✓ Keycloak RS256</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Kiểm tra quyền</span>
+          <span class="badge badge-green">✓ OPA ext_authz</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Phiên web</span>
+          <span class="badge badge-green">✓ Cookie HMAC-signed</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:13px">
+          <span>Thời gian hết hạn</span>
+          <span class="badge badge-yellow" id="expire-in">—</span>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <a href="/auth/logout" class="btn btn-red" style="font-size:13px;text-decoration:none">
+          Đăng xuất
+        </a>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const loginAt = {{ logged_in_at | int }};
+
+// Show login time
+document.getElementById('login-time').textContent =
+  new Date(loginAt * 1000).toLocaleString('vi-VN');
+
+// Show session expiry countdown
+function updateExpiry() {
+  const remaining = 3600 - (Date.now() / 1000 - loginAt);
+  if (remaining <= 0) {
+    document.getElementById('expire-in').textContent = 'Đã hết hạn';
+    return;
+  }
+  const m = Math.floor(remaining / 60);
+  const s = Math.floor(remaining % 60);
+  document.getElementById('expire-in').textContent = `Còn ${m}p ${s}s`;
+}
+updateExpiry();
+setInterval(updateExpiry, 1000);
+
+// Load bank accounts
+async function loadAccounts() {
+  try {
+    const r = await fetch('/api/account/me');
+    const d = await r.json();
+    document.getElementById('accounts-loading').style.display = 'none';
+    document.getElementById('accounts-content').style.display = '';
+
+    const accounts = d.accounts || [];
+    if (accounts.length === 0) {
+      document.getElementById('no-account').style.display = '';
+      document.getElementById('accounts-table').style.display = 'none';
+      return;
+    }
+
+    const tbody = document.getElementById('accounts-body');
+    tbody.innerHTML = accounts.map(a => `
+      <tr>
+        <td><code style="font-family:monospace;font-size:13px">${a.account_id}</code></td>
+        <td style="font-weight:600;color:var(--green)">${parseFloat(a.balance).toLocaleString('vi-VN')} ₫</td>
+        <td>${a.currency}</td>
+      </tr>
+    `).join('');
+  } catch(e) {
+    document.getElementById('accounts-loading').textContent = 'Lỗi kết nối account-service';
+  }
+}
+loadAccounts();
+</script>
+{% endblock %}

@@ -69,6 +69,15 @@ class TransferRequest(BaseModel):
     currency: str = "VND"
 
 
+@app.get("/accounts")
+async def list_accounts(owner: str | None = None, limit: int = 50):
+    if owner:
+        rows = await pool.fetch("SELECT * FROM accounts WHERE owner = $1", owner)
+    else:
+        rows = await pool.fetch("SELECT * FROM accounts ORDER BY account_id LIMIT $1", limit)
+    return [dict(r) for r in rows]
+
+
 @app.post("/accounts", status_code=201)
 async def create_account(body: AccountCreate):
     try:
