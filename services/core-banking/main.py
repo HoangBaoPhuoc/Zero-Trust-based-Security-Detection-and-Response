@@ -120,6 +120,38 @@ async def execute_transaction(req: Request, body: ExecuteTransactionRequest):
     }
 
 
+@app.post("/accounts")
+async def create_account(request: Request):
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.post(f"{ACCOUNT_SERVICE_URL}/accounts", json=body)
+            if resp.status_code == 409:
+                raise HTTPException(status_code=409, detail="account_id already exists")
+            resp.raise_for_status()
+            return resp.json()
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="account service unavailable") from exc
+
+
+@app.get("/accounts")
+async def list_accounts(owner: str = ""):
+    params = {"owner": owner} if owner else {}
+    async with httpx.AsyncClient(timeout=5) as client:
+        try:
+            resp = await client.get(f"{ACCOUNT_SERVICE_URL}/accounts", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as exc:
+            raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="account service unavailable") from exc
+
+
 @app.get("/accounts/{account_id}")
 async def get_account(account_id: str):
     async with httpx.AsyncClient(timeout=5) as client:
