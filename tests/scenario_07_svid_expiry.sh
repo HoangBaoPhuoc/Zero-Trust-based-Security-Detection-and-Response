@@ -16,7 +16,7 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 log "checking SPIRE agents on both clusters..."
 aws_agents=$(kubectl --context "$AWS_CTX" get pods -n spire -l app=spire-agent --no-headers 2>/dev/null | wc -l | tr -d ' ')
-os_agents=$(kubectl --context "$OS_CTX" get pods -n spire -l app=spire-agent --no-headers 2>/dev/null | wc -l | tr -d ' ')
+os_agents=$(kubectl --context "$OS_CTX" get pods -n spire -l app=spire-agent --no-headers 2>/dev/null | wc -l | tr -d ' ') || os_agents="0"
 log "AWS SPIRE agent pods: $aws_agents | OpenStack SPIRE agent pods: $os_agents"
 [[ "$aws_agents" -ge 1 ]] || fail "no SPIRE agent pods on AWS cluster"
 

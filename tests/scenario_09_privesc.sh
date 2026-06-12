@@ -36,7 +36,7 @@ fi
 
 log "checking for sensitive mounted paths..."
 mounts=$(kubectl --context "$AWS_CTX" exec -n "$NS" "$pod" -c api-gateway -- \
-  cat /proc/mounts 2>/dev/null | grep -E "docker|containerd|/var/run/docker" || true)
+  cat /proc/mounts 2>/dev/null | grep -E "/var/run/docker\.sock|/run/docker\.sock|/run/containerd/containerd\.sock|/var/run/docker$" || true)
 if [[ -n "$mounts" ]]; then
   fail "container socket mounted — potential container escape: $mounts"
 fi

@@ -231,7 +231,7 @@ spec:
         - name: transaction-service
           image: ztlab/transaction-service:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          command: ["/bin/sh", "-c", "until python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('postgres-txn.financial.svc.cluster.local', 5432)); s.close()\" 2>/dev/null; do echo 'waiting for postgres-txn...'; sleep 2; done && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
