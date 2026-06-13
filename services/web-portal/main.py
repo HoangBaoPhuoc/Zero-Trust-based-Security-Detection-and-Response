@@ -1,16 +1,25 @@
+"""
+ZTLab Web Portal — Banking UI
+Chức năng: đăng ký, đăng nhập (OIDC/PKCE), xem tài khoản, chuyển tiền.
+Security events → Grafana. Anomaly scoring → security-scorer (Redis 15 phút).
+"""
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import os
 import random
+import re
 import secrets
 import string
 import time
+import urllib.parse
 from collections import defaultdict, deque
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Form, Request, Response
+from fastapi import FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -21,25 +30,28 @@ SERVICE = "web-portal"
 CLOUD = os.getenv("CLOUD_PROVIDER", "aws")
 
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak.identity.svc.cluster.local:8080").rstrip("/")
+KEYCLOAK_PUBLIC_URL = os.getenv("KEYCLOAK_PUBLIC_URL", "http://127.0.0.1:8180").rstrip("/")
+KC_EXTERNAL_HOST = os.getenv("KC_EXTERNAL_HOST", "keycloak.ztlab.local")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ztlab")
 KEYCLOAK_CLIENT_ID = os.getenv("KEYCLOAK_CLIENT_ID", "web-portal")
 KEYCLOAK_ADMIN_USER = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
 KEYCLOAK_ADMIN_PASS = os.getenv("KEYCLOAK_ADMIN_PASS", "")
 
+PKCE_STATE_COOKIE = "ztlab_pkce"
+_KC_PROXY_ALLOWED = ("/realms/", "/resources/", "/js/")
+
 API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", "http://api-gateway.financial.svc.cluster.local:8080").rstrip("/")
-ACCOUNT_SERVICE_URL = os.getenv("ACCOUNT_SERVICE_URL", "http://account-service.financial.svc.cluster.local:8080").rstrip("/")
-PAYMENT_SERVICE_INTERNAL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service.financial.svc.cluster.local:8080").rstrip("/")
-LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
-AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc.cluster.local:8080").rstrip("/")
+FRAUD_DETECTION_URL = os.getenv("FRAUD_DETECTION_URL", "http://fraud-detection.financial.svc.cluster.local:8080").rstrip("/")
+SECURITY_SCORER_URL = os.getenv("SECURITY_SCORER_URL", "http://security-scorer.plg-stack.svc.cluster.local:8080").rstrip("/")
 
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 SESSION_COOKIE = "ztlab_session"
 SESSION_MAX_AGE = 3600
 
-INITIAL_BALANCE = float(os.getenv("INITIAL_BALANCE", "10000000"))  # 10 triệu VND
+INITIAL_BALANCE = float(os.getenv("INITIAL_BALANCE", "10000000"))
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
 REGISTER_LIMIT_PER_HOUR = int(os.getenv("REGISTER_LIMIT_PER_HOUR", "5"))
-ENABLE_SCENARIOS = os.getenv("ENABLE_SCENARIOS", "true").lower() == "true"  # disable in prod
+ENABLE_SCENARIOS = os.getenv("ENABLE_SCENARIOS", "true").lower() == "true"
 
 _register_attempts: dict[str, deque] = defaultdict(deque)
 _sessions: dict[str, dict[str, Any]] = {}
@@ -47,7 +59,7 @@ _sessions: dict[str, dict[str, Any]] = {}
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger(SERVICE)
 
-app = FastAPI(title="ZTLab Web Portal")
+app = FastAPI(title="ZTLab Banking Portal")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
 
@@ -63,6 +75,7 @@ async def security_headers(request: Request, call_next):
     if HTTPS_ENABLED:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
+
 
 _signer = URLSafeTimedSerializer(SESSION_SECRET)
 
@@ -126,6 +139,13 @@ def _admin_token_url() -> str:
     return f"{KEYCLOAK_URL}/realms/master/protocol/openid-connect/token"
 
 
+def _pkce_pair() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
 def _fmt_vnd(amount) -> str:
     try:
         return f"{float(amount):,.0f} ₫"
@@ -142,7 +162,6 @@ def _gen_account_id() -> str:
 
 
 def _decode_jwt_payload(access_token: str) -> dict:
-    import base64
     try:
         parts = access_token.split(".")
         padding = 4 - len(parts[1]) % 4
@@ -158,18 +177,14 @@ def _decode_jwt_payload(access_token: str) -> dict:
 
 async def _get_admin_token() -> str | None:
     if not KEYCLOAK_ADMIN_PASS:
-        logger.error(json.dumps({"event": "admin_token_error", "error": "KEYCLOAK_ADMIN_PASS is not configured"}))
+        logger.error(json.dumps({"event": "admin_token_error", "error": "KEYCLOAK_ADMIN_PASS not set"}))
         return None
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.post(
                 _admin_token_url(),
-                data={
-                    "grant_type": "password",
-                    "client_id": "admin-cli",
-                    "username": KEYCLOAK_ADMIN_USER,
-                    "password": KEYCLOAK_ADMIN_PASS,
-                },
+                data={"grant_type": "password", "client_id": "admin-cli",
+                      "username": KEYCLOAK_ADMIN_USER, "password": KEYCLOAK_ADMIN_PASS},
             )
             if resp.status_code == 200:
                 return resp.json().get("access_token")
@@ -178,18 +193,63 @@ async def _get_admin_token() -> str | None:
     return None
 
 
+async def _keycloak_create_user(
+    admin_token: str, username: str, email: str, full_name: str, password: str,
+) -> tuple[bool, str]:
+    parts = full_name.strip().split(" ", 1)
+    first_name = parts[0]
+    last_name = parts[1] if len(parts) > 1 else ""
+    admin_base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
+    headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.post(
+            f"{admin_base}/users",
+            headers=headers,
+            json={
+                "username": username, "email": email,
+                "firstName": first_name, "lastName": last_name,
+                "enabled": True, "emailVerified": True,
+                "credentials": [{"type": "password", "value": password, "temporary": False}],
+            },
+        )
+        if resp.status_code == 409:
+            return False, "Đăng ký không thành công. Thông tin đã được sử dụng hoặc không hợp lệ."
+        if resp.status_code not in (201, 200):
+            logger.warning(json.dumps({"event": "keycloak_create_user_failed", "status": resp.status_code}))
+            return False, "Không thể tạo tài khoản. Vui lòng thử lại sau."
+
+        search = await client.get(
+            f"{admin_base}/users", headers=headers,
+            params={"username": username, "exact": "true"},
+        )
+        users = search.json()
+        if not users:
+            return False, "Tạo user thành công nhưng không tìm được ID"
+        user_id = users[0]["id"]
+
+        roles_to_assign = []
+        for role_name in ("financial-read", "financial-write"):
+            r = await client.get(f"{admin_base}/roles/{role_name}", headers=headers)
+            if r.status_code == 200:
+                roles_to_assign.append(r.json())
+        if roles_to_assign:
+            await client.post(
+                f"{admin_base}/users/{user_id}/role-mappings/realm",
+                headers=headers, json=roles_to_assign,
+            )
+
+    logger.info(json.dumps({"event": "keycloak_user_created", "username": username}))
+    return True, ""
+
+
 async def _get_user_token(username: str, password: str) -> str | None:
-    """Get a Keycloak access token for a regular user. Returns access_token or None."""
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.post(
                 _token_url(),
-                data={
-                    "grant_type": "password",
-                    "client_id": KEYCLOAK_CLIENT_ID,
-                    "username": username,
-                    "password": password,
-                },
+                data={"grant_type": "password", "client_id": KEYCLOAK_CLIENT_ID,
+                      "username": username, "password": password},
             )
             if resp.status_code == 200:
                 return resp.json().get("access_token")
@@ -198,111 +258,38 @@ async def _get_user_token(username: str, password: str) -> str | None:
     return None
 
 
-async def _keycloak_create_user(
-    admin_token: str,
-    username: str,
-    email: str,
-    full_name: str,
-    password: str,
-) -> tuple[bool, str]:
-    """Create user in Keycloak. Returns (success, error_message)."""
-    parts = full_name.strip().split(" ", 1)
-    first_name = parts[0]
-    last_name = parts[1] if len(parts) > 1 else ""
-
-    admin_base = f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}"
-    headers = {"Authorization": f"Bearer {admin_token}", "Content-Type": "application/json"}
-
-    async with httpx.AsyncClient(timeout=10) as client:
-        # Create user
-        resp = await client.post(
-            f"{admin_base}/users",
-            headers=headers,
-            json={
-                "username": username,
-                "email": email,
-                "firstName": first_name,
-                "lastName": last_name,
-                "enabled": True,
-                "emailVerified": True,
-                "credentials": [{"type": "password", "value": password, "temporary": False}],
-            },
-        )
-        if resp.status_code == 409:
-            # Generic message — prevents username/email enumeration
-            return False, "Đăng ký không thành công. Thông tin đã được sử dụng hoặc không hợp lệ."
-        if resp.status_code not in (201, 200):
-            logger.warning(json.dumps({"event": "keycloak_create_user_failed", "status": resp.status_code}))
-            return False, "Không thể tạo tài khoản. Vui lòng thử lại sau."
-
-        # Fetch the user ID
-        search = await client.get(
-            f"{admin_base}/users",
-            headers=headers,
-            params={"username": username, "exact": "true"},
-        )
-        users = search.json()
-        if not users:
-            return False, "Tạo user thành công nhưng không tìm được ID"
-        user_id = users[0]["id"]
-
-        # Fetch roles
-        roles_to_assign = []
-        for role_name in ("financial-read", "financial-write"):
-            r = await client.get(f"{admin_base}/roles/{role_name}", headers=headers)
-            if r.status_code == 200:
-                roles_to_assign.append(r.json())
-
-        # Assign roles
-        if roles_to_assign:
-            await client.post(
-                f"{admin_base}/users/{user_id}/role-mappings/realm",
-                headers=headers,
-                json=roles_to_assign,
-            )
-
-    logger.info(json.dumps({"event": "keycloak_user_created", "username": username}))
-    return True, ""
-
-
-async def _create_bank_account(username: str, password: str) -> tuple[str, str]:
-    """Create a bank account via api-gateway (OpenStack chain). Returns (account_id, error)."""
-    user_token = await _get_user_token(username, password)
-    if not user_token:
-        return "", "Không lấy được token người dùng để tạo tài khoản"
-    headers = {"Authorization": f"Bearer {user_token}"}
+async def _create_bank_account_with_token(access_token: str, username: str) -> tuple[str, str]:
+    """Create bank account using the user's OIDC access_token (no password grant needed)."""
+    headers = {"Authorization": f"Bearer {access_token}"}
     for _ in range(5):
         account_id = _gen_account_id()
         async with httpx.AsyncClient(timeout=10) as client:
             try:
                 resp = await client.post(
                     f"{API_GATEWAY_URL}/accounts",
-                    json={
-                        "account_id": account_id,
-                        "owner": username,
-                        "balance": INITIAL_BALANCE,
-                        "currency": "VND",
-                    },
+                    json={"account_id": account_id, "owner": username,
+                          "balance": INITIAL_BALANCE, "currency": "VND"},
                     headers=headers,
                 )
                 if resp.status_code in (200, 201):
+                    logger.info(json.dumps({"event": "bank_account_created", "username": username, "account_id": account_id}))
                     return account_id, ""
                 if resp.status_code == 409:
-                    continue  # collision, retry with new ID
+                    continue
                 return "", f"api-gateway error {resp.status_code}: {resp.text[:100]}"
             except Exception as exc:
                 return "", f"api-gateway unavailable: {exc}"
-    return "", "Không thể tạo tài khoản ngân hàng (collision)"
+    return "", "Không thể tạo tài khoản ngân hàng (xung đột ID)"
 
 
 async def _lookup_account(username: str, access_token: str = "") -> str:
-    """Look up the first bank account via api-gateway (requires user JWT)."""
     if not access_token:
         return ""
     async with httpx.AsyncClient(timeout=8) as client:
         try:
             resp = await client.get(
                 f"{API_GATEWAY_URL}/accounts",
+                params={"owner": username},
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             if resp.status_code == 200:
@@ -314,9 +301,22 @@ async def _lookup_account(username: str, access_token: str = "") -> str:
     return ""
 
 
+async def _push_security_event(event_type: str, message: str, service: str = SERVICE, source_ip: str | None = None) -> None:
+    """Push security event to scorer service (best-effort, non-blocking)."""
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            await client.post(
+                f"{SECURITY_SCORER_URL}/events",
+                json={"event_type": event_type, "message": message,
+                      "service": service, "cloud": CLOUD, "source_ip": source_ip},
+            )
+    except Exception:
+        pass
+
+
 async def _cleanup_sessions() -> None:
     while True:
-        await asyncio.sleep(300)  # every 5 minutes
+        await asyncio.sleep(300)
         now = time.time()
         expired = [sid for sid, rec in list(_sessions.items())
                    if now - rec.get("created_at", 0) > SESSION_MAX_AGE]
@@ -332,7 +332,7 @@ async def startup() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Core routes
+# Public routes
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
@@ -349,42 +349,91 @@ async def root(request: Request):
 
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, error: str = ""):
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
+async def login_page(request: Request, error: str = "", success: str = ""):
+    return templates.TemplateResponse("login.html", {"request": request, "error": error, "success": success})
 
 
-@app.post("/auth/login", response_class=HTMLResponse)
-async def do_login(request: Request, username: str = Form(...), password: str = Form(...)):
+@app.get("/auth/start")
+async def auth_start(request: Request):
+    state = secrets.token_urlsafe(32)
+    code_verifier, code_challenge = _pkce_pair()
+    portal_base = str(request.base_url).rstrip("/")
+    redirect_uri = portal_base + "/auth/callback"
+
+    pkce_payload = {"state": state, "code_verifier": code_verifier, "redirect_uri": redirect_uri}
+    token = _sign_session(pkce_payload)
+
+    params = urllib.parse.urlencode({
+        "client_id": KEYCLOAK_CLIENT_ID,
+        "response_type": "code",
+        "scope": "openid profile email",
+        "redirect_uri": redirect_uri,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    })
+    auth_url = f"{portal_base}/kc/realms/{KEYCLOAK_REALM}/protocol/openid-connect/auth?{params}"
+
+    response = RedirectResponse(auth_url, status_code=302)
+    response.set_cookie(
+        PKCE_STATE_COOKIE, token, max_age=300, httponly=True, samesite="lax", secure=HTTPS_ENABLED,
+    )
+    return response
+
+
+@app.get("/auth/callback")
+async def auth_callback(request: Request, code: str = "", state: str = "", error: str = ""):
+    if error:
+        return RedirectResponse(f"/login?error={urllib.parse.quote(error)}", status_code=302)
+    if not code or not state:
+        return RedirectResponse("/login?error=Thiếu+tham+số+callback", status_code=302)
+
+    pkce_token = request.cookies.get(PKCE_STATE_COOKIE)
+    if not pkce_token:
+        return RedirectResponse("/login?error=Session+PKCE+hết+hạn,+vui+lòng+thử+lại", status_code=302)
+    try:
+        pkce_data = _signer.loads(pkce_token, max_age=300)
+    except Exception:
+        return RedirectResponse("/login?error=Session+PKCE+không+hợp+lệ", status_code=302)
+
+    if not isinstance(pkce_data, dict) or pkce_data.get("state") != state:
+        ip = request.client.host if request.client else "?"
+        logger.warning(json.dumps({"event": "oidc_state_mismatch", "ip": ip}))
+        asyncio.create_task(_push_security_event("access_denied", "OIDC state mismatch / CSRF attempt", source_ip=ip))
+        return RedirectResponse("/login?error=CSRF+state+không+khớp", status_code=302)
+
+    code_verifier = pkce_data.get("code_verifier", "")
+    redirect_uri = pkce_data.get("redirect_uri", "")
+
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.post(
                 _token_url(),
-                data={
-                    "grant_type": "password",
-                    "client_id": KEYCLOAK_CLIENT_ID,
-                    "username": username,
-                    "password": password,
-                },
+                data={"grant_type": "authorization_code", "client_id": KEYCLOAK_CLIENT_ID,
+                      "code": code, "redirect_uri": redirect_uri, "code_verifier": code_verifier},
             )
             if resp.status_code != 200:
-                # Generic message — prevents credential/account enumeration
-                logger.warning(json.dumps({"event": "login_failed", "status": resp.status_code}))
-                return RedirectResponse("/login?error=Sai+tên+đăng+nhập+hoặc+mật+khẩu", status_code=302)
+                logger.warning(json.dumps({"event": "oidc_token_exchange_failed", "status": resp.status_code}))
+                return RedirectResponse("/login?error=Xác+thực+Keycloak+thất+bại", status_code=302)
             token_data = resp.json()
         except Exception as exc:
-            logger.error(json.dumps({"event": "keycloak_error", "error": str(exc)}))
+            logger.error(json.dumps({"event": "oidc_token_exchange_error", "error": str(exc)}))
             return RedirectResponse("/login?error=Không+thể+kết+nối+Keycloak", status_code=302)
 
     access_token = token_data.get("access_token", "")
     claims = _decode_jwt_payload(access_token)
-    preferred_username = claims.get("preferred_username", username)
+    preferred_username = claims.get("preferred_username", "")
     realm_roles = claims.get("realm_access", {}).get("roles", [])
     full_name = " ".join(filter(None, [claims.get("given_name", ""), claims.get("family_name", "")])) or preferred_username
 
-    # Dynamically look up bank account via api-gateway (OpenStack chain)
     account_id = await _lookup_account(preferred_username, access_token)
+    if not account_id:
+        # First login — create bank account using the user's own OIDC token
+        account_id, acc_err = await _create_bank_account_with_token(access_token, preferred_username)
+        if acc_err:
+            logger.warning(json.dumps({"event": "first_login_account_create_failed",
+                                       "username": preferred_username, "error": acc_err}))
 
-    # Invalidate any previous sessions for this user before creating a new one
     stale = [sid for sid, rec in list(_sessions.items())
              if rec.get("data", {}).get("username") == preferred_username]
     for sid in stale:
@@ -401,15 +450,68 @@ async def do_login(request: Request, username: str = Form(...), password: str = 
         "logged_in_at": time.time(),
     }
     response = RedirectResponse("/dashboard", status_code=302)
+    response.delete_cookie(PKCE_STATE_COOKIE)
     _set_session(response, session_data)
-    logger.info(json.dumps({"event": "user_login", "username": preferred_username, "account_id": account_id}))
+    logger.info(json.dumps({"event": "user_login_oidc", "username": preferred_username, "account_id": account_id}))
+    return response
+
+
+@app.api_route("/kc/{path:path}", methods=["GET", "POST"])
+async def kc_proxy(path: str, request: Request):
+    full_path = "/" + path
+    if not any(full_path.startswith(pfx) for pfx in _KC_PROXY_ALLOWED):
+        raise HTTPException(status_code=404)
+
+    target_url = f"{KEYCLOAK_URL}/{path}"
+    if request.url.query:
+        target_url += "?" + request.url.query
+
+    body = await request.body()
+    hop_by_hop = {"connection", "keep-alive", "transfer-encoding", "te", "trailer",
+                  "upgrade", "proxy-authorization", "proxy-authenticate", "host"}
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in hop_by_hop}
+    fwd_headers["accept-encoding"] = "identity"
+
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+        try:
+            kc_resp = await client.request(
+                method=request.method, url=target_url,
+                headers=fwd_headers, content=body, cookies=dict(request.cookies),
+            )
+        except Exception as exc:
+            logger.error(json.dumps({"event": "kc_proxy_error", "path": path, "error": str(exc)}))
+            raise HTTPException(status_code=502, detail="Keycloak không khả dụng")
+
+    portal_base = str(request.base_url).rstrip("/")
+    kc_ext_base_http = f"http://{KC_EXTERNAL_HOST}"
+    kc_ext_base_https = f"https://{KC_EXTERNAL_HOST}"
+
+    content = kc_resp.content
+    ct = kc_resp.headers.get("content-type", "")
+    if "html" in ct or "javascript" in ct:
+        text = content.decode("utf-8", errors="replace")
+        text = text.replace(kc_ext_base_https, portal_base + "/kc")
+        text = text.replace(kc_ext_base_http, portal_base + "/kc")
+        content = text.encode("utf-8")
+
+    skip_hdrs = {"content-encoding", "transfer-encoding", "content-length", "connection"}
+    response = Response(content=content, status_code=kc_resp.status_code, media_type=ct or None)
+    for hdr_name, hdr_val in kc_resp.headers.multi_items():
+        hn = hdr_name.lower()
+        if hn in skip_hdrs:
+            continue
+        if hn == "location":
+            hdr_val = hdr_val.replace(kc_ext_base_https, portal_base + "/kc")
+            hdr_val = hdr_val.replace(kc_ext_base_http, portal_base + "/kc")
+        elif hn == "set-cookie":
+            hdr_val = re.sub(r'(?i)(;\s*[Pp]ath=)/realms/', r'\1/kc/realms/', hdr_val)
+        response.headers.append(hdr_name, hdr_val)
     return response
 
 
 @app.get("/auth/logout")
 async def logout(request: Request):
     session = _get_session(request)
-    # Revoke Keycloak session (best-effort)
     if session:
         refresh_token = session.get("refresh_token", "")
         if refresh_token:
@@ -417,10 +519,7 @@ async def logout(request: Request):
                 try:
                     await client.post(
                         f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/logout",
-                        data={
-                            "client_id": KEYCLOAK_CLIENT_ID,
-                            "refresh_token": refresh_token,
-                        },
+                        data={"client_id": KEYCLOAK_CLIENT_ID, "refresh_token": refresh_token},
                     )
                 except Exception:
                     pass
@@ -435,11 +534,7 @@ async def logout(request: Request):
 
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request, error: str = "", success: str = ""):
-    return templates.TemplateResponse("register.html", {
-        "request": request,
-        "error": error,
-        "success": success,
-    })
+    return templates.TemplateResponse("register.html", {"request": request, "error": error, "success": success})
 
 
 def _check_register_rate(ip: str) -> bool:
@@ -462,52 +557,41 @@ async def do_register(
     password: str = Form(...),
     confirm_password: str = Form(...),
 ):
-    # Rate limit: max 5 registrations per IP per hour
     client_ip = request.client.host if request.client else "unknown"
     if not _check_register_rate(client_ip):
+        asyncio.create_task(_push_security_event(
+            "brute_force", f"Register rate limit exceeded source_ip={client_ip}", source_ip=client_ip,
+        ))
         return RedirectResponse("/register?error=Quá+nhiều+yêu+cầu+đăng+ký.+Thử+lại+sau+1+giờ.", status_code=302)
 
-    # Validate
-    import re as _re
     username = username.strip().lower()
-    if len(username) < 3 or not _re.match(r'^[a-z0-9_\-\.]+$', username):
+    if len(username) < 3 or not re.match(r'^[a-z0-9_\-\.]+$', username):
         return RedirectResponse("/register?error=Tên+đăng+nhập+phải+có+ít+nhất+3+ký+tự+và+chỉ+gồm+chữ+thường,+số,+dấu+gạch+dưới", status_code=302)
     if len(password) < 12:
         return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+12+ký+tự", status_code=302)
-    if not _re.search(r'[A-Z]', password):
+    if not re.search(r'[A-Z]', password):
         return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+1+chữ+hoa", status_code=302)
-    if not _re.search(r'[0-9]', password):
+    if not re.search(r'[0-9]', password):
         return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+1+chữ+số", status_code=302)
-    if not _re.search(r'[^A-Za-z0-9]', password):
+    if not re.search(r'[^A-Za-z0-9]', password):
         return RedirectResponse("/register?error=Mật+khẩu+phải+có+ít+nhất+1+ký+tự+đặc+biệt", status_code=302)
     if password != confirm_password:
         return RedirectResponse("/register?error=Mật+khẩu+xác+nhận+không+khớp", status_code=302)
     if not email or "@" not in email or "." not in email.split("@")[-1]:
         return RedirectResponse("/register?error=Email+không+hợp+lệ", status_code=302)
 
-    # Get admin token
     admin_token = await _get_admin_token()
     if not admin_token:
         return RedirectResponse("/register?error=Hệ+thống+tạm+thời+không+khả+dụng", status_code=302)
 
-    # Create Keycloak user
     ok, err = await _keycloak_create_user(admin_token, username, email, full_name, password)
     if not ok:
         from urllib.parse import quote
         return RedirectResponse(f"/register?error={quote(err)}", status_code=302)
 
-    # Create bank account in OpenStack via api-gateway (requires user JWT)
-    account_id, acc_err = await _create_bank_account(username, password)
-    if acc_err:
-        logger.error(json.dumps({"event": "account_create_failed", "username": username, "error": acc_err}))
-
-    logger.info(json.dumps({
-        "event": "user_registered",
-        "username": username,
-        "account_id": account_id,
-    }))
+    logger.info(json.dumps({"event": "user_registered", "username": username}))
     return RedirectResponse(
-        f"/login?success=Đăng+ký+thành+công!+Tài+khoản+ngân+hàng+{account_id}+đã+được+tạo.+Hãy+đăng+nhập.",
+        "/login?success=Đăng+ký+thành+công!+Hãy+đăng+nhập+để+kích+hoạt+tài+khoản+ngân+hàng.",
         status_code=302,
     )
 
@@ -545,33 +629,6 @@ async def transfer_page(request: Request):
     })
 
 
-@app.get("/logs", response_class=HTMLResponse)
-async def logs_page(request: Request):
-    session = _get_session(request)
-    if not session:
-        return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("logs.html", {
-        "request": request,
-        "username": session.get("username"),
-        "full_name": session.get("full_name", session.get("username")),
-        "page": "logs",
-    })
-
-
-@app.get("/alerts", response_class=HTMLResponse)
-async def alerts_page(request: Request):
-    session = _get_session(request)
-    if not session:
-        return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("alerts.html", {
-        "request": request,
-        "username": session.get("username"),
-        "full_name": session.get("full_name", session.get("username")),
-        "roles": session.get("roles", []),
-        "page": "alerts",
-    })
-
-
 @app.get("/profile", response_class=HTMLResponse)
 async def profile_page(request: Request):
     session = _get_session(request)
@@ -590,7 +647,7 @@ async def profile_page(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# REST API endpoints (called via fetch() from frontend)
+# REST API (called via fetch() from frontend)
 # ---------------------------------------------------------------------------
 
 @app.get("/api/balance/{account_id}")
@@ -598,12 +655,15 @@ async def get_balance(account_id: str, request: Request):
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
-    # IDOR protection: only allow querying the session's own account
     if account_id != session.get("account_id", ""):
         logger.warning(json.dumps({
             "event": "idor_attempt", "endpoint": "/api/balance",
             "requested": account_id, "user": session.get("username"),
         }))
+        asyncio.create_task(_push_security_event(
+            "access_denied",
+            f"IDOR attempt on /api/balance requested={account_id} user={session.get('username')}",
+        ))
         return JSONResponse({"error": "access denied"}, status_code=403)
     access_token = session.get("access_token", "")
     async with httpx.AsyncClient(timeout=10) as client:
@@ -613,7 +673,7 @@ async def get_balance(account_id: str, request: Request):
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception as exc:
+        except Exception:
             return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
@@ -623,7 +683,7 @@ async def get_transactions(request: Request, account_id: str = "", limit: int = 
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     access_token = session.get("access_token", "")
-    params: dict[str, Any] = {"limit": limit}
+    params: dict[str, Any] = {"limit": min(limit, 100)}
     if account_id:
         params["account_id"] = account_id
     async with httpx.AsyncClient(timeout=10) as client:
@@ -634,7 +694,7 @@ async def get_transactions(request: Request, account_id: str = "", limit: int = 
                 headers={"Authorization": f"Bearer {access_token}"},
             )
             return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception as exc:
+        except Exception:
             return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
@@ -645,6 +705,8 @@ async def do_transfer(request: Request):
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     body = await request.json()
     access_token = session.get("access_token", "")
+    client_ip = request.client.host if request.client else "unknown"
+
     async with httpx.AsyncClient(timeout=15) as client:
         try:
             resp = await client.post(
@@ -652,162 +714,216 @@ async def do_transfer(request: Request):
                 json=body,
                 headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
             )
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception as exc:
+            result = resp.json()
+            # Push security event if fraud was detected
+            fraud = result.get("fraud", {})
+            if fraud.get("gate") == "blocked" or fraud.get("verdict") == "block":
+                asyncio.create_task(_push_security_event(
+                    "fraud_gate_bypass",
+                    f"fraud_block score={fraud.get('score')} from={body.get('from_account')} amount={body.get('amount')} source_ip={client_ip}",
+                    source_ip=client_ip,
+                ))
+            return JSONResponse(result, status_code=resp.status_code)
+        except Exception:
             return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
 @app.get("/api/account/me")
 async def get_my_account(request: Request):
-    """Return current user's account info (refreshes from account-service)."""
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     username = session.get("username", "")
     access_token = session.get("access_token", "")
+    roles = session.get("roles", [])
+    is_admin = "security-admin" in roles
+    params = {} if is_admin else {"owner": username}
     async with httpx.AsyncClient(timeout=8) as client:
         try:
             resp = await client.get(
                 f"{API_GATEWAY_URL}/accounts",
+                params=params,
                 headers={"Authorization": f"Bearer {access_token}"} if access_token else {},
             )
             if resp.status_code == 200:
                 accounts = resp.json()
-                return JSONResponse({"accounts": accounts, "username": username})
-            return JSONResponse({"accounts": [], "username": username})
-        except Exception as exc:
+                return JSONResponse({"accounts": accounts, "username": username, "is_admin": is_admin})
+            return JSONResponse({"accounts": [], "username": username, "is_admin": is_admin})
+        except Exception:
             return JSONResponse({"error": "service unavailable"}, status_code=503)
 
 
-@app.get("/api/logs")
-async def get_security_logs(request: Request, limit: int = 50):
+@app.get("/api/velocity")
+async def get_velocity(request: Request):
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
-    end_ns = time.time_ns()
-    start_ns = end_ns - 3600 * 1_000_000_000
-    query = '{job=~"ai-analyzer|soar-engine|envoy-access|opa-decisions|kubernetes-pods"}'
-    params = {
-        "query": query,
-        "start": str(start_ns),
-        "end": str(end_ns),
-        "limit": str(limit),
-        "direction": "backward",
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         try:
-            resp = await client.get(f"{LOKI_URL}/loki/api/v1/query_range", params=params)
-            data = resp.json()
-            entries = []
-            for stream in data.get("data", {}).get("result", []):
-                labels = stream.get("stream", {})
-                for ts_ns, line in stream.get("values", []):
-                    ts_sec = int(ts_ns) / 1e9
-                    ts_iso = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(ts_sec))
-                    try:
-                        msg = json.loads(line)
-                    except Exception:
-                        msg = {"message": line}
-                    entries.append({
-                        "timestamp": ts_iso,
-                        "ts_ns": ts_ns,
-                        "job": labels.get("job", ""),
-                        "service": labels.get("service", labels.get("app", "")),
-                        "severity": labels.get("severity", msg.get("level", msg.get("severity", "info"))),
-                        "event_type": msg.get("event_type", msg.get("event", "")),
-                        "message": msg.get("message", msg.get("summary", line[:200])),
-                        "raw": msg,
-                    })
-            entries.sort(key=lambda e: e["ts_ns"], reverse=True)
-            return JSONResponse(entries[:limit])
-        except Exception as exc:
-            return JSONResponse({"error": "service unavailable"}, status_code=503)
+            r = await client.get(f"{FRAUD_DETECTION_URL}/debug/velocity")
+            return JSONResponse(r.json())
+        except Exception:
+            return JSONResponse({"velocity": [], "window_seconds": 60, "soft_limit": 10, "error": "unavailable"})
 
 
-@app.get("/api/alerts")
-async def get_ai_alerts(request: Request, status: str = "pending"):
+@app.get("/api/security/score")
+async def get_security_score(request: Request):
+    """Trả về anomaly score hiện tại từ Redis scorer (15 phút window)."""
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            resp = await client.get(f"{AI_ANALYZER_URL}/pending", params={"status": status} if status else {})
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception as exc:
-            return JSONResponse({"error": "service unavailable"}, status_code=503)
-
-
-def _has_security_role(session: dict) -> bool:
+    # Chỉ security roles mới xem được
     roles = session.get("roles", [])
-    return any(r in roles for r in ("security-admin", "security-analyst"))
-
-
-@app.post("/api/alerts/{alert_id}/approve")
-async def approve_alert(alert_id: str, request: Request):
-    session = _get_session(request)
-    if not session:
-        return JSONResponse({"error": "not authenticated"}, status_code=401)
-    if not _has_security_role(session):
-        logger.warning(json.dumps({
-            "event": "rbac_denied", "action": "approve_alert",
-            "user": session.get("username"), "alert_id": alert_id,
-        }))
-        return JSONResponse({"error": "security-admin or security-analyst role required"}, status_code=403)
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    async with httpx.AsyncClient(timeout=10) as client:
+    if not any(r in roles for r in ("security-admin", "security-analyst", "financial-read")):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    async with httpx.AsyncClient(timeout=5) as client:
         try:
-            resp = await client.post(f"{AI_ANALYZER_URL}/pending/{alert_id}/approve", json=body)
-            return JSONResponse(resp.json(), status_code=resp.status_code)
+            r = await client.get(f"{SECURITY_SCORER_URL}/score")
+            return JSONResponse(r.json())
         except Exception:
-            return JSONResponse({"error": "service unavailable"}, status_code=503)
-
-
-@app.post("/api/alerts/{alert_id}/dismiss")
-async def dismiss_alert(alert_id: str, request: Request):
-    session = _get_session(request)
-    if not session:
-        return JSONResponse({"error": "not authenticated"}, status_code=401)
-    if not _has_security_role(session):
-        logger.warning(json.dumps({
-            "event": "rbac_denied", "action": "dismiss_alert",
-            "user": session.get("username"), "alert_id": alert_id,
-        }))
-        return JSONResponse({"error": "security-admin or security-analyst role required"}, status_code=403)
-    body = {}
-    try:
-        body = await request.json()
-    except Exception:
-        pass
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            resp = await client.post(f"{AI_ANALYZER_URL}/pending/{alert_id}/dismiss", json=body)
-            return JSONResponse(resp.json(), status_code=resp.status_code)
-        except Exception:
-            return JSONResponse({"error": "service unavailable"}, status_code=503)
+            return JSONResponse({"score": 0, "error": "scorer unavailable"})
 
 
 # ---------------------------------------------------------------------------
-# Scenarios page + runner
+# Admin panel (security-admin role only)
 # ---------------------------------------------------------------------------
 
-@app.get("/scenarios", response_class=HTMLResponse)
-async def scenarios_page(request: Request):
-    if not ENABLE_SCENARIOS:
-        raise HTTPException(status_code=404, detail="not found")
+def _require_admin(session: dict | None) -> bool:
+    if not session:
+        return False
+    return "security-admin" in session.get("roles", [])
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(request: Request):
     session = _get_session(request)
     if not session:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("scenarios.html", {
+    if not _require_admin(session):
+        raise HTTPException(status_code=403, detail="Chỉ security-admin mới được truy cập")
+    return templates.TemplateResponse("admin.html", {
         "request": request,
         "username": session.get("username"),
         "full_name": session.get("full_name", session.get("username")),
-        "page": "scenarios",
+        "roles": session.get("roles", []),
+        "page": "admin",
     })
 
+
+@app.get("/api/admin/accounts")
+async def admin_all_accounts(request: Request):
+    session = _get_session(request)
+    if not session or not _require_admin(session):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    access_token = session.get("access_token", "")
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(
+                f"{API_GATEWAY_URL}/accounts",
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            resp.raise_for_status()
+            return JSONResponse({"accounts": resp.json()})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.get("/api/admin/transactions")
+async def admin_all_transactions(request: Request, limit: int = 50):
+    session = _get_session(request)
+    if not session or not _require_admin(session):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    access_token = session.get("access_token", "")
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(
+                f"{API_GATEWAY_URL}/transactions",
+                params={"limit": min(limit, 200)},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            resp.raise_for_status()
+            txns = resp.json()
+            return JSONResponse({"transactions": txns, "total": len(txns)})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.get("/api/admin/users")
+async def admin_users(request: Request):
+    session = _get_session(request)
+    if not session or not _require_admin(session):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    admin_token = await _get_admin_token()
+    if not admin_token:
+        return JSONResponse({"error": "keycloak admin unavailable"}, status_code=503)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            resp = await client.get(
+                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users",
+                headers={"Authorization": f"Bearer {admin_token}"},
+                params={"max": 50},
+            )
+            resp.raise_for_status()
+            raw_users = resp.json()
+            users = []
+            for u in raw_users:
+                role_resp = await client.get(
+                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users/{u['id']}/role-mappings/realm",
+                    headers={"Authorization": f"Bearer {admin_token}"},
+                )
+                realm_roles = [r["name"] for r in role_resp.json()] if role_resp.status_code == 200 else []
+                users.append({
+                    "id": u["id"],
+                    "username": u.get("username"),
+                    "email": u.get("email", ""),
+                    "firstName": u.get("firstName", ""),
+                    "lastName": u.get("lastName", ""),
+                    "enabled": u.get("enabled", True),
+                    "createdTimestamp": u.get("createdTimestamp", 0),
+                    "roles": [r for r in realm_roles if r in (
+                        "financial-read", "financial-write", "security-analyst", "security-admin",
+                    )],
+                })
+            return JSONResponse({"users": users})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.get("/api/admin/stats")
+async def admin_stats(request: Request):
+    session = _get_session(request)
+    if not session or not _require_admin(session):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    access_token = session.get("access_token", "")
+    import asyncio as _asyncio
+    async with httpx.AsyncClient(timeout=10) as client:
+        accounts_resp, txns_resp = await _asyncio.gather(
+            client.get(f"{API_GATEWAY_URL}/accounts",
+                       headers={"Authorization": f"Bearer {access_token}"}),
+            client.get(f"{API_GATEWAY_URL}/transactions", params={"limit": 200},
+                       headers={"Authorization": f"Bearer {access_token}"}),
+            return_exceptions=True,
+        )
+    accounts = accounts_resp.json() if not isinstance(accounts_resp, Exception) and accounts_resp.status_code == 200 else []
+    txns = txns_resp.json() if not isinstance(txns_resp, Exception) and txns_resp.status_code == 200 else []
+    if not isinstance(txns, list):
+        txns = []
+    total_balance = sum(float(a.get("balance", 0)) for a in accounts if isinstance(a, dict))
+    import time as _time
+    cutoff_24h = _time.time() - 86400
+    txns_24h = [t for t in txns if isinstance(t, dict) and float(t.get("created_at", 0)) >= cutoff_24h]
+    return JSONResponse({
+        "total_accounts": len(accounts),
+        "total_balance": total_balance,
+        "total_transactions": len(txns),
+        "transactions_24h": len(txns_24h),
+        "volume_24h": sum(float(t.get("amount", 0)) for t in txns_24h),
+    })
+
+
+# ---------------------------------------------------------------------------
+# Demo scenarios (hidden from nav, accessible for demo/testing)
+# ---------------------------------------------------------------------------
 
 _FAKE_JWT = (
     "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"
@@ -817,12 +933,8 @@ _FAKE_JWT = (
 
 
 async def _call_gateway(
-    method: str,
-    path: str,
-    token: str | None = None,
-    json_body: dict | None = None,
-    extra_headers: dict | None = None,
-    timeout: int = 10,
+    method: str, path: str, token: str | None = None,
+    json_body: dict | None = None, extra_headers: dict | None = None, timeout: int = 10,
 ) -> tuple[int, Any]:
     headers: dict[str, str] = {}
     if token:
@@ -841,27 +953,40 @@ async def _call_gateway(
         return resp.status_code, body
 
 
-async def _inject_ai(logs: list[dict]) -> tuple[int, Any]:
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(
-            f"{AI_ANALYZER_URL}/analyze",
-            json={"source": "web_scenario", "logs": logs},
-        )
-        try:
-            return resp.status_code, resp.json()
-        except Exception:
-            return resp.status_code, {"raw": resp.text[:300]}
-
-
 def _now_iso() -> str:
     import datetime
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+async def _push_scenario_event(scenario_id: str, logs: list[dict]) -> None:
+    """Push scenario events to security scorer instead of AI analyzer."""
+    for log in logs:
+        await _push_security_event(
+            event_type=scenario_id,
+            message=log.get("message", ""),
+            service=log.get("labels", {}).get("app", "demo"),
+        )
+
+
+@app.get("/scenarios", response_class=HTMLResponse)
+async def scenarios_page(request: Request):
+    if not ENABLE_SCENARIOS:
+        raise HTTPException(status_code=404)
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("scenarios.html", {
+        "request": request,
+        "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
+        "page": "scenarios",
+    })
+
+
 @app.post("/api/scenarios/{scenario_id}/run")
 async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
     if not ENABLE_SCENARIOS:
-        raise HTTPException(status_code=404, detail="not found")
+        raise HTTPException(status_code=404)
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
@@ -871,24 +996,28 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
 
     if scenario_id == "no_jwt":
         sc, body = await _call_gateway("POST", "/payments",
-            json_body={"from_account": account_id, "to_account": "ACC-2001", "amount": 1000, "currency": "VND"})
+            json_body={"from_account": account_id, "to_account": "ACC-2001", "amount": 1000})
+        await _push_security_event("access_denied", "no_jwt payment attempt blocked")
         return JSONResponse({"status_code": sc, "result": body, "expected": "403 – OPA deny: missing JWT"})
 
     if scenario_id == "jwt_forgery":
         sc, body = await _call_gateway("POST", "/payments", token=_FAKE_JWT,
-            json_body={"from_account": account_id, "to_account": "ACC-2001", "amount": 1000, "currency": "VND"})
+            json_body={"from_account": account_id, "to_account": "ACC-2001", "amount": 1000})
+        await _push_security_event("access_denied", "jwt_forgery attempt invalid signature")
         return JSONResponse({"status_code": sc, "result": body, "expected": "401 – invalid JWT signature"})
 
     if scenario_id == "lateral_movement":
         sc, body = await _call_gateway("POST", "/payments/internal/execute",
             extra_headers={"X-Forwarded-Client-Cert": "URI=spiffe://evil.corp/attacker"},
             json_body={"from_account": account_id, "to_account": "ACC-9999", "amount": 999_999_999})
+        await _push_security_event("lateral_movement", "lateral_movement invalid svid spiffe://evil.corp/attacker")
         return JSONResponse({"status_code": sc, "result": body, "expected": "403 – SVID not in trust domain"})
 
     if scenario_id == "fraud_gate":
         sc, body = await _call_gateway("POST", "/payments", token=token,
             json_body={"from_account": account_id, "to_account": "ACC-2001",
                        "amount": 500_000_000, "currency": "VND", "channel": "tor"})
+        await _push_security_event("fraud_gate_bypass", f"fraud_block critical_amount channel=tor from={account_id}")
         return JSONResponse({"status_code": sc, "result": body, "expected": "403 – fraud_block (score=75)"})
 
     if scenario_id == "high_velocity":
@@ -897,8 +1026,7 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
             for i in range(10):
                 resp = await client.post(
                     f"{API_GATEWAY_URL}/payments", timeout=8,
-                    json={"from_account": account_id, "to_account": "ACC-2001",
-                          "amount": 1_000, "currency": "VND"},
+                    json={"from_account": account_id, "to_account": "ACC-2001", "amount": 1_000},
                     headers={"Authorization": f"Bearer {token}"},
                 )
                 try:
@@ -907,13 +1035,15 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
                     d = {}
                 fraud = d.get("fraud", {})
                 results.append({
-                    "attempt": i + 1,
-                    "status_code": resp.status_code,
+                    "attempt": i + 1, "status_code": resp.status_code,
                     "fraud_score": fraud.get("score", "?"),
                     "gate": fraud.get("gate", "?" if resp.status_code < 400 else "blocked"),
                 })
-        return JSONResponse({"results": results,
-                             "expected": "fraud score tăng dần theo velocity; count>5 → score+10"})
+        await _push_scenario_event("high_velocity", [
+            {"message": f"velocity={len(results)} transactions window=30s from_account={account_id}",
+             "labels": {"app": "fraud-detection"}}
+        ])
+        return JSONResponse({"results": results, "expected": "fraud score tăng dần theo velocity"})
 
     if scenario_id == "rate_limit":
         results = []
@@ -926,89 +1056,36 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
                              "expected": "req 61+ → 429 Too Many Requests"})
 
     if scenario_id == "inject_brute_force":
-        sc, body = await _inject_ai([{
-            "timestamp": _now_iso(),
-            "message": (
-                "jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 "
-                "source_ip=10.9.8.55 brute_force_detected within_30s auth_method=password"
-            ),
-            "labels": {"namespace": "financial", "app": "api-gateway",
-                       "job": "kubernetes-pods", "cloud": "aws"},
-        }])
-        return JSONResponse({"status_code": sc, "result": body,
-                             "expected": "verdict=malicious, attack_type=brute_force, severity=high"})
+        _logs = [{"message": f"jwt_verification_failed reason=invalid_jwt attempt={i} username=testuser01 source_ip=10.9.8.55",
+                  "labels": {"app": "api-gateway"}} for i in range(1, 21)]
+        _logs.append({"message": "brute_force_detected account_locked source_ip=10.9.8.55 attempts=20",
+                      "labels": {"app": "api-gateway"}})
+        await _push_scenario_event("inject_brute_force", _logs)
+        return JSONResponse({"result": "injected", "events": len(_logs),
+                             "expected": "anomaly score tăng, pattern=brute_force"})
 
     if scenario_id == "inject_port_scan":
-        sc, body = await _inject_ai([{
-            "timestamp": _now_iso(),
-            "message": (
-                "nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 "
-                "target=api-gateway duration_s=12 scan_type=SYN"
-            ),
-            "labels": {"namespace": "financial", "app": "api-gateway",
-                       "job": "envoy-access", "cloud": "aws"},
-        }])
-        return JSONResponse({"status_code": sc, "result": body,
-                             "expected": "verdict=malicious, playbook=block_source_ip"})
+        await _push_security_event("port_scan", "nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway")
+        return JSONResponse({"result": "injected", "expected": "anomaly score tăng, pattern=port_scan"})
 
     if scenario_id == "inject_exfiltration":
-        sc, body = await _inject_ai([{
-            "timestamp": _now_iso(),
-            "message": (
-                "bytes_sent=8388608 method=GET path=/accounts/ACC-1001/history "
-                "response_code=200 duration_ms=3200 source_ip=10.9.8.77"
-            ),
-            "labels": {"namespace": "financial", "app": "account-service",
-                       "job": "envoy-access", "cloud": "openstack"},
-        }])
-        return JSONResponse({"status_code": sc, "result": body,
-                             "expected": "verdict=malicious, attack_type=large_response, playbook=restrict_egress"})
+        await _push_security_event("data_exfil", "bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77")
+        return JSONResponse({"result": "injected", "expected": "anomaly score tăng, pattern=data_exfil"})
 
     if scenario_id == "inject_cryptomining":
-        sc, body = await _inject_ai([{
-            "timestamp": _now_iso(),
-            "message": (
-                "xmrig stratum+tcp://pool.minexmr.com:4444 connected "
-                "worker=api-gateway-pod cpu_usage=98pct hashrate=1.2kH/s"
-            ),
-            "labels": {"namespace": "financial", "app": "api-gateway",
-                       "job": "kubernetes-pods", "cloud": "aws"},
-        }])
-        return JSONResponse({"status_code": sc, "result": body,
-                             "expected": "verdict=malicious, attack_type=cryptomining, playbook=quarantine_workload"})
+        await _push_security_event("cryptomining", "xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct")
+        return JSONResponse({"result": "injected", "expected": "anomaly score tăng, pattern=cryptomining"})
 
     if scenario_id == "sqli_probe":
         sc_live, body_live = await _call_gateway("POST", "/payments", token=token,
-            json_body={"from_account": "1' OR '1'='1", "to_account": "ACC-2001",
-                       "amount": 100, "currency": "VND"})
-        _, ai_body = await _inject_ai([{
-            "timestamp": _now_iso(),
-            "message": (
-                "request_validation_failed path=/payments from_account=\"1' OR '1'='1\" "
-                "payload_anomaly=sql_injection source_ip=10.9.8.33"
-            ),
-            "labels": {"namespace": "financial", "app": "payment-service",
-                       "job": "kubernetes-pods", "cloud": "aws"},
-        }])
-        return JSONResponse({
-            "status_code": sc_live,
-            "result": body_live,
-            "ai_analysis": ai_body,
-            "expected": "HTTP 422 validation error + AI: exploit_probe",
-        })
+            json_body={"from_account": "1' OR '1'='1", "to_account": "ACC-2001", "amount": 100})
+        await _push_security_event("exploit_probe", "sqlmap union select sql_injection from_account payload_anomaly=sql_injection")
+        return JSONResponse({"status_code": sc_live, "result": body_live,
+                             "expected": "HTTP 422 validation error + scorer: exploit_probe"})
 
     if scenario_id == "inject_cred_stuffing":
-        sc, body = await _inject_ai([{
-            "timestamp": _now_iso(),
-            "message": (
-                "credential_stuffing detected unique_usernames=25 attempts_per_user=5 "
-                "total_attempts=125 window_seconds=60 source_ip=203.0.113.55 "
-                "success_rate=0.0 jwt_verification_failed=125"
-            ),
-            "labels": {"namespace": "financial", "app": "api-gateway",
-                       "job": "kubernetes-pods", "cloud": "aws"},
-        }])
-        return JSONResponse({"status_code": sc, "result": body,
-                             "expected": "verdict=malicious, playbook=revoke_user_sessions"})
+        await _push_security_event("cred_stuffing",
+            "credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125")
+        return JSONResponse({"result": "injected", "expected": "anomaly score tăng, pattern=cred_stuffing"})
 
     return JSONResponse({"error": f"unknown scenario: {scenario_id}"}, status_code=404)

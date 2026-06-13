@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% block title %}Quản trị — ZTLab Banking{% endblock %}
+{% block page_title %}Quản trị hệ thống{% endblock %}
+
+{% block content %}
+
+<!-- Stats -->
+<div class="grid grid-4" style="margin-bottom:20px">
+  <div class="stat-card">
+    <div class="stat-label">Tổng tài khoản</div>
+    <div class="stat-value" id="stat-accounts">—</div>
+    <div class="stat-sub">Toàn bộ hệ thống</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Tổng số dư</div>
+    <div class="stat-value" id="stat-balance" style="font-size:16px">—</div>
+    <div class="stat-sub">VND</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Giao dịch 24h</div>
+    <div class="stat-value" id="stat-txn-24h">—</div>
+    <div class="stat-sub" id="stat-vol-24h">Volume: —</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Tổng giao dịch</div>
+    <div class="stat-value" id="stat-txn-total">—</div>
+    <div class="stat-sub">Trong ledger</div>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0">
+  <button class="tab-btn active" onclick="switchTab('accounts')">Tài khoản</button>
+  <button class="tab-btn" onclick="switchTab('transactions')">Giao dịch</button>
+  <button class="tab-btn" onclick="switchTab('users')">Người dùng</button>
+</div>
+
+<!-- Accounts tab -->
+<div id="tab-accounts">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Tất cả tài khoản ngân hàng</div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="acct-search" class="form-input" style="width:200px;padding:5px 10px;font-size:12px"
+               placeholder="Tìm theo tài khoản / chủ..." oninput="filterAccounts()">
+        <button onclick="loadAccounts()" class="btn btn-sm">↺</button>
+      </div>
+    </div>
+    <div id="accounts-loading" class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
+    <div id="accounts-table" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Transactions tab -->
+<div id="tab-transactions" style="display:none">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Tất cả giao dịch (ledger)</div>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="txn-search" class="form-input" style="width:220px;padding:5px 10px;font-size:12px"
+               placeholder="Tìm theo tài khoản / trace..." oninput="filterTxns()">
+        <button onclick="loadTransactions()" class="btn btn-sm">↺</button>
+      </div>
+    </div>
+    <div id="txns-loading" class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
+    <div id="txns-table" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Users tab -->
+<div id="tab-users" style="display:none">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Người dùng Keycloak</div>
+      <button onclick="loadUsers()" class="btn btn-sm">↺ Làm mới</button>
+    </div>
+    <div id="users-loading" class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
+    <div id="users-table" style="display:none"></div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block head %}
+<style>
+.tab-btn {
+  padding: 8px 16px; border: none; background: transparent;
+  color: var(--text3); font-size: 13px; font-weight: 500;
+  cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: all .15s;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent2); border-bottom-color: var(--accent); }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtVND(n) {
+  return parseFloat(n || 0).toLocaleString('vi-VN') + ' ₫';
+}
+function fmtDate(ts) {
+  if (!ts) return '—';
+  return new Date(ts * 1000).toLocaleString('vi-VN', {
+    day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit',
+  });
+}
+function roleBadge(role) {
+  const cls = role.includes('admin') ? 'badge-red' :
+              role.includes('write') ? 'badge-green' :
+              role.includes('analyst') ? 'badge-purple' : 'badge-blue';
+  return `<span class="badge ${cls}" style="font-size:10px">${esc(role.replace('financial-','').replace('security-',''))}</span>`;
+}
+
+let allAccounts = [], allTxns = [], allUsers = [];
+
+function switchTab(tab) {
+  ['accounts','transactions','users'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = t === tab ? '' : 'none';
+  });
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    b.classList.toggle('active', ['accounts','transactions','users'][i] === tab);
+  });
+  if (tab === 'accounts' && !allAccounts.length) loadAccounts();
+  if (tab === 'transactions' && !allTxns.length) loadTransactions();
+  if (tab === 'users' && !allUsers.length) loadUsers();
+}
+
+async function loadStats() {
+  try {
+    const r = await fetch('/api/admin/stats');
+    const d = await r.json();
+    document.getElementById('stat-accounts').textContent = d.total_accounts ?? '—';
+    document.getElementById('stat-balance').textContent = fmtVND(d.total_balance);
+    document.getElementById('stat-txn-24h').textContent = d.transactions_24h ?? '—';
+    document.getElementById('stat-vol-24h').textContent = 'Volume: ' + fmtVND(d.volume_24h);
+    document.getElementById('stat-txn-total').textContent = d.total_transactions ?? '—';
+  } catch(_) {}
+}
+
+async function loadAccounts() {
+  document.getElementById('accounts-loading').style.display = 'flex';
+  document.getElementById('accounts-table').style.display = 'none';
+  try {
+    const r = await fetch('/api/admin/accounts');
+    const d = await r.json();
+    allAccounts = d.accounts || [];
+    renderAccounts(allAccounts);
+  } catch(e) {
+    document.getElementById('accounts-table').innerHTML =
+      '<div class="alert alert-error" style="margin:0">Lỗi kết nối</div>';
+    document.getElementById('accounts-table').style.display = '';
+  }
+  document.getElementById('accounts-loading').style.display = 'none';
+}
+
+function renderAccounts(list) {
+  const total = list.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
+  document.getElementById('accounts-table').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Số tài khoản</th><th>Chủ tài khoản</th>
+          <th>Số dư</th><th>Tiền tệ</th><th>Trạng thái</th>
+        </tr></thead>
+        <tbody>${list.map(a => `<tr>
+          <td class="mono" style="color:var(--accent2)">${esc(a.account_id)}</td>
+          <td style="font-weight:500">${esc(a.owner)}</td>
+          <td class="amount-positive">${fmtVND(a.balance)}</td>
+          <td style="color:var(--text3)">${esc(a.currency)}</td>
+          <td><span class="badge badge-green">Hoạt động</span></td>
+        </tr>`).join('')}</tbody>
+        <tfoot><tr style="border-top:2px solid var(--border)">
+          <td colspan="2" style="font-weight:600;color:var(--text2);padding:12px 14px">
+            Tổng cộng (${list.length} tài khoản)
+          </td>
+          <td class="amount-positive" style="font-weight:700">${fmtVND(total)}</td>
+          <td colspan="2"></td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+  document.getElementById('accounts-table').style.display = '';
+}
+
+function filterAccounts() {
+  const q = document.getElementById('acct-search').value.toLowerCase();
+  renderAccounts(q ? allAccounts.filter(a =>
+    (a.account_id||'').toLowerCase().includes(q) || (a.owner||'').toLowerCase().includes(q)
+  ) : allAccounts);
+}
+
+async function loadTransactions() {
+  document.getElementById('txns-loading').style.display = 'flex';
+  document.getElementById('txns-table').style.display = 'none';
+  try {
+    const r = await fetch('/api/admin/transactions?limit=100');
+    const d = await r.json();
+    allTxns = d.transactions || [];
+    renderTxns(allTxns);
+  } catch(e) {
+    document.getElementById('txns-table').innerHTML =
+      '<div class="alert alert-error" style="margin:0">Lỗi kết nối</div>';
+    document.getElementById('txns-table').style.display = '';
+  }
+  document.getElementById('txns-loading').style.display = 'none';
+}
+
+function renderTxns(list) {
+  if (!list.length) {
+    document.getElementById('txns-table').innerHTML =
+      '<div style="padding:24px;text-align:center;color:var(--text3)">Chưa có giao dịch</div>';
+    document.getElementById('txns-table').style.display = '';
+    return;
+  }
+  const totalVol = list.reduce((s, t) => s + parseFloat(t.amount||0), 0);
+  document.getElementById('txns-table').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Thời gian</th><th>Transaction ID</th><th>Từ</th><th>Đến</th>
+          <th>Số tiền</th><th>Trạng thái</th><th>Trace ID</th>
+        </tr></thead>
+        <tbody>${list.map(t => `<tr>
+          <td style="font-size:12px;color:var(--text3)">${esc(fmtDate(t.created_at))}</td>
+          <td class="mono" style="font-size:11px;color:var(--text3)">${esc((t.transaction_id||'').slice(0,12))}…</td>
+          <td class="mono" style="font-size:12px">${esc(t.from_account)}</td>
+          <td class="mono" style="font-size:12px;color:var(--accent2)">${esc(t.to_account)}</td>
+          <td class="amount-positive">${fmtVND(t.amount)}</td>
+          <td><span class="badge badge-green">${esc(t.status)}</span></td>
+          <td class="mono" style="font-size:11px;color:var(--text3)">${esc((t.trace_id||'—').slice(0,14))}</td>
+        </tr>`).join('')}</tbody>
+        <tfoot><tr style="border-top:2px solid var(--border)">
+          <td colspan="4" style="font-weight:600;color:var(--text2);padding:12px 14px">
+            Tổng (${list.length} giao dịch)
+          </td>
+          <td class="amount-positive" style="font-weight:700">${fmtVND(totalVol)}</td>
+          <td colspan="2"></td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+  document.getElementById('txns-table').style.display = '';
+}
+
+function filterTxns() {
+  const q = document.getElementById('txn-search').value.toLowerCase();
+  renderTxns(q ? allTxns.filter(t =>
+    (t.from_account||'').toLowerCase().includes(q) ||
+    (t.to_account||'').toLowerCase().includes(q) ||
+    (t.trace_id||'').toLowerCase().includes(q) ||
+    (t.transaction_id||'').toLowerCase().includes(q)
+  ) : allTxns);
+}
+
+async function loadUsers() {
+  document.getElementById('users-loading').style.display = 'flex';
+  document.getElementById('users-table').style.display = 'none';
+  try {
+    const r = await fetch('/api/admin/users');
+    const d = await r.json();
+    allUsers = d.users || [];
+    const rows = allUsers.map(u => {
+      const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username;
+      const createdAt = u.createdTimestamp ? new Date(u.createdTimestamp).toLocaleDateString('vi-VN') : '—';
+      const statusBadge = u.enabled
+        ? '<span class="badge badge-green">Hoạt động</span>'
+        : '<span class="badge badge-red">Bị khoá</span>';
+      const roleBadges = (u.roles || []).map(roleBadge).join(' ') || '<span style="color:var(--text3);font-size:11px">—</span>';
+      return `<tr>
+        <td><strong>${esc(u.username)}</strong></td>
+        <td>${esc(name)}</td>
+        <td style="color:var(--text3);font-size:12px">${esc(u.email)}</td>
+        <td>${roleBadges}</td>
+        <td>${statusBadge}</td>
+        <td style="color:var(--text3);font-size:12px">${createdAt}</td>
+      </tr>`;
+    }).join('');
+    document.getElementById('users-table').innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Username</th><th>Họ tên</th><th>Email</th>
+            <th>Quyền</th><th>Trạng thái</th><th>Ngày tạo</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+    document.getElementById('users-table').style.display = '';
+  } catch(e) {
+    document.getElementById('users-table').innerHTML =
+      '<div class="alert alert-error" style="margin:0">Lỗi kết nối Keycloak</div>';
+    document.getElementById('users-table').style.display = '';
+  }
+  document.getElementById('users-loading').style.display = 'none';
+}
+
+// Init
+loadStats();
+loadAccounts();
+</script>
+{% endblock %}
