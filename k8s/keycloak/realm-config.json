@@ -14,22 +14,31 @@
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
-      "redirectUris": ["http://api.ztlab.local/*", "https://api-gateway.ztlab.local/*"],
-      "webOrigins": ["+"]
+      "redirectUris": [
+        "http://api.ztlab.local/*",
+        "https://api-gateway.ztlab.local/*"
+      ],
+      "webOrigins": [
+        "+"
+      ]
     },
     {
       "clientId": "web-portal",
       "protocol": "openid-connect",
       "publicClient": true,
       "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
+      "directAccessGrantsEnabled": false,
       "redirectUris": [
         "http://portal.ztlab.local/*",
         "http://portal.ztlab.local:8080/*",
         "http://localhost:8080/*",
-        "http://localhost:5000/*"
+        "http://localhost:5000/*",
+        "http://127.0.0.1:8080/*",
+        "http://127.0.0.1:5000/*"
       ],
-      "webOrigins": ["+"],
+      "webOrigins": [
+        "+"
+      ],
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }
@@ -45,10 +54,18 @@
   ],
   "roles": {
     "realm": [
-      { "name": "financial-read" },
-      { "name": "financial-write" },
-      { "name": "security-analyst" },
-      { "name": "security-admin" }
+      {
+        "name": "financial-read"
+      },
+      {
+        "name": "financial-write"
+      },
+      {
+        "name": "security-analyst"
+      },
+      {
+        "name": "security-admin"
+      }
     ]
   },
   "users": [
@@ -58,9 +75,16 @@
       "emailVerified": true,
       "enabled": true,
       "credentials": [
-        { "type": "password", "value": "Test1234!", "temporary": false }
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["financial-read", "financial-write"]
+      "realmRoles": [
+        "financial-read",
+        "financial-write"
+      ]
     },
     {
       "username": "merchant01",
@@ -68,9 +92,32 @@
       "emailVerified": true,
       "enabled": true,
       "credentials": [
-        { "type": "password", "value": "Merchant1234!", "temporary": false }
+        {
+          "type": "password",
+          "value": "Merchant1234!",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["financial-read"]
+      "realmRoles": [
+        "financial-read"
+      ]
+    },
+    {
+      "username": "testuser02",
+      "email": "testuser02@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read",
+        "financial-write"
+      ]
     },
     {
       "username": "analyst01",
@@ -78,9 +125,34 @@
       "emailVerified": true,
       "enabled": true,
       "credentials": [
-        { "type": "password", "value": "Analyst1234!", "temporary": false }
+        {
+          "type": "password",
+          "value": "Analyst1234!",
+          "temporary": false
+        }
       ],
-      "realmRoles": ["security-analyst"]
+      "realmRoles": [
+        "security-analyst"
+      ]
+    },
+    {
+      "username": "demoadmin",
+      "email": "demoadmin@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "DemoAdmin2026!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read",
+        "financial-write",
+        "security-analyst",
+        "security-admin"
+      ]
     }
   ]
 }

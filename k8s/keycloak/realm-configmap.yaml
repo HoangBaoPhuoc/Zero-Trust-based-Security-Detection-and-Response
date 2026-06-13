@@ -20,9 +20,28 @@ data:
           "authorizationServicesEnabled": true,
           "serviceAccountsEnabled": true,
           "standardFlowEnabled": true,
-          "directAccessGrantsEnabled": false,
-          "redirectUris": ["https://api-gateway.ztlab.local/*"],
+          "directAccessGrantsEnabled": true,
+          "redirectUris": ["http://api.ztlab.local/*", "https://api-gateway.ztlab.local/*"],
           "webOrigins": ["+"]
+        },
+        {
+          "clientId": "web-portal",
+          "protocol": "openid-connect",
+          "publicClient": true,
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": [
+            "http://portal.ztlab.local/*",
+            "http://portal.ztlab.local:8080/*",
+            "http://localhost:8080/*",
+            "http://localhost:5000/*",
+            "http://127.0.0.1:8080/*",
+            "http://127.0.0.1:5000/*"
+          ],
+          "webOrigins": ["+"],
+          "attributes": {
+            "pkce.code.challenge.method": "S256"
+          }
         },
         {
           "clientId": "siem-backend",
@@ -40,5 +59,57 @@ data:
           { "name": "security-analyst" },
           { "name": "security-admin" }
         ]
-      }
+      },
+      "users": [
+        {
+          "username": "testuser01",
+          "email": "testuser01@ztlab.local",
+          "emailVerified": true,
+          "enabled": true,
+          "credentials": [
+            { "type": "password", "value": "Test1234!", "temporary": false }
+          ],
+          "realmRoles": ["financial-read", "financial-write"]
+        },
+        {
+          "username": "testuser02",
+          "email": "testuser02@ztlab.local",
+          "emailVerified": true,
+          "enabled": true,
+          "credentials": [
+            { "type": "password", "value": "Test1234!", "temporary": false }
+          ],
+          "realmRoles": ["financial-read", "financial-write"]
+        },
+        {
+          "username": "merchant01",
+          "email": "merchant01@ztlab.local",
+          "emailVerified": true,
+          "enabled": true,
+          "credentials": [
+            { "type": "password", "value": "Merchant1234!", "temporary": false }
+          ],
+          "realmRoles": ["financial-read"]
+        },
+        {
+          "username": "analyst01",
+          "email": "analyst01@ztlab.local",
+          "emailVerified": true,
+          "enabled": true,
+          "credentials": [
+            { "type": "password", "value": "Analyst1234!", "temporary": false }
+          ],
+          "realmRoles": ["security-analyst"]
+        },
+        {
+          "username": "demoadmin",
+          "email": "demoadmin@ztlab.local",
+          "emailVerified": true,
+          "enabled": true,
+          "credentials": [
+            { "type": "password", "value": "DemoAdmin2026!", "temporary": false }
+          ],
+          "realmRoles": ["financial-read", "financial-write", "security-analyst", "security-admin"]
+        }
+      ]
     }
