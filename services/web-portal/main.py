@@ -810,42 +810,119 @@ async def admin_page(request: Request):
     })
 
 
+async def _admin_fetch_users_map(admin_token: str, client: httpx.AsyncClient) -> dict:
+    """Return {username: {full_name, email, roles, enabled, created}} from Keycloak."""
+    ALLOWED = {"financial-read", "financial-write", "security-analyst", "security-admin"}
+    try:
+        resp = await client.get(
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users",
+            headers={"Authorization": f"Bearer {admin_token}"},
+            params={"max": 100},
+        )
+        resp.raise_for_status()
+    except Exception:
+        return {}
+    user_map: dict = {}
+    for u in resp.json():
+        uname = u.get("username", "")
+        first = u.get("firstName", "")
+        last  = u.get("lastName", "")
+        full  = f"{first} {last}".strip() or uname
+        role_resp = await client.get(
+            f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users/{u['id']}/role-mappings/realm",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        roles = [r["name"] for r in (role_resp.json() if role_resp.status_code == 200 else [])
+                 if r["name"] in ALLOWED]
+        user_map[uname] = {
+            "id": u["id"],
+            "username": uname,
+            "full_name": full,
+            "first_name": first,
+            "last_name": last,
+            "email": u.get("email", ""),
+            "enabled": u.get("enabled", True),
+            "created_at": u.get("createdTimestamp", 0) // 1000,
+            "roles": roles,
+        }
+    return user_map
+
+
 @app.get("/api/admin/accounts")
 async def admin_all_accounts(request: Request):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     access_token = session.get("access_token", "")
-    async with httpx.AsyncClient(timeout=10) as client:
+    admin_token = await _get_admin_token()
+    async with httpx.AsyncClient(timeout=15) as client:
         try:
-            resp = await client.get(
+            acct_resp = await client.get(
                 f"{API_GATEWAY_URL}/accounts",
                 headers={"Authorization": f"Bearer {access_token}"},
             )
-            resp.raise_for_status()
-            return JSONResponse({"accounts": resp.json()})
+            acct_resp.raise_for_status()
+            accounts = acct_resp.json()
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
+        user_map = await _admin_fetch_users_map(admin_token, client) if admin_token else {}
+    enriched = []
+    for a in accounts:
+        owner = a.get("owner", "")
+        u = user_map.get(owner, {})
+        enriched.append({
+            **a,
+            "full_name": u.get("full_name", owner),
+            "email": u.get("email", ""),
+            "roles": u.get("roles", []),
+            "user_enabled": u.get("enabled", True),
+        })
+    enriched.sort(key=lambda x: x.get("account_id", ""))
+    return JSONResponse({"accounts": enriched})
 
 
 @app.get("/api/admin/transactions")
-async def admin_all_transactions(request: Request, limit: int = 50):
+async def admin_all_transactions(request: Request, limit: int = 100):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     access_token = session.get("access_token", "")
-    async with httpx.AsyncClient(timeout=10) as client:
-        try:
-            resp = await client.get(
-                f"{API_GATEWAY_URL}/transactions",
-                params={"limit": min(limit, 200)},
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            resp.raise_for_status()
-            txns = resp.json()
-            return JSONResponse({"transactions": txns, "total": len(txns)})
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+    import asyncio as _asyncio
+    async with httpx.AsyncClient(timeout=15) as client:
+        txn_resp, acct_resp = await _asyncio.gather(
+            client.get(f"{API_GATEWAY_URL}/transactions",
+                       params={"limit": min(limit, 500)},
+                       headers={"Authorization": f"Bearer {access_token}"}),
+            client.get(f"{API_GATEWAY_URL}/accounts",
+                       headers={"Authorization": f"Bearer {access_token}"}),
+            return_exceptions=True,
+        )
+    txns   = txn_resp.json()  if not isinstance(txn_resp,  Exception) and txn_resp.status_code  == 200 else []
+    accts  = acct_resp.json() if not isinstance(acct_resp, Exception) and acct_resp.status_code == 200 else []
+    if not isinstance(txns,  list): txns  = []
+    if not isinstance(accts, list): accts = []
+    acct_map = {a["account_id"]: a for a in accts}
+    admin_token = await _get_admin_token()
+    user_map: dict = {}
+    if admin_token:
+        async with httpx.AsyncClient(timeout=10) as client2:
+            user_map = await _admin_fetch_users_map(admin_token, client2)
+    enriched = []
+    for t in txns:
+        fa = acct_map.get(t.get("from_account", ""), {})
+        ta = acct_map.get(t.get("to_account",   ""), {})
+        fu = user_map.get(fa.get("owner", ""), {})
+        tu = user_map.get(ta.get("owner", ""), {})
+        enriched.append({
+            **t,
+            "from_owner":    fa.get("owner", ""),
+            "from_name":     fu.get("full_name", fa.get("owner", t.get("from_account", ""))),
+            "from_email":    fu.get("email", ""),
+            "to_owner":      ta.get("owner", ""),
+            "to_name":       tu.get("full_name", ta.get("owner", t.get("to_account", ""))),
+            "to_email":      tu.get("email", ""),
+        })
+    return JSONResponse({"transactions": enriched, "total": len(enriched)})
 
 
 @app.get("/api/admin/users")
@@ -853,40 +930,34 @@ async def admin_users(request: Request):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
+    access_token = session.get("access_token", "")
     admin_token = await _get_admin_token()
     if not admin_token:
         return JSONResponse({"error": "keycloak admin unavailable"}, status_code=503)
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=15) as client:
+        user_map = await _admin_fetch_users_map(admin_token, client)
         try:
-            resp = await client.get(
-                f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users",
-                headers={"Authorization": f"Bearer {admin_token}"},
-                params={"max": 50},
+            acct_resp = await client.get(
+                f"{API_GATEWAY_URL}/accounts",
+                headers={"Authorization": f"Bearer {access_token}"},
             )
-            resp.raise_for_status()
-            raw_users = resp.json()
-            users = []
-            for u in raw_users:
-                role_resp = await client.get(
-                    f"{KEYCLOAK_URL}/admin/realms/{KEYCLOAK_REALM}/users/{u['id']}/role-mappings/realm",
-                    headers={"Authorization": f"Bearer {admin_token}"},
-                )
-                realm_roles = [r["name"] for r in role_resp.json()] if role_resp.status_code == 200 else []
-                users.append({
-                    "id": u["id"],
-                    "username": u.get("username"),
-                    "email": u.get("email", ""),
-                    "firstName": u.get("firstName", ""),
-                    "lastName": u.get("lastName", ""),
-                    "enabled": u.get("enabled", True),
-                    "createdTimestamp": u.get("createdTimestamp", 0),
-                    "roles": [r for r in realm_roles if r in (
-                        "financial-read", "financial-write", "security-analyst", "security-admin",
-                    )],
-                })
-            return JSONResponse({"users": users})
-        except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=503)
+            accounts = acct_resp.json() if acct_resp.status_code == 200 else []
+        except Exception:
+            accounts = []
+    # Build owner → accounts map
+    owner_accts: dict[str, list] = {}
+    for a in (accounts if isinstance(accounts, list) else []):
+        owner_accts.setdefault(a.get("owner", ""), []).append(a)
+    users_out = []
+    for uname, u in user_map.items():
+        accts = owner_accts.get(uname, [])
+        users_out.append({
+            **u,
+            "accounts": accts,
+            "total_balance": sum(float(a.get("balance", 0)) for a in accts),
+        })
+    users_out.sort(key=lambda x: x.get("username", ""))
+    return JSONResponse({"users": users_out})
 
 
 @app.get("/api/admin/stats")
@@ -895,29 +966,31 @@ async def admin_stats(request: Request):
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
     access_token = session.get("access_token", "")
-    import asyncio as _asyncio
+    import asyncio as _asyncio, time as _time
     async with httpx.AsyncClient(timeout=10) as client:
         accounts_resp, txns_resp = await _asyncio.gather(
             client.get(f"{API_GATEWAY_URL}/accounts",
                        headers={"Authorization": f"Bearer {access_token}"}),
-            client.get(f"{API_GATEWAY_URL}/transactions", params={"limit": 200},
+            client.get(f"{API_GATEWAY_URL}/transactions", params={"limit": 500},
                        headers={"Authorization": f"Bearer {access_token}"}),
             return_exceptions=True,
         )
     accounts = accounts_resp.json() if not isinstance(accounts_resp, Exception) and accounts_resp.status_code == 200 else []
     txns = txns_resp.json() if not isinstance(txns_resp, Exception) and txns_resp.status_code == 200 else []
-    if not isinstance(txns, list):
-        txns = []
+    if not isinstance(accounts, list): accounts = []
+    if not isinstance(txns, list): txns = []
     total_balance = sum(float(a.get("balance", 0)) for a in accounts if isinstance(a, dict))
-    import time as _time
     cutoff_24h = _time.time() - 86400
     txns_24h = [t for t in txns if isinstance(t, dict) and float(t.get("created_at", 0)) >= cutoff_24h]
+    completed = [t for t in txns if isinstance(t, dict) and t.get("status") == "completed"]
     return JSONResponse({
         "total_accounts": len(accounts),
         "total_balance": total_balance,
         "total_transactions": len(txns),
+        "completed_transactions": len(completed),
         "transactions_24h": len(txns_24h),
         "volume_24h": sum(float(t.get("amount", 0)) for t in txns_24h),
+        "total_volume": sum(float(t.get("amount", 0)) for t in completed),
     })
 
 

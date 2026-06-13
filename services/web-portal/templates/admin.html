@@ -2,303 +2,456 @@
 {% block title %}Quản trị — ZTLab Banking{% endblock %}
 {% block page_title %}Quản trị hệ thống{% endblock %}
 
+{% block head %}
+<style>
+.tab-btn {
+  padding: 9px 18px; border: none; background: transparent;
+  color: var(--text3); font-size: 13px; font-weight: 500;
+  cursor: pointer; border-bottom: 2px solid transparent;
+  margin-bottom: -1px; transition: all .15s; white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent2); border-bottom-color: var(--accent); }
+
+.user-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 8px 3px 3px;
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 20px;
+}
+.user-avatar-sm {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: linear-gradient(135deg,#3b82f6,#8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.transfer-arrow {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+}
+.transfer-arrow .arrow { color: var(--accent2); font-weight: 700; }
+.amount-cell { font-weight: 700; font-size: 13px; }
+
+.search-row { display:flex; gap:8px; align-items:center; }
+.filter-input {
+  padding: 6px 12px; background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: 8px; color: var(--text); font-size: 12px; outline: none;
+  transition: border-color .15s; width: 220px;
+}
+.filter-input:focus { border-color: var(--accent); }
+.filter-input::placeholder { color: var(--text3); }
+
+.info-cell { line-height: 1.5; }
+.info-cell .primary { font-size: 13px; font-weight: 600; color: var(--text); }
+.info-cell .secondary { font-size: 11px; color: var(--text3); }
+.account-tag {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  color: var(--accent2); background: rgba(59,130,246,.08);
+  padding: 1px 6px; border-radius: 4px; border: 1px solid rgba(59,130,246,.15);
+}
+.empty-state {
+  text-align: center; padding: 40px 20px; color: var(--text3);
+  font-size: 13px;
+}
+</style>
+{% endblock %}
+
 {% block content %}
 
 <!-- Stats -->
-<div class="grid grid-4" style="margin-bottom:20px">
+<div class="grid grid-4" style="margin-bottom:20px" id="stats-row">
   <div class="stat-card">
-    <div class="stat-label">Tổng tài khoản</div>
-    <div class="stat-value" id="stat-accounts">—</div>
-    <div class="stat-sub">Toàn bộ hệ thống</div>
+    <div class="stat-label">Tổng số dư hệ thống</div>
+    <div class="stat-value" id="s-balance" style="font-size:16px;color:var(--green)">—</div>
+    <div class="stat-sub" id="s-accounts">— tài khoản</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Tổng số dư</div>
-    <div class="stat-value" id="stat-balance" style="font-size:16px">—</div>
-    <div class="stat-sub">VND</div>
+    <div class="stat-label">Tổng lưu lượng (hoàn thành)</div>
+    <div class="stat-value" id="s-volume" style="font-size:16px;color:var(--accent2)">—</div>
+    <div class="stat-sub" id="s-txn-total">— giao dịch</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Giao dịch 24h</div>
-    <div class="stat-value" id="stat-txn-24h">—</div>
-    <div class="stat-sub" id="stat-vol-24h">Volume: —</div>
+    <div class="stat-label">Hoạt động 24 giờ qua</div>
+    <div class="stat-value" id="s-txn-24h">—</div>
+    <div class="stat-sub" id="s-vol-24h">Volume: —</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Tổng giao dịch</div>
-    <div class="stat-value" id="stat-txn-total">—</div>
-    <div class="stat-sub">Trong ledger</div>
+    <div class="stat-label">Người dùng hệ thống</div>
+    <div class="stat-value" id="s-users">—</div>
+    <div class="stat-sub">Trên Keycloak</div>
   </div>
 </div>
 
 <!-- Tabs -->
-<div style="display:flex;gap:8px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0">
-  <button class="tab-btn active" onclick="switchTab('accounts')">Tài khoản</button>
-  <button class="tab-btn" onclick="switchTab('transactions')">Giao dịch</button>
-  <button class="tab-btn" onclick="switchTab('users')">Người dùng</button>
+<div style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border)">
+  <button class="tab-btn active" data-tab="transfers" onclick="switchTab(this,'transfers')">
+    Lịch sử chuyển tiền
+  </button>
+  <button class="tab-btn" data-tab="accounts" onclick="switchTab(this,'accounts')">
+    Tài khoản ngân hàng
+  </button>
+  <button class="tab-btn" data-tab="users" onclick="switchTab(this,'users')">
+    Người dùng
+  </button>
 </div>
 
-<!-- Accounts tab -->
-<div id="tab-accounts">
+<!-- ── TAB: TRANSFERS ──────────────────────────────── -->
+<div id="tab-transfers">
   <div class="card">
     <div class="card-header">
-      <div class="card-title">Tất cả tài khoản ngân hàng</div>
-      <div style="display:flex;gap:8px">
-        <input type="text" id="acct-search" class="form-input" style="width:200px;padding:5px 10px;font-size:12px"
-               placeholder="Tìm theo tài khoản / chủ..." oninput="filterAccounts()">
-        <button onclick="loadAccounts()" class="btn btn-sm">↺</button>
-      </div>
-    </div>
-    <div id="accounts-loading" class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
-    <div id="accounts-table" style="display:none"></div>
-  </div>
-</div>
-
-<!-- Transactions tab -->
-<div id="tab-transactions" style="display:none">
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">Tất cả giao dịch (ledger)</div>
-      <div style="display:flex;gap:8px">
-        <input type="text" id="txn-search" class="form-input" style="width:220px;padding:5px 10px;font-size:12px"
-               placeholder="Tìm theo tài khoản / trace..." oninput="filterTxns()">
+      <div class="card-title">Tất cả giao dịch chuyển tiền</div>
+      <div class="search-row">
+        <input class="filter-input" id="txn-q" placeholder="Tìm tên, tài khoản, trace..." oninput="filterTxns()">
+        <select id="txn-status-filter" class="filter-input" style="width:130px" onchange="filterTxns()">
+          <option value="">Tất cả trạng thái</option>
+          <option value="completed">Hoàn thành</option>
+          <option value="failed">Thất bại</option>
+        </select>
         <button onclick="loadTransactions()" class="btn btn-sm">↺</button>
       </div>
     </div>
-    <div id="txns-loading" class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
-    <div id="txns-table" style="display:none"></div>
+    <div id="txn-loading" class="loading" style="padding:20px"><div class="spinner"></div> Đang tải...</div>
+    <div id="txn-body" style="display:none"></div>
   </div>
 </div>
 
-<!-- Users tab -->
+<!-- ── TAB: ACCOUNTS ──────────────────────────────── -->
+<div id="tab-accounts" style="display:none">
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Tất cả tài khoản ngân hàng</div>
+      <div class="search-row">
+        <input class="filter-input" id="acct-q" placeholder="Tìm tên, số TK, email..." oninput="filterAccounts()">
+        <button onclick="loadAccounts()" class="btn btn-sm">↺</button>
+      </div>
+    </div>
+    <div id="acct-loading" class="loading" style="padding:20px"><div class="spinner"></div> Đang tải...</div>
+    <div id="acct-body" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ── TAB: USERS ─────────────────────────────────── -->
 <div id="tab-users" style="display:none">
   <div class="card">
     <div class="card-header">
-      <div class="card-title">Người dùng Keycloak</div>
-      <button onclick="loadUsers()" class="btn btn-sm">↺ Làm mới</button>
+      <div class="card-title">Người dùng &amp; Quyền truy cập</div>
+      <div class="search-row">
+        <input class="filter-input" id="usr-q" placeholder="Tìm username, tên, email..." oninput="filterUsers()">
+        <button onclick="loadUsers()" class="btn btn-sm">↺</button>
+      </div>
     </div>
-    <div id="users-loading" class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
-    <div id="users-table" style="display:none"></div>
+    <div id="usr-loading" class="loading" style="padding:20px"><div class="spinner"></div> Đang tải...</div>
+    <div id="usr-body" style="display:none"></div>
   </div>
 </div>
 
-{% endblock %}
-
-{% block head %}
-<style>
-.tab-btn {
-  padding: 8px 16px; border: none; background: transparent;
-  color: var(--text3); font-size: 13px; font-weight: 500;
-  cursor: pointer; border-bottom: 2px solid transparent;
-  margin-bottom: -1px; transition: all .15s;
-}
-.tab-btn:hover { color: var(--text); }
-.tab-btn.active { color: var(--accent2); border-bottom-color: var(--accent); }
-</style>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function esc(s) {
-  if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+/* ── helpers ───────────────────────── */
+function esc(s){ return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtVND(n){ return parseFloat(n||0).toLocaleString('vi-VN')+' ₫'; }
+function fmtDate(ts){
+  if(!ts) return '—';
+  return new Date(ts*1000).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
-function fmtVND(n) {
-  return parseFloat(n || 0).toLocaleString('vi-VN') + ' ₫';
+function roleBadge(r){
+  const m={
+    'financial-read':'badge-blue','financial-write':'badge-green',
+    'security-analyst':'badge-purple','security-admin':'badge-red'
+  };
+  const short={'financial-read':'Đọc','financial-write':'Ghi','security-analyst':'Analyst','security-admin':'Admin'};
+  return `<span class="badge ${m[r]||'badge-blue'}" style="font-size:10px">${short[r]||esc(r)}</span>`;
 }
-function fmtDate(ts) {
-  if (!ts) return '—';
-  return new Date(ts * 1000).toLocaleString('vi-VN', {
-    day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit',
-  });
-}
-function roleBadge(role) {
-  const cls = role.includes('admin') ? 'badge-red' :
-              role.includes('write') ? 'badge-green' :
-              role.includes('analyst') ? 'badge-purple' : 'badge-blue';
-  return `<span class="badge ${cls}" style="font-size:10px">${esc(role.replace('financial-','').replace('security-',''))}</span>`;
-}
-
-let allAccounts = [], allTxns = [], allUsers = [];
-
-function switchTab(tab) {
-  ['accounts','transactions','users'].forEach(t => {
-    document.getElementById('tab-' + t).style.display = t === tab ? '' : 'none';
-  });
-  document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    b.classList.toggle('active', ['accounts','transactions','users'][i] === tab);
-  });
-  if (tab === 'accounts' && !allAccounts.length) loadAccounts();
-  if (tab === 'transactions' && !allTxns.length) loadTransactions();
-  if (tab === 'users' && !allUsers.length) loadUsers();
+function userChip(name, username){
+  const letter = (name||username||'?')[0].toUpperCase();
+  return `<span class="user-chip">
+    <span class="user-avatar-sm">${esc(letter)}</span>
+    <span>
+      <span style="font-size:12px;font-weight:600;color:var(--text)">${esc(name||username)}</span>
+      <span style="font-size:10px;color:var(--text3);display:block">@${esc(username)}</span>
+    </span>
+  </span>`;
 }
 
-async function loadStats() {
-  try {
-    const r = await fetch('/api/admin/stats');
-    const d = await r.json();
-    document.getElementById('stat-accounts').textContent = d.total_accounts ?? '—';
-    document.getElementById('stat-balance').textContent = fmtVND(d.total_balance);
-    document.getElementById('stat-txn-24h').textContent = d.transactions_24h ?? '—';
-    document.getElementById('stat-vol-24h').textContent = 'Volume: ' + fmtVND(d.volume_24h);
-    document.getElementById('stat-txn-total').textContent = d.total_transactions ?? '—';
-  } catch(_) {}
-}
-
-async function loadAccounts() {
-  document.getElementById('accounts-loading').style.display = 'flex';
-  document.getElementById('accounts-table').style.display = 'none';
-  try {
-    const r = await fetch('/api/admin/accounts');
-    const d = await r.json();
-    allAccounts = d.accounts || [];
-    renderAccounts(allAccounts);
-  } catch(e) {
-    document.getElementById('accounts-table').innerHTML =
-      '<div class="alert alert-error" style="margin:0">Lỗi kết nối</div>';
-    document.getElementById('accounts-table').style.display = '';
+/* ── tab switching ─────────────────── */
+let loaded = {transfers: false, accounts: false, users: false};
+function switchTab(btn, tab){
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  ['transfers','accounts','users'].forEach(t =>
+    document.getElementById('tab-'+t).style.display = t===tab?'':'none'
+  );
+  if(!loaded[tab]){
+    if(tab==='transfers') loadTransactions();
+    if(tab==='accounts')  loadAccounts();
+    if(tab==='users')     loadUsers();
   }
-  document.getElementById('accounts-loading').style.display = 'none';
 }
 
-function renderAccounts(list) {
-  const total = list.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
-  document.getElementById('accounts-table').innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Số tài khoản</th><th>Chủ tài khoản</th>
-          <th>Số dư</th><th>Tiền tệ</th><th>Trạng thái</th>
-        </tr></thead>
-        <tbody>${list.map(a => `<tr>
-          <td class="mono" style="color:var(--accent2)">${esc(a.account_id)}</td>
-          <td style="font-weight:500">${esc(a.owner)}</td>
-          <td class="amount-positive">${fmtVND(a.balance)}</td>
-          <td style="color:var(--text3)">${esc(a.currency)}</td>
-          <td><span class="badge badge-green">Hoạt động</span></td>
-        </tr>`).join('')}</tbody>
-        <tfoot><tr style="border-top:2px solid var(--border)">
-          <td colspan="2" style="font-weight:600;color:var(--text2);padding:12px 14px">
-            Tổng cộng (${list.length} tài khoản)
-          </td>
-          <td class="amount-positive" style="font-weight:700">${fmtVND(total)}</td>
-          <td colspan="2"></td>
-        </tr></tfoot>
-      </table>
-    </div>`;
-  document.getElementById('accounts-table').style.display = '';
+/* ── stats ─────────────────────────── */
+async function loadStats(){
+  try{
+    const d = await fetch('/api/admin/stats').then(r=>r.json());
+    document.getElementById('s-balance').textContent = fmtVND(d.total_balance);
+    document.getElementById('s-accounts').textContent = `${d.total_accounts||0} tài khoản`;
+    document.getElementById('s-volume').textContent = fmtVND(d.total_volume);
+    document.getElementById('s-txn-total').textContent = `${d.completed_transactions||0} giao dịch`;
+    document.getElementById('s-txn-24h').textContent = d.transactions_24h??'—';
+    document.getElementById('s-vol-24h').textContent = 'Volume: '+fmtVND(d.volume_24h);
+  }catch(_){}
 }
 
-function filterAccounts() {
-  const q = document.getElementById('acct-search').value.toLowerCase();
-  renderAccounts(q ? allAccounts.filter(a =>
-    (a.account_id||'').toLowerCase().includes(q) || (a.owner||'').toLowerCase().includes(q)
-  ) : allAccounts);
-}
-
-async function loadTransactions() {
-  document.getElementById('txns-loading').style.display = 'flex';
-  document.getElementById('txns-table').style.display = 'none';
-  try {
-    const r = await fetch('/api/admin/transactions?limit=100');
-    const d = await r.json();
-    allTxns = d.transactions || [];
+/* ── TRANSACTIONS ───────────────────── */
+let allTxns = [];
+async function loadTransactions(){
+  loaded.transfers = true;
+  document.getElementById('txn-loading').style.display='flex';
+  document.getElementById('txn-body').style.display='none';
+  try{
+    const d = await fetch('/api/admin/transactions?limit=200').then(r=>r.json());
+    allTxns = d.transactions||[];
     renderTxns(allTxns);
-  } catch(e) {
-    document.getElementById('txns-table').innerHTML =
-      '<div class="alert alert-error" style="margin:0">Lỗi kết nối</div>';
-    document.getElementById('txns-table').style.display = '';
+  }catch(e){
+    document.getElementById('txn-body').innerHTML='<div class="alert alert-error" style="margin:0">Lỗi kết nối</div>';
+    document.getElementById('txn-body').style.display='';
   }
-  document.getElementById('txns-loading').style.display = 'none';
+  document.getElementById('txn-loading').style.display='none';
 }
-
-function renderTxns(list) {
-  if (!list.length) {
-    document.getElementById('txns-table').innerHTML =
-      '<div style="padding:24px;text-align:center;color:var(--text3)">Chưa có giao dịch</div>';
-    document.getElementById('txns-table').style.display = '';
+function filterTxns(){
+  const q = document.getElementById('txn-q').value.toLowerCase();
+  const st = document.getElementById('txn-status-filter').value;
+  renderTxns(allTxns.filter(t =>
+    (!st || t.status===st) &&
+    (!q || [t.from_name,t.to_name,t.from_owner,t.to_owner,
+             t.from_account,t.to_account,t.trace_id,t.transaction_id]
+            .some(v => (v||'').toLowerCase().includes(q)))
+  ));
+}
+function renderTxns(list){
+  if(!list.length){
+    document.getElementById('txn-body').innerHTML='<div class="empty-state">Không có giao dịch nào</div>';
+    document.getElementById('txn-body').style.display='';
     return;
   }
-  const totalVol = list.reduce((s, t) => s + parseFloat(t.amount||0), 0);
-  document.getElementById('txns-table').innerHTML = `
+  const totalVol = list.reduce((s,t)=>s+parseFloat(t.amount||0),0);
+  const rows = list.map(t=>{
+    const statusBadge = t.status==='completed'
+      ? '<span class="badge badge-green">Hoàn thành</span>'
+      : `<span class="badge badge-red">${esc(t.status)}</span>`;
+    const txnIdShort = (t.transaction_id||'').slice(0,8)+'…';
+    return `<tr>
+      <td style="white-space:nowrap">
+        <div style="font-size:12px;color:var(--text)">${esc(fmtDate(t.created_at))}</div>
+        <div class="account-tag" style="margin-top:3px">${esc(txnIdShort)}</div>
+      </td>
+      <td>
+        <div class="info-cell">
+          <div class="primary">${esc(t.from_name||t.from_owner||'—')}</div>
+          <div class="secondary">@${esc(t.from_owner||'—')} · ${esc(t.from_email||'')}</div>
+          <div class="account-tag" style="margin-top:3px">${esc(t.from_account)}</div>
+        </div>
+      </td>
+      <td style="text-align:center;color:var(--accent2);font-size:18px;padding:0 4px">→</td>
+      <td>
+        <div class="info-cell">
+          <div class="primary">${esc(t.to_name||t.to_owner||'—')}</div>
+          <div class="secondary">@${esc(t.to_owner||'—')} · ${esc(t.to_email||'')}</div>
+          <div class="account-tag" style="margin-top:3px">${esc(t.to_account)}</div>
+        </div>
+      </td>
+      <td class="amount-cell amount-positive">${fmtVND(t.amount)}</td>
+      <td>${statusBadge}</td>
+      <td class="mono" style="font-size:11px;color:var(--text3)">${esc((t.trace_id||'—').slice(0,16))}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('txn-body').innerHTML = `
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>Thời gian</th><th>Transaction ID</th><th>Từ</th><th>Đến</th>
-          <th>Số tiền</th><th>Trạng thái</th><th>Trace ID</th>
+          <th>Thời gian / ID</th>
+          <th>Người gửi</th>
+          <th style="width:30px"></th>
+          <th>Người nhận</th>
+          <th>Số tiền</th>
+          <th>Trạng thái</th>
+          <th>Trace ID</th>
         </tr></thead>
-        <tbody>${list.map(t => `<tr>
-          <td style="font-size:12px;color:var(--text3)">${esc(fmtDate(t.created_at))}</td>
-          <td class="mono" style="font-size:11px;color:var(--text3)">${esc((t.transaction_id||'').slice(0,12))}…</td>
-          <td class="mono" style="font-size:12px">${esc(t.from_account)}</td>
-          <td class="mono" style="font-size:12px;color:var(--accent2)">${esc(t.to_account)}</td>
-          <td class="amount-positive">${fmtVND(t.amount)}</td>
-          <td><span class="badge badge-green">${esc(t.status)}</span></td>
-          <td class="mono" style="font-size:11px;color:var(--text3)">${esc((t.trace_id||'—').slice(0,14))}</td>
-        </tr>`).join('')}</tbody>
-        <tfoot><tr style="border-top:2px solid var(--border)">
-          <td colspan="4" style="font-weight:600;color:var(--text2);padding:12px 14px">
-            Tổng (${list.length} giao dịch)
-          </td>
-          <td class="amount-positive" style="font-weight:700">${fmtVND(totalVol)}</td>
-          <td colspan="2"></td>
-        </tr></tfoot>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr style="border-top:2px solid var(--border)">
+            <td colspan="4" style="padding:12px 14px;font-weight:600;color:var(--text2)">
+              Tổng cộng — ${list.length} giao dịch
+            </td>
+            <td class="amount-cell amount-positive">${fmtVND(totalVol)}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
       </table>
     </div>`;
-  document.getElementById('txns-table').style.display = '';
+  document.getElementById('txn-body').style.display='';
 }
 
-function filterTxns() {
-  const q = document.getElementById('txn-search').value.toLowerCase();
-  renderTxns(q ? allTxns.filter(t =>
-    (t.from_account||'').toLowerCase().includes(q) ||
-    (t.to_account||'').toLowerCase().includes(q) ||
-    (t.trace_id||'').toLowerCase().includes(q) ||
-    (t.transaction_id||'').toLowerCase().includes(q)
-  ) : allTxns);
-}
-
-async function loadUsers() {
-  document.getElementById('users-loading').style.display = 'flex';
-  document.getElementById('users-table').style.display = 'none';
-  try {
-    const r = await fetch('/api/admin/users');
-    const d = await r.json();
-    allUsers = d.users || [];
-    const rows = allUsers.map(u => {
-      const name = [u.firstName, u.lastName].filter(Boolean).join(' ') || u.username;
-      const createdAt = u.createdTimestamp ? new Date(u.createdTimestamp).toLocaleDateString('vi-VN') : '—';
-      const statusBadge = u.enabled
-        ? '<span class="badge badge-green">Hoạt động</span>'
-        : '<span class="badge badge-red">Bị khoá</span>';
-      const roleBadges = (u.roles || []).map(roleBadge).join(' ') || '<span style="color:var(--text3);font-size:11px">—</span>';
-      return `<tr>
-        <td><strong>${esc(u.username)}</strong></td>
-        <td>${esc(name)}</td>
-        <td style="color:var(--text3);font-size:12px">${esc(u.email)}</td>
-        <td>${roleBadges}</td>
-        <td>${statusBadge}</td>
-        <td style="color:var(--text3);font-size:12px">${createdAt}</td>
-      </tr>`;
-    }).join('');
-    document.getElementById('users-table').innerHTML = `
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Username</th><th>Họ tên</th><th>Email</th>
-            <th>Quyền</th><th>Trạng thái</th><th>Ngày tạo</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
-    document.getElementById('users-table').style.display = '';
-  } catch(e) {
-    document.getElementById('users-table').innerHTML =
-      '<div class="alert alert-error" style="margin:0">Lỗi kết nối Keycloak</div>';
-    document.getElementById('users-table').style.display = '';
+/* ── ACCOUNTS ───────────────────────── */
+let allAccts = [];
+async function loadAccounts(){
+  loaded.accounts = true;
+  document.getElementById('acct-loading').style.display='flex';
+  document.getElementById('acct-body').style.display='none';
+  try{
+    const d = await fetch('/api/admin/accounts').then(r=>r.json());
+    allAccts = d.accounts||[];
+    renderAccounts(allAccts);
+  }catch(e){
+    document.getElementById('acct-body').innerHTML='<div class="alert alert-error" style="margin:0">Lỗi kết nối</div>';
+    document.getElementById('acct-body').style.display='';
   }
-  document.getElementById('users-loading').style.display = 'none';
+  document.getElementById('acct-loading').style.display='none';
+}
+function filterAccounts(){
+  const q = document.getElementById('acct-q').value.toLowerCase();
+  renderAccounts(!q ? allAccts : allAccts.filter(a=>
+    [a.account_id,a.owner,a.full_name,a.email].some(v=>(v||'').toLowerCase().includes(q))
+  ));
+}
+function renderAccounts(list){
+  if(!list.length){
+    document.getElementById('acct-body').innerHTML='<div class="empty-state">Không có tài khoản nào</div>';
+    document.getElementById('acct-body').style.display='';
+    return;
+  }
+  const total = list.reduce((s,a)=>s+parseFloat(a.balance||0),0);
+  const rows = list.map(a=>{
+    const statusBadge = a.user_enabled
+      ? '<span class="badge badge-green">Hoạt động</span>'
+      : '<span class="badge badge-red">Bị khoá</span>';
+    const roleBadges = (a.roles||[]).map(roleBadge).join(' ') || '<span style="color:var(--text3);font-size:11px">—</span>';
+    return `<tr>
+      <td><span class="account-tag" style="font-size:12px">${esc(a.account_id)}</span></td>
+      <td>
+        <div class="info-cell">
+          <div class="primary">${esc(a.full_name||a.owner)}</div>
+          <div class="secondary">@${esc(a.owner)} · ${esc(a.email||'—')}</div>
+        </div>
+      </td>
+      <td style="font-weight:700;font-size:15px;color:var(--green);text-align:right">${fmtVND(a.balance)}</td>
+      <td style="color:var(--text3)">${esc(a.currency)}</td>
+      <td>${roleBadges}</td>
+      <td>${statusBadge}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('acct-body').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Số tài khoản</th>
+          <th>Chủ tài khoản</th>
+          <th style="text-align:right">Số dư</th>
+          <th>Tiền tệ</th>
+          <th>Quyền hệ thống</th>
+          <th>Trạng thái</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot>
+          <tr style="border-top:2px solid var(--border)">
+            <td colspan="2" style="padding:12px 14px;font-weight:600;color:var(--text2)">
+              Tổng cộng — ${list.length} tài khoản
+            </td>
+            <td style="font-weight:700;font-size:15px;color:var(--green);text-align:right">${fmtVND(total)}</td>
+            <td colspan="3"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>`;
+  document.getElementById('acct-body').style.display='';
 }
 
-// Init
+/* ── USERS ──────────────────────────── */
+let allUsers = [];
+async function loadUsers(){
+  loaded.users = true;
+  document.getElementById('usr-loading').style.display='flex';
+  document.getElementById('usr-body').style.display='none';
+  try{
+    const d = await fetch('/api/admin/users').then(r=>r.json());
+    allUsers = d.users||[];
+    document.getElementById('s-users').textContent = allUsers.length;
+    renderUsers(allUsers);
+  }catch(e){
+    document.getElementById('usr-body').innerHTML='<div class="alert alert-error" style="margin:0">Lỗi kết nối Keycloak</div>';
+    document.getElementById('usr-body').style.display='';
+  }
+  document.getElementById('usr-loading').style.display='none';
+}
+function filterUsers(){
+  const q = document.getElementById('usr-q').value.toLowerCase();
+  renderUsers(!q ? allUsers : allUsers.filter(u=>
+    [u.username,u.full_name,u.email].some(v=>(v||'').toLowerCase().includes(q))
+  ));
+}
+function renderUsers(list){
+  if(!list.length){
+    document.getElementById('usr-body').innerHTML='<div class="empty-state">Không có người dùng nào</div>';
+    document.getElementById('usr-body').style.display='';
+    return;
+  }
+  const rows = list.map(u=>{
+    const roleBadges = (u.roles||[]).map(roleBadge).join(' ') || '<span style="color:var(--text3);font-size:11px">Không có quyền đặc biệt</span>';
+    const statusBadge = u.enabled
+      ? '<span class="badge badge-green">Hoạt động</span>'
+      : '<span class="badge badge-red">Bị khoá</span>';
+    const createdStr = u.created_at ? new Date(u.created_at*1000).toLocaleDateString('vi-VN') : '—';
+    const acctRows = (u.accounts||[]).map(a=>
+      `<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;
+                   padding:4px 0;border-bottom:1px solid rgba(31,45,69,.4);font-size:12px">
+        <span class="account-tag">${esc(a.account_id)}</span>
+        <span style="font-weight:600;color:var(--green)">${fmtVND(a.balance)}</span>
+        <span style="color:var(--text3)">${esc(a.currency)}</span>
+      </div>`
+    ).join('');
+    const acctCell = acctRows
+      ? `<div style="min-width:200px">${acctRows}</div>`
+      : '<span style="color:var(--text3);font-size:11px">Chưa có tài khoản</span>';
+    const balanceStr = u.accounts&&u.accounts.length
+      ? `<div style="font-weight:700;color:var(--green);font-size:14px">${fmtVND(u.total_balance)}</div>`
+      : '<span style="color:var(--text3);font-size:11px">—</span>';
+    return `<tr>
+      <td>
+        <div class="info-cell">
+          <div class="primary">${esc(u.full_name||u.username)}</div>
+          <div class="secondary">@${esc(u.username)}</div>
+          <div class="secondary">${esc(u.email)}</div>
+        </div>
+      </td>
+      <td>${acctCell}</td>
+      <td>${balanceStr}</td>
+      <td>${roleBadges}</td>
+      <td>${statusBadge}</td>
+      <td style="color:var(--text3);font-size:12px">${createdStr}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('usr-body').innerHTML = `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Người dùng</th>
+          <th>Tài khoản ngân hàng</th>
+          <th>Tổng số dư</th>
+          <th>Quyền hệ thống</th>
+          <th>Trạng thái</th>
+          <th>Ngày tạo</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  document.getElementById('usr-body').style.display='';
+}
+
+/* ── init ───────────────────────────── */
 loadStats();
-loadAccounts();
+loadTransactions();
 </script>
 {% endblock %}
