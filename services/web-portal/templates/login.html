@@ -3,69 +3,119 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ZTLab — Đăng nhập</title>
+  <title>Đăng nhập — ZTLab Banking</title>
   <style>
-    :root { --bg:#0f1117;--card:#1c2128;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;--red:#f85149;--green:#3fb950; }
-    * { box-sizing:border-box; margin:0; padding:0; }
-    body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; min-height:100vh; display:flex; align-items:center; justify-content:center; }
-    .login-box { width:400px; }
-    .logo { text-align:center; margin-bottom:32px; }
-    .logo h1 { font-size:28px; margin-bottom:6px; letter-spacing:-0.5px; }
-    .logo p { color:var(--muted); font-size:13px; }
-    .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:32px; }
-    .card h2 { font-size:18px; margin-bottom:24px; font-weight:600; }
-    .form-group { margin-bottom:18px; }
-    .form-group label { display:block; font-size:13px; color:var(--muted); margin-bottom:6px; }
-    .form-group input { width:100%; padding:10px 14px; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:14px; outline:none; transition:border .15s; }
-    .form-group input:focus { border-color:var(--accent); }
-    .btn { width:100%; padding:11px; background:var(--accent); color:#000; border:none; border-radius:6px; font-size:15px; font-weight:600; cursor:pointer; transition:background .15s; margin-top:4px; }
-    .btn:hover { background:#79b8ff; }
-    .alert-error { background:rgba(248,81,73,.1); border:1px solid rgba(248,81,73,.3); color:var(--red); padding:10px 14px; border-radius:6px; margin-bottom:18px; font-size:13px; }
-    .alert-success { background:rgba(63,185,80,.1); border:1px solid rgba(63,185,80,.3); color:var(--green); padding:10px 14px; border-radius:6px; margin-bottom:18px; font-size:13px; }
-    .footer-link { margin-top:20px; text-align:center; font-size:13px; color:var(--muted); }
-    .footer-link a { color:var(--accent); text-decoration:none; }
-    .footer-link a:hover { text-decoration:underline; }
-    .divider { border:none; border-top:1px solid var(--border); margin:20px 0; }
-    .security-note { font-size:11px; color:var(--muted); text-align:center; margin-top:16px; line-height:1.5; }
+    :root {
+      --bg: #0a0e1a; --surface: #111827; --surface2: #1a2233;
+      --border: #1f2d45; --border2: #263347;
+      --text: #e2e8f0; --text2: #94a3b8; --text3: #64748b;
+      --accent: #3b82f6; --accent2: #60a5fa;
+      --green: #22c55e; --red: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh; display: flex;
+    }
+    .left-panel {
+      width: 440px; flex-shrink: 0;
+      background: linear-gradient(160deg, #0f1e35 0%, #0a0e1a 100%);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; padding: 40px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 60px; }
+    .brand-icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      display: flex; align-items: center; justify-content: center; font-size: 22px;
+    }
+    .brand-name { font-size: 18px; font-weight: 700; }
+    .brand-sub { font-size: 12px; color: var(--text3); margin-top: 2px; }
+    .hero-text { flex: 1; }
+    .hero-title { font-size: 30px; font-weight: 800; line-height: 1.25; margin-bottom: 12px; }
+    .hero-title span { background: linear-gradient(135deg, #3b82f6, #8b5cf6); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero-desc { font-size: 14px; color: var(--text2); line-height: 1.6; margin-bottom: 32px; }
+    .feature-list { display: flex; flex-direction: column; gap: 10px; }
+    .feature { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text2); }
+    .feature-icon {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: rgba(59,130,246,.1); display: flex; align-items: center;
+      justify-content: center; font-size: 14px; flex-shrink: 0;
+    }
+    .left-footer { font-size: 11px; color: var(--text3); margin-top: 40px; }
+    .right-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
+    .login-box { width: 100%; max-width: 380px; }
+    .login-title { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+    .login-sub { font-size: 14px; color: var(--text2); margin-bottom: 28px; }
+    .alert { padding: 11px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 20px; }
+    .alert-error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.2); color: #fca5a5; }
+    .alert-success { background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.2); color: #86efac; }
+    .btn-oidc {
+      width: 100%; padding: 13px; border-radius: 10px;
+      border: 1px solid var(--accent); background: rgba(59,130,246,.12);
+      color: var(--accent2); font-size: 15px; font-weight: 600;
+      cursor: pointer; text-align: center; text-decoration: none;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      transition: all .15s; margin-bottom: 16px;
+    }
+    .btn-oidc:hover { background: rgba(59,130,246,.22); border-color: var(--accent2); }
+    .security-note {
+      margin-top: 20px; padding: 12px 14px;
+      background: rgba(59,130,246,.05); border: 1px solid rgba(59,130,246,.15);
+      border-radius: 8px; font-size: 12px; color: var(--text3); text-align: center; line-height: 1.5;
+    }
+    .register-link { text-align: center; font-size: 13px; color: var(--text3); margin-top: 20px; }
+    .register-link a { color: var(--accent2); text-decoration: none; font-weight: 500; }
+    .register-link a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div class="login-box">
-    <div class="logo">
-      <h1>🔐 ZTLab Banking</h1>
-      <p>Hệ thống ngân hàng bảo mật Zero Trust</p>
+  <div class="left-panel">
+    <div class="brand">
+      <div class="brand-icon">🔐</div>
+      <div>
+        <div class="brand-name">ZTLab Banking</div>
+        <div class="brand-sub">Zero Trust Security Platform</div>
+      </div>
     </div>
-    <div class="card">
-      <h2>Đăng nhập</h2>
+    <div class="hero-text">
+      <h1 class="hero-title">Bảo mật <span>Zero Trust</span> cho ngân hàng đa đám mây</h1>
+      <p class="hero-desc">Nền tảng được bảo vệ bởi Keycloak OIDC, OPA Authorization và SPIRE mTLS trên môi trường multi-cloud AWS + OpenStack.</p>
+      <div class="feature-list">
+        <div class="feature"><div class="feature-icon">🔑</div>Xác thực OIDC + PKCE với Keycloak</div>
+        <div class="feature"><div class="feature-icon">🛡</div>OPA Policy Engine bảo vệ mọi API call</div>
+        <div class="feature"><div class="feature-icon">🔒</div>SPIRE mTLS giữa tất cả microservices</div>
+        <div class="feature"><div class="feature-icon">📊</div>Anomaly scoring bất thường (Redis 15 phút)</div>
+        <div class="feature"><div class="feature-icon">☁</div>Multi-cloud: AWS + OpenStack</div>
+      </div>
+    </div>
+    <div class="left-footer">ZTLab © 2026 · Đồ án chuyên ngành Zero Trust · UIT</div>
+  </div>
+
+  <div class="right-panel">
+    <div class="login-box">
+      <h2 class="login-title">Đăng nhập</h2>
+      <p class="login-sub">Chào mừng trở lại. Vui lòng xác thực để tiếp tục.</p>
 
       {% if error %}
-        <div class="alert-error">{{ error }}</div>
+      <div class="alert alert-error">⚠ {{ error }}</div>
+      {% endif %}
+      {% if success %}
+      <div class="alert alert-success">✓ {{ success }}</div>
       {% endif %}
 
-      {% if request.query_params.get('success') %}
-        <div class="alert-success">{{ request.query_params.get('success') }}</div>
-      {% endif %}
-
-      <form method="POST" action="/auth/login">
-        <div class="form-group">
-          <label>Tên đăng nhập</label>
-          <input type="text" name="username" placeholder="Nhập tên đăng nhập" autofocus required autocomplete="username">
-        </div>
-        <div class="form-group">
-          <label>Mật khẩu</label>
-          <input type="password" name="password" placeholder="••••••••" required autocomplete="current-password">
-        </div>
-        <button type="submit" class="btn">Đăng nhập →</button>
-      </form>
-
-      <hr class="divider">
-
-      <div class="footer-link">
-        Chưa có tài khoản? <a href="/register">Đăng ký ngay</a>
-      </div>
+      <a href="/auth/start" class="btn-oidc">
+        🔐 &nbsp;Đăng nhập với Keycloak SSO
+      </a>
 
       <div class="security-note">
-        Phiên đăng nhập được bảo vệ bởi Keycloak OIDC · OPA · mTLS SPIRE
+        🔒 Xác thực qua <strong>Authorization Code Flow + PKCE (S256)</strong>.<br>
+        Không có mật khẩu nào được gửi qua web portal.
+      </div>
+
+      <div class="register-link">
+        Chưa có tài khoản? <a href="/register">Đăng ký ngay</a>
       </div>
     </div>
   </div>

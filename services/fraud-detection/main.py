@@ -128,6 +128,42 @@ async def score(body: FraudRequest) -> FraudResponse:
     return result
 
 
+@app.get("/debug/velocity")
+async def debug_velocity():
+    now = time.time()
+    keys = await redis_client.keys("fraud:velocity:*")
+    result = []
+    for key in sorted(keys):
+        pipe = redis_client.pipeline()
+        pipe.zremrangebyscore(key, 0, now - VELOCITY_WINDOW_SECONDS)
+        pipe.zcard(key)
+        pipe.ttl(key)
+        r = await pipe.execute()
+        count = int(r[1])
+        ttl = int(r[2])
+        account = key.replace("fraud:velocity:", "")
+        if count > VELOCITY_SOFT_LIMIT * 3:
+            risk = "high"
+        elif count > VELOCITY_SOFT_LIMIT:
+            risk = "elevated"
+        elif count > max(3, VELOCITY_SOFT_LIMIT // 2):
+            risk = "low"
+        else:
+            risk = "normal"
+        result.append({
+            "account": account,
+            "tx_in_window": count,
+            "ttl_seconds": ttl,
+            "risk": risk,
+        })
+    return {
+        "velocity": result,
+        "window_seconds": VELOCITY_WINDOW_SECONDS,
+        "soft_limit": VELOCITY_SOFT_LIMIT,
+        "timestamp": now,
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": SERVICE, "cloud": CLOUD}

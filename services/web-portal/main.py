@@ -43,6 +43,8 @@ _KC_PROXY_ALLOWED = ("/realms/", "/resources/", "/js/")
 API_GATEWAY_URL = os.getenv("API_GATEWAY_URL", "http://api-gateway.financial.svc.cluster.local:8080").rstrip("/")
 FRAUD_DETECTION_URL = os.getenv("FRAUD_DETECTION_URL", "http://fraud-detection.financial.svc.cluster.local:8080").rstrip("/")
 SECURITY_SCORER_URL = os.getenv("SECURITY_SCORER_URL", "http://security-scorer.plg-stack.svc.cluster.local:8080").rstrip("/")
+SOAR_ENGINE_URL = os.getenv("SOAR_ENGINE_URL", "http://soar-engine.plg-stack.svc.cluster.local:8080").rstrip("/")
+SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "")
 
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 SESSION_COOKIE = "ztlab_session"
@@ -1162,3 +1164,106 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
         return JSONResponse({"result": "injected", "expected": "anomaly score tăng, pattern=cred_stuffing"})
 
     return JSONResponse({"error": f"unknown scenario: {scenario_id}"}, status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# Security / SOAR page
+# ---------------------------------------------------------------------------
+
+def _soar_headers() -> dict:
+    return {"Authorization": f"Bearer {SOAR_API_TOKEN}"} if SOAR_API_TOKEN else {}
+
+
+@app.get("/security", response_class=HTMLResponse)
+async def security_page(request: Request):
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse("/login", status_code=302)
+    roles = session.get("roles", [])
+    if not any(r in roles for r in ("security-admin", "security-analyst")):
+        raise HTTPException(status_code=403, detail="Chỉ security-admin hoặc security-analyst mới được truy cập")
+    return templates.TemplateResponse("security.html", {
+        "request":   request,
+        "username":  session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
+        "roles":     roles,
+        "page":      "security",
+        "is_admin":  "security-admin" in roles,
+    })
+
+
+@app.get("/api/soar/cases")
+async def api_soar_cases(request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    roles = session.get("roles", [])
+    if not any(r in roles for r in ("security-admin", "security-analyst")):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(f"{SOAR_ENGINE_URL}/cases", headers=_soar_headers())
+            return JSONResponse(r.json() if r.status_code == 200 else [])
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.get("/api/soar/blocked-ips")
+async def api_soar_blocked_ips(request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    roles = session.get("roles", [])
+    if not any(r in roles for r in ("security-admin", "security-analyst")):
+        return JSONResponse({"error": "forbidden"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(f"{SOAR_ENGINE_URL}/blocked-ips", headers=_soar_headers())
+            return JSONResponse(r.json() if r.status_code == 200 else {"blocked_ips": [], "count": 0})
+        except Exception as exc:
+            return JSONResponse({"error": str(exc), "blocked_ips": [], "count": 0})
+
+
+@app.post("/api/soar/blocked-ips/{ip}")
+async def api_soar_block_ip(ip: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if "security-admin" not in session.get("roles", []):
+        return JSONResponse({"error": "security-admin required"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.post(f"{SOAR_ENGINE_URL}/blocked-ips/{ip}", headers=_soar_headers())
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.delete("/api/soar/blocked-ips/{ip}")
+async def api_soar_unblock_ip(ip: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if "security-admin" not in session.get("roles", []):
+        return JSONResponse({"error": "security-admin required"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.delete(f"{SOAR_ENGINE_URL}/blocked-ips/{ip}", headers=_soar_headers())
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.post("/api/soar/cases/{case_id}/rollback")
+async def api_soar_rollback(case_id: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if "security-admin" not in session.get("roles", []):
+        return JSONResponse({"error": "security-admin required"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.post(f"{SOAR_ENGINE_URL}/cases/{case_id}/rollback", headers=_soar_headers())
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)

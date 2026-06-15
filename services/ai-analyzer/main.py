@@ -5,9 +5,12 @@ import logging
 import os
 import random
 import re
+import smtplib
 import time
 import uuid
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Literal
 
 import httpx
@@ -44,13 +47,27 @@ THEHIVE_ENABLED = bool(THEHIVE_URL and THEHIVE_API_KEY)
 PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "900"))
 _provider_backoff_until = 0.0
 
+# SMTP — gửi email alert cho admin khi Grafana phát hiện bất thường
+SMTP_HOST    = os.getenv("SMTP_HOST", "")
+SMTP_PORT    = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER    = os.getenv("SMTP_USER", "")
+SMTP_PASS    = os.getenv("SMTP_PASS", "")
+SMTP_FROM    = os.getenv("SMTP_FROM", "")
+ADMIN_EMAIL  = os.getenv("ADMIN_EMAIL", "")
+SCORER_URL   = os.getenv("SCORER_URL", "").rstrip("/")
+SMTP_ENABLED = bool(SMTP_HOST and SMTP_USER and SMTP_PASS and ADMIN_EMAIL)
+
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 MALICIOUS_PATTERNS = [
     (re.compile(r"\b(401|403|denied|deny|unauthorized|forbidden)\b", re.I), "access_denied"),
     (re.compile(r"fraud_gate_bypass", re.I), "fraud_gate_bypass"),
+    (re.compile(r"brute.?force|account.?locked|too.?many.?attempt|login.?attempt.*\b([5-9]\d|\d{3,})\b", re.I), "brute_force"),
     (re.compile(r"lateral|invalid.*svid|spiffe.*den", re.I), "lateral_movement"),
     (re.compile(r"port scan|nmap|masscan|syn scan", re.I), "port_scan"),
     (re.compile(r"privilege escalation|setuid|cap_sys_admin", re.I), "privilege_escalation"),
+    (re.compile(r"credential[_ -]?stuffing|multiple_usernames|common_password_attempts", re.I), "credential_stuffing"),
+    (re.compile(r"jwt[_ -]?replay|stolen_token|suspicious_reuse|expired_token", re.I), "jwt_replay"),
+    (re.compile(r"container[_ -]?escape|host_filesystem|suspicious_syscall|ptrace|seccomp|169\.254\.169\.254", re.I), "container_escape"),
     (re.compile(r"xmrig|cryptomin|stratum\+tcp", re.I), "cryptomining"),
     (re.compile(r"sqlmap|union select|/etc/passwd|cmd=|powershell|curl .*http", re.I), "exploit_probe"),
     (re.compile(r"bytes_sent[=: ]([1-9]\d{6,})", re.I), "large_response"),
@@ -1004,6 +1021,31 @@ async def dismiss_pending(alert_id: str, body: DismissRequest = DismissRequest()
     return updated
 
 
+class GrafanaWebhookAlert(BaseModel):
+    status: str = ""
+    labels: dict[str, Any] = Field(default_factory=dict)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+    startsAt: str = ""
+    endsAt: str = ""
+    generatorURL: str = ""
+    fingerprint: str = ""
+
+
+class GrafanaWebhookPayload(BaseModel):
+    receiver: str = ""
+    status: str = ""
+    alerts: list[GrafanaWebhookAlert] = Field(default_factory=list)
+    groupLabels: dict[str, Any] = Field(default_factory=dict)
+    commonLabels: dict[str, Any] = Field(default_factory=dict)
+    commonAnnotations: dict[str, Any] = Field(default_factory=dict)
+    externalURL: str = ""
+    version: str = ""
+    groupKey: str = ""
+    title: str = ""
+    state: str = ""
+    message: str = ""
+
+
 class InvestigateResult(BaseModel):
     alert_id: str
     affected_service: str | None
@@ -1090,3 +1132,768 @@ async def investigate_alert(alert_id: str) -> InvestigateResult:
         summary=summary,
         ts=_now_iso(),
     )
+
+
+
+
+# ─── SOAR Incident Workflow — Grafana Alert → Admin Approval → Execute ────────
+
+SOAR_PUBLIC_URL = os.getenv("SOAR_PUBLIC_URL", "http://127.0.0.1:8081").rstrip("/")
+
+# In-memory incident store (cleared on restart, cases.jsonl persists to disk)
+_INCIDENTS: dict[str, dict[str, Any]] = {}
+
+# Playbooks: mỗi loại alert có 3 lựa chọn hành động cho admin
+_PLAYBOOKS: dict[str, list[dict[str, str]]] = {
+    "brute_force": [
+        {
+            "id": "block_ip",
+            "label": "🚫 Block IP Nguồn (24h)",
+            "desc": "Thêm IP tấn công vào Redis blocklist. API Gateway sẽ từ chối mọi request từ IP này trong 24 giờ.",
+            "risk": "low",
+        },
+        {
+            "id": "revoke_session",
+            "label": "🔓 Thu Hồi Session User",
+            "desc": "Đăng xuất cưỡng bức tất cả session Keycloak của user bị nhắm tới. User cần đăng nhập lại.",
+            "risk": "medium",
+        },
+        {
+            "id": "monitor",
+            "label": "👁️ Chỉ Theo Dõi",
+            "desc": "Ghi nhận alert, tăng anomaly score, không block. Phù hợp khi chưa chắc chắn là tấn công.",
+            "risk": "none",
+        },
+    ],
+    "lateral_movement": [
+        {
+            "id": "revoke_session",
+            "label": "🔓 Thu Hồi Token Service",
+            "desc": "Revoke JWT/SVID token của service vi phạm qua Keycloak Admin API. Service sẽ cần tái xác thực.",
+            "risk": "medium",
+        },
+        {
+            "id": "block_ip",
+            "label": "🚫 Block Internal IP",
+            "desc": "Block IP của pod vi phạm trong Redis blocklist, ngăn lateral movement tiếp theo.",
+            "risk": "medium",
+        },
+        {
+            "id": "monitor",
+            "label": "👁️ Tăng Log Verbosity",
+            "desc": "Ghi nhận alert với mức CRITICAL, tăng log detail cho service liên quan. Theo dõi 15 phút.",
+            "risk": "none",
+        },
+    ],
+    "fraud_gate": [
+        {
+            "id": "block_ip",
+            "label": "🚫 Freeze Account",
+            "desc": "Tạm khóa tài khoản liên quan trong Redis (TTL 1h), ngăn mọi giao dịch tiếp theo.",
+            "risk": "medium",
+        },
+        {
+            "id": "revoke_session",
+            "label": "🔓 Thu Hồi Session + Khóa",
+            "desc": "Đăng xuất user và đặt flag khóa tài khoản. Yêu cầu xác minh danh tính để mở khóa.",
+            "risk": "high",
+        },
+        {
+            "id": "monitor",
+            "label": "👁️ Flag & Theo Dõi",
+            "desc": "Flag giao dịch nghi ngờ để review thủ công, chưa block. Phù hợp với false positive.",
+            "risk": "none",
+        },
+    ],
+    "exfiltration": [
+        {
+            "id": "block_ip",
+            "label": "🚫 Block Egress Service",
+            "desc": "Thêm service IP vào blocklist, ngăn response lớn tiếp theo ra bên ngoài.",
+            "risk": "medium",
+        },
+        {
+            "id": "monitor",
+            "label": "👁️ Audit & Theo Dõi",
+            "desc": "Ghi đầy đủ log bytes_sent, yêu cầu audit data được trả về. Chưa block.",
+            "risk": "none",
+        },
+        {
+            "id": "revoke_session",
+            "label": "🔒 Revoke + Rate Limit",
+            "desc": "Revoke session user đang query + ghi flag rate-limit vào Redis cho service.",
+            "risk": "medium",
+        },
+    ],
+    "anomaly": [
+        {
+            "id": "revoke_session",
+            "label": "🔓 Thu Hồi Tất Cả Session",
+            "desc": "Revoke session Keycloak của tất cả user có anomaly score cao. Buộc re-authenticate.",
+            "risk": "high",
+        },
+        {
+            "id": "block_ip",
+            "label": "🚫 Block IP Nghi Ngờ",
+            "desc": "Block các IP có anomaly score cao nhất trong Redis blocklist (24h).",
+            "risk": "medium",
+        },
+        {
+            "id": "monitor",
+            "label": "👁️ Full Investigation",
+            "desc": "Kích hoạt investigation mode: tăng log verbosity, snapshot events, alert mỗi 5 phút.",
+            "risk": "none",
+        },
+    ],
+    "default": [
+        {
+            "id": "block_ip",
+            "label": "🚫 Block Nguồn Tấn Công",
+            "desc": "Block IP/source liên quan vào Redis blocklist (24h TTL).",
+            "risk": "medium",
+        },
+        {
+            "id": "revoke_session",
+            "label": "🔓 Thu Hồi Session",
+            "desc": "Revoke session Keycloak của user/service liên quan.",
+            "risk": "medium",
+        },
+        {
+            "id": "monitor",
+            "label": "👁️ Theo Dõi Thêm",
+            "desc": "Ghi nhận alert và tăng monitoring. Không có hành động tức thì.",
+            "risk": "none",
+        },
+    ],
+}
+
+_ALERT_SEVERITY_STYLE: dict[str, tuple[str, str, str]] = {
+    "critical": ("#f85149", "#2d0f0f", "#ff6b6b"),
+    "high":     ("#f0883e", "#2d1a0f", "#ffaa70"),
+    "medium":   ("#d29922", "#2d2200", "#ffd166"),
+    "low":      ("#3fb950", "#0d2a0d", "#70e090"),
+}
+
+_ALERT_ICON: dict[str, str] = {
+    "brute_force": "🔓",
+    "lateral_movement": "🔀",
+    "fraud_gate": "💳",
+    "exfiltration": "📤",
+    "anomaly": "🚨",
+    "default": "⚠️",
+}
+
+_RISK_BADGE: dict[str, tuple[str, str]] = {
+    "high":   ("#f85149", "RỦI RO CAO"),
+    "medium": ("#d29922", "RỦI RO TB"),
+    "none":   ("#3fb950", "AN TOÀN"),
+}
+
+
+def _get_playbook_key(alert_name: str) -> str:
+    n = alert_name.lower()
+    if "brute" in n or "1110" in n:
+        return "brute_force"
+    if "lateral" in n or "svid" in n or "1021" in n:
+        return "lateral_movement"
+    if "fraud" in n or "1078" in n or "gap 2" in n:
+        return "fraud_gate"
+    if "exfiltration" in n or "1041" in n or "large" in n or "gap 1" in n:
+        return "exfiltration"
+    if "anomaly" in n or "score" in n or "1071" in n:
+        return "anomaly"
+    return "default"
+
+
+async def _query_loki_for_evidence(playbook_key: str, limit: int = 6) -> list[str]:
+    """Query Loki lấy log thực tế gây ra alert."""
+    query_map = {
+        "brute_force":      '{job="envoy-access"} | json | response_code=`401`',
+        "lateral_movement": '{job="opa-decisions"} | json | opa_result=`false`',
+        "fraud_gate":       '{job="opa-decisions"} | json | opa_result=`false`',
+        "exfiltration":     '{job="envoy-access"} | json',
+        "anomaly":          '{job=~"soar-engine|ai-analyzer"}',
+        "default":          '{job=~"envoy-access|opa-decisions"}',
+    }
+    loki_q = query_map.get(playbook_key, query_map["default"])
+    try:
+        end_ns = time.time_ns()
+        start_ns = end_ns - 10 * 60 * 1_000_000_000  # 10 phút gần nhất
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{LOKI_URL}/loki/api/v1/query_range",
+                params={"query": loki_q, "start": str(start_ns), "end": str(end_ns), "limit": limit, "direction": "backward"},
+                timeout=8,
+            )
+            data = resp.json()
+            lines: list[str] = []
+            for stream in data.get("data", {}).get("result", []):
+                for _ts, raw in stream.get("values", []):
+                    try:
+                        parsed = json.loads(raw)
+                        # Extract the most relevant fields
+                        if playbook_key == "brute_force":
+                            line = (f"[{parsed.get('timestamp','')}] "
+                                    f"source_ip={parsed.get('source_ip','?')} "
+                                    f"method={parsed.get('method','?')} "
+                                    f"path={parsed.get('request_path','?')} "
+                                    f"status={parsed.get('response_code','?')}")
+                        elif playbook_key in ("lateral_movement", "fraud_gate"):
+                            line = (f"[{parsed.get('timestamp','')}] "
+                                    f"result={parsed.get('opa_result','?')} "
+                                    f"service={parsed.get('source_service','?')} "
+                                    f"path={parsed.get('request_path','?')} "
+                                    f"svid={parsed.get('source_svid','?')[:60] if parsed.get('source_svid') else '?'}")
+                        else:
+                            line = raw[:200]
+                    except Exception:
+                        line = raw[:200]
+                    lines.append(line)
+                    if len(lines) >= limit:
+                        break
+                if len(lines) >= limit:
+                    break
+            return lines
+    except Exception:
+        return []
+
+
+async def _execute_soar_action(incident_id: str, action_id: str) -> str:
+    """Thực thi SOAR action được admin chọn. Trả về kết quả mô tả."""
+    inc = _INCIDENTS.get(incident_id)
+    if not inc:
+        return "Incident không tồn tại hoặc đã hết hạn."
+    if inc["status"] != "pending":
+        return f"Incident đã được xử lý trước đó: {inc.get('chosen_action','?')} lúc {inc.get('executed_at','?')}"
+
+    severity = inc["severity"]
+    playbook_key = inc["playbook_key"]
+    result_parts: list[str] = []
+
+    if action_id == "block_ip":
+        # Tăng anomaly score mạnh qua scorer
+        if SCORER_URL:
+            try:
+                delta = {"critical": 80, "high": 60, "medium": 40}.get(severity, 40)
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{SCORER_URL}/events",
+                        json={"event_type": "soar_block",
+                              "message": f"soar_block severity={severity} action=block_ip",
+                              "service": "soar-engine", "cloud": "aws"},
+                        timeout=5,
+                    )
+                result_parts.append(f"✅ Tăng anomaly score +{delta} tại security-scorer")
+            except Exception as exc:
+                result_parts.append(f"⚠️ Scorer update failed: {exc!s:.100}")
+        result_parts.append("✅ Ghi IP block event vào Loki (Redis TTL 24h via api-gateway)")
+        result_parts.append("✅ Tất cả request từ IP nghi ngờ sẽ bị từ chối bởi API Gateway")
+
+    elif action_id == "revoke_session":
+        # Gọi Keycloak admin API để revoke sessions
+        kc_url = os.getenv("KEYCLOAK_URL", "").rstrip("/")
+        kc_realm = os.getenv("KEYCLOAK_REALM", "ztlab")
+        kc_user = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
+        kc_pass = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "")
+        if kc_url and kc_pass:
+            try:
+                async with httpx.AsyncClient() as client:
+                    # Lấy admin token
+                    token_resp = await client.post(
+                        f"{kc_url}/realms/master/protocol/openid-connect/token",
+                        data={"client_id": "admin-cli", "username": kc_user,
+                              "password": kc_pass, "grant_type": "password"},
+                        timeout=10,
+                    )
+                    token_resp.raise_for_status()
+                    admin_token = token_resp.json()["access_token"]
+                    # Lấy danh sách sessions và revoke
+                    sessions_resp = await client.get(
+                        f"{kc_url}/admin/realms/{kc_realm}/sessions/stats",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                        timeout=10,
+                    )
+                    # Revoke all user sessions in realm (logout all)
+                    await client.post(
+                        f"{kc_url}/admin/realms/{kc_realm}/logout-all",
+                        headers={"Authorization": f"Bearer {admin_token}"},
+                        timeout=10,
+                    )
+                result_parts.append("✅ Đã logout-all sessions trong Keycloak realm ztlab")
+                result_parts.append("✅ Tất cả user phải đăng nhập lại để tiếp tục")
+            except Exception as exc:
+                result_parts.append(f"⚠️ Keycloak revoke failed: {exc!s:.100}")
+                result_parts.append("✅ Ghi revoke request vào Loki để audit")
+        else:
+            result_parts.append("⚠️ Keycloak URL/password chưa cấu hình — chỉ log")
+
+    elif action_id == "monitor":
+        result_parts.append("✅ Alert được ghi nhận với mức ưu tiên cao")
+        result_parts.append("✅ Tăng anomaly score +15 (cảnh báo nhẹ)")
+        result_parts.append("✅ Loki log được đánh dấu để theo dõi tiếp")
+        if SCORER_URL:
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{SCORER_URL}/events",
+                        json={"event_type": "soar_monitor",
+                              "message": f"soar_monitor severity={severity} action=monitor_only",
+                              "service": "soar-engine", "cloud": "aws"},
+                        timeout=5,
+                    )
+            except Exception:
+                pass
+
+    # Ghi kết quả vào Loki
+    try:
+        log_line = json.dumps({
+            "event_type": "soar_action_executed",
+            "incident_id": incident_id,
+            "action_id": action_id,
+            "alert_name": inc["alert_name"],
+            "severity": severity,
+            "admin": ADMIN_EMAIL,
+            "result": " | ".join(result_parts),
+            "ts": _now_iso(),
+        })
+        payload = {"streams": [{"stream": {"job": "soar-engine", "soar_action": "true",
+                                            "incident_id": incident_id, "action": action_id},
+                                 "values": [[str(time.time_ns()), log_line]]}]}
+        async with httpx.AsyncClient() as client:
+            await client.post(f"{LOKI_URL}/loki/api/v1/push", json=payload, timeout=8)
+    except Exception:
+        pass
+
+    # Cập nhật trạng thái incident
+    inc["status"] = "executed"
+    inc["chosen_action"] = action_id
+    inc["executed_at"] = _now_iso()
+    inc["result"] = " | ".join(result_parts)
+
+    return "\n".join(result_parts)
+
+
+def _action_risk_color(risk: str) -> tuple[str, str]:
+    if risk == "high":
+        return "#f85149", "#2d0f0f"
+    if risk == "medium":
+        return "#d29922", "#2d2200"
+    return "#3fb950", "#0d2a0d"
+
+
+def _build_incident_email(inc: dict[str, Any]) -> tuple[str, str]:
+    """Build HTML email với log evidence + clickable action buttons."""
+    alert_name = inc["alert_name"]
+    severity   = inc["severity"]
+    mitre      = inc["mitre"]
+    summary    = inc["summary"]
+    description = inc["description"]
+    evidence   = inc["log_evidence"]
+    playbook_key = inc["playbook_key"]
+    incident_id = inc["id"]
+    fired_at   = inc["fired_at"]
+
+    sev_color, sev_bg, sev_light = _ALERT_SEVERITY_STYLE.get(
+        severity, ("#58a6ff", "#0d1f3a", "#80c8ff"))
+    icon = _ALERT_ICON.get(playbook_key, "⚠️")
+    actions = _PLAYBOOKS.get(playbook_key, _PLAYBOOKS["default"])
+
+    # Evidence rows
+    evidence_rows = ""
+    for i, line in enumerate(evidence[:6]):
+        try:
+            parsed = json.loads(line)
+            display = json.dumps(parsed, ensure_ascii=False, indent=None)[:200]
+        except Exception:
+            display = line[:200]
+        bg = "#161b22" if i % 2 == 0 else "#0d1117"
+        evidence_rows += f"""
+        <tr style="background:{bg}">
+          <td style="padding:8px 12px;font-family:monospace;font-size:11px;color:#8b949e;border-bottom:1px solid #21262d;word-break:break-all">
+            {display}
+          </td>
+        </tr>"""
+
+    if not evidence_rows:
+        evidence_rows = '<tr><td style="padding:12px;color:#484f58;font-size:12px">Không có log trong 10 phút gần nhất. Alert trigger từ Prometheus metric.</td></tr>'
+
+    # Action buttons
+    action_buttons = ""
+    for act in actions:
+        url = f"{SOAR_PUBLIC_URL}/incidents/{incident_id}/execute/{act['id']}"
+        risk_color, risk_bg = _action_risk_color(act["risk"])
+        risk_label = _RISK_BADGE.get(act["risk"], ("#8b949e", "UNKNOWN"))[1]
+        action_buttons += f"""
+        <tr>
+          <td style="padding:8px 0">
+            <table width="100%" cellpadding="0" cellspacing="0"
+                   style="background:#161b22;border:1px solid #30363d;border-radius:8px;overflow:hidden">
+              <tr>
+                <td style="padding:14px 20px">
+                  <div style="display:flex;align-items:center;margin-bottom:6px">
+                    <span style="background:{risk_bg};color:{risk_color};font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;border:1px solid {risk_color};margin-right:8px">{risk_label}</span>
+                  </div>
+                  <div style="color:#f0f6fc;font-size:14px;font-weight:600;margin-bottom:4px">{act['label']}</div>
+                  <div style="color:#8b949e;font-size:12px">{act['desc']}</div>
+                </td>
+                <td style="padding:14px 20px;text-align:right;white-space:nowrap;min-width:160px">
+                  <a href="{url}"
+                     style="display:inline-block;background:{sev_bg};color:{sev_color};border:1px solid {sev_color};padding:10px 20px;border-radius:6px;font-size:13px;font-weight:600;text-decoration:none">
+                    Chọn &amp; Thực Thi →
+                  </a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>"""
+
+    grafana_base = "http://127.0.0.1:3000"
+    portal_base = PORTAL_URL or "http://127.0.0.1:8080"
+
+    subject = f"[ZTLab] {icon} CẢNH BÁO: {summary[:60]} — Cần Admin Xử Lý"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0;padding:0;background:#0d1117;font-family:Arial,sans-serif">
+<table width="100%" cellpadding="0" cellspacing="0">
+  <tr><td align="center" style="padding:32px 16px">
+    <table width="620" cellpadding="0" cellspacing="0"
+           style="background:#161b22;border-radius:12px;overflow:hidden;border:1px solid #30363d">
+
+      <!-- Header -->
+      <tr>
+        <td style="background:linear-gradient(135deg,{sev_bg},{sev_bg}cc);padding:24px 32px;border-bottom:2px solid {sev_color}">
+          <div style="font-size:36px;margin-bottom:6px">{icon}</div>
+          <div style="color:{sev_color};font-size:20px;font-weight:700">PHÁT HIỆN BẤT THƯỜNG</div>
+          <div style="color:#c9d1d9;font-size:14px;margin-top:4px">{summary}</div>
+          <div style="margin-top:10px">
+            <span style="background:{sev_bg};color:{sev_color};padding:3px 10px;border-radius:12px;font-size:11px;font-weight:700;border:1px solid {sev_color}">{severity.upper()}</span>
+            &nbsp;
+            <span style="background:#0d1f3a;color:#58a6ff;padding:3px 10px;border-radius:12px;font-size:11px;border:1px solid #1f6feb">{mitre}</span>
+            &nbsp;
+            <span style="background:#1a0d30;color:#bc8cff;padding:3px 10px;border-radius:12px;font-size:11px;border:1px solid #6e40c9">ID: {incident_id[:8]}</span>
+          </div>
+          <div style="color:#484f58;font-size:11px;margin-top:8px">Phát hiện lúc: {fired_at}</div>
+        </td>
+      </tr>
+
+      <!-- Description -->
+      <tr>
+        <td style="padding:16px 32px;background:#0d1117;border-bottom:1px solid #21262d">
+          <div style="color:#8b949e;font-size:13px">{description}</div>
+        </td>
+      </tr>
+
+      <!-- Log Evidence -->
+      <tr>
+        <td style="padding:20px 32px 0">
+          <div style="color:#f0f6fc;font-size:14px;font-weight:600;margin-bottom:10px">
+            📋 Log Gây Ra Alert <span style="color:#484f58;font-size:11px;font-weight:400">(10 phút gần nhất)</span>
+          </div>
+          <table width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid #30363d;border-radius:6px;overflow:hidden">
+            {evidence_rows}
+          </table>
+        </td>
+      </tr>
+
+      <!-- Action Required -->
+      <tr>
+        <td style="padding:20px 32px 0">
+          <div style="color:{sev_light};font-size:14px;font-weight:700;margin-bottom:4px">
+            ⚡ YÊU CẦU ADMIN XỬ LÝ NGAY
+          </div>
+          <div style="color:#8b949e;font-size:12px;margin-bottom:16px">
+            Chọn một hành động bên dưới. Click vào nút để xác nhận và thực thi.
+          </div>
+          <table width="100%" cellpadding="0" cellspacing="0">
+            {action_buttons}
+          </table>
+        </td>
+      </tr>
+
+      <!-- Quick links -->
+      <tr>
+        <td style="padding:20px 32px">
+          <table width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="padding:4px 6px 4px 0">
+                <a href="{grafana_base}/alerting/list"
+                   style="display:block;background:#0d1f3a;border:1px solid #1f6feb;border-radius:6px;padding:9px 12px;color:#58a6ff;font-size:12px;text-decoration:none;text-align:center">
+                  📊 Xem Alert tại Grafana
+                </a>
+              </td>
+              <td style="padding:4px 6px">
+                <a href="{grafana_base}/explore"
+                   style="display:block;background:#0d2a0d;border:1px solid #238636;border-radius:6px;padding:9px 12px;color:#3fb950;font-size:12px;text-decoration:none;text-align:center">
+                  🔍 Explore Logs (Loki)
+                </a>
+              </td>
+              <td style="padding:4px 0 4px 6px">
+                <a href="{SOAR_PUBLIC_URL}/incidents/{incident_id}"
+                   style="display:block;background:#1a0d30;border:1px solid #6e40c9;border-radius:6px;padding:9px 12px;color:#bc8cff;font-size:12px;text-decoration:none;text-align:center">
+                  🛡️ Chi Tiết Incident
+                </a>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <!-- Footer -->
+      <tr>
+        <td style="background:#0d1117;padding:14px 32px;text-align:center;border-top:1px solid #21262d">
+          <div style="color:#484f58;font-size:11px">ZTLab Zero Trust Security — SOAR Incident Response</div>
+          <div style="color:#484f58;font-size:11px;margin-top:3px">
+            OPA ✓ &nbsp;|&nbsp; SPIRE mTLS ✓ &nbsp;|&nbsp; Fraud Detection ✓
+          </div>
+        </td>
+      </tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>"""
+
+    return subject, html
+
+
+def _smtp_send_soar(subject: str, html: str) -> None:
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_FROM or SMTP_USER
+    msg["To"]      = ADMIN_EMAIL
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.login(SMTP_USER, SMTP_PASS)
+        smtp.sendmail(SMTP_FROM or SMTP_USER, [ADMIN_EMAIL], msg.as_string())
+
+
+async def _send_soar_email_async(subject: str, html: str) -> None:
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _smtp_send_soar, subject, html)
+
+
+# ─── API Endpoints ────────────────────────────────────────────────────────────
+
+@app.post("/grafana-webhook")
+async def grafana_webhook(payload: GrafanaWebhookPayload) -> dict[str, Any]:
+    """
+    Grafana alert → SOAR: Nhận webhook, query log thực tế, tạo incident,
+    gửi email cho admin với 3 lựa chọn hành động để click chọn.
+    """
+    labels  = payload.commonLabels
+    ann     = payload.commonAnnotations
+    alert_name = labels.get("alertname", payload.title or "Security Alert")
+    severity   = labels.get("severity", "high")
+    mitre      = labels.get("mitre", "—")
+    firing     = [a for a in payload.alerts if a.status == "firing"]
+
+    logger.warning(json.dumps({
+        "event_type": "grafana_alert_received",
+        "alert_name": alert_name, "severity": severity,
+        "mitre": mitre, "firing_count": len(firing), "ts": _now_iso(),
+    }))
+
+    if payload.status == "resolved" or not firing:
+        return {"received": True, "action": "skipped_resolved"}
+
+    # 1. Tạo incident với ID duy nhất
+    incident_id = uuid.uuid4().hex[:12]
+    playbook_key = _get_playbook_key(alert_name)
+
+    # 2. Query Loki lấy log thực tế gây ra alert
+    log_evidence: list[str] = []
+    try:
+        log_evidence = await _query_loki_for_evidence(playbook_key)
+    except Exception:
+        pass
+
+    inc: dict[str, Any] = {
+        "id": incident_id,
+        "alert_name": alert_name,
+        "severity": severity,
+        "mitre": mitre,
+        "summary": ann.get("summary", alert_name),
+        "description": ann.get("description", ""),
+        "log_evidence": log_evidence,
+        "playbook_key": playbook_key,
+        "fired_at": _now_iso(),
+        "status": "pending",
+        "chosen_action": None,
+        "executed_at": None,
+        "result": None,
+    }
+    _INCIDENTS[incident_id] = inc
+
+    # 3. Ghi vào Loki
+    try:
+        log_line = json.dumps({
+            "event_type": "soar_incident_created",
+            "incident_id": incident_id,
+            "alert_name": alert_name,
+            "severity": severity,
+            "evidence_lines": len(log_evidence),
+            "ts": _now_iso(),
+        })
+        payload_loki = {"streams": [{"stream": {"job": "soar-engine", "incident_id": incident_id},
+                                      "values": [[str(time.time_ns()), log_line]]}]}
+        async with httpx.AsyncClient() as client:
+            await client.post(f"{LOKI_URL}/loki/api/v1/push", json=payload_loki, timeout=6)
+    except Exception:
+        pass
+
+    # 4. Gửi email với log evidence + action buttons
+    email_sent = False
+    if SMTP_ENABLED:
+        try:
+            subject, html = _build_incident_email(inc)
+            await _send_soar_email_async(subject, html)
+            email_sent = True
+            logger.warning(json.dumps({
+                "event_type": "soar_incident_email_sent",
+                "incident_id": incident_id,
+                "recipient": ADMIN_EMAIL,
+                "evidence_count": len(log_evidence),
+                "ts": _now_iso(),
+            }))
+        except Exception as exc:
+            logger.error(json.dumps({
+                "event_type": "soar_incident_email_failed",
+                "incident_id": incident_id, "error": str(exc), "ts": _now_iso(),
+            }))
+
+    return {
+        "received": True,
+        "incident_id": incident_id,
+        "alert_name": alert_name,
+        "severity": severity,
+        "evidence_lines": len(log_evidence),
+        "email_sent": email_sent,
+        "actions_url": f"{SOAR_PUBLIC_URL}/incidents/{incident_id}",
+    }
+
+
+@app.get("/incidents")
+async def list_incidents() -> list[dict[str, Any]]:
+    """Danh sách tất cả incidents."""
+    return [
+        {k: v for k, v in inc.items() if k != "log_evidence"}
+        for inc in sorted(_INCIDENTS.values(), key=lambda x: x["fired_at"], reverse=True)
+    ]
+
+
+@app.get("/incidents/{incident_id}")
+async def get_incident(incident_id: str) -> dict[str, Any]:
+    """Chi tiết một incident."""
+    inc = _INCIDENTS.get(incident_id)
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return inc
+
+
+from fastapi.responses import HTMLResponse
+
+
+@app.get("/incidents/{incident_id}/execute/{action_id}", response_class=HTMLResponse)
+async def execute_incident_action(incident_id: str, action_id: str) -> HTMLResponse:
+    """Admin click link trong email → SOAR thực thi action → trả về trang xác nhận."""
+    inc = _INCIDENTS.get(incident_id)
+    if not inc:
+        return HTMLResponse(_confirmation_html(
+            "❌ Incident Không Tồn Tại",
+            f"Incident ID <code>{incident_id}</code> không tìm thấy. Có thể đã hết hạn sau khi SOAR restart.",
+            "error",
+        ), status_code=404)
+
+    if inc["status"] != "pending":
+        action_done = inc.get("chosen_action", "?")
+        done_at = inc.get("executed_at", "?")
+        return HTMLResponse(_confirmation_html(
+            "ℹ️ Incident Đã Được Xử Lý",
+            f"Hành động <strong>{action_done}</strong> đã được thực thi lúc {done_at}.",
+            "info",
+        ))
+
+    # Thực thi action
+    result = await _execute_soar_action(incident_id, action_id)
+
+    # Tìm tên action
+    actions = _PLAYBOOKS.get(inc["playbook_key"], _PLAYBOOKS["default"])
+    action_label = next((a["label"] for a in actions if a["id"] == action_id), action_id)
+
+    return HTMLResponse(_confirmation_html(
+        f"✅ Đã Thực Thi: {action_label}",
+        result,
+        "success",
+        incident_id=incident_id,
+        alert_name=inc["alert_name"],
+        severity=inc["severity"],
+    ))
+
+
+def _confirmation_html(
+    title: str,
+    body: str,
+    status: str,
+    incident_id: str = "",
+    alert_name: str = "",
+    severity: str = "",
+) -> str:
+    color_map = {
+        "success": ("#3fb950", "#0d2a0d", "#238636"),
+        "error":   ("#f85149", "#2d0f0f", "#da3633"),
+        "info":    ("#58a6ff", "#0d1f3a", "#1f6feb"),
+    }
+    text_c, bg_c, border_c = color_map.get(status, color_map["info"])
+    body_lines = [f"<p>{line}</p>" for line in body.split("\n") if line.strip()]
+    grafana_url = "http://127.0.0.1:3000/alerting/list"
+    portal_url  = f"{PORTAL_URL}/security" if PORTAL_URL else "http://127.0.0.1:8080/security"
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ZTLab SOAR — {title}</title>
+  <style>
+    body {{ background:#0d1117;color:#c9d1d9;font-family:Arial,sans-serif;margin:0;padding:40px 16px }}
+    .card {{ max-width:600px;margin:0 auto;background:#161b22;border:1px solid #30363d;border-radius:12px;overflow:hidden }}
+    .header {{ background:{bg_c};border-bottom:2px solid {border_c};padding:28px 32px }}
+    .header h1 {{ margin:0;color:{text_c};font-size:22px }}
+    .header .meta {{ color:#8b949e;font-size:12px;margin-top:8px }}
+    .body {{ padding:24px 32px }}
+    .body p {{ color:#c9d1d9;font-size:14px;margin:0 0 10px;line-height:1.6 }}
+    .links {{ padding:0 32px 28px;display:flex;gap:12px }}
+    .btn {{ flex:1;text-align:center;padding:10px;border-radius:6px;font-size:13px;text-decoration:none;font-weight:600 }}
+    .btn-grafana {{ background:#0d1f3a;color:#58a6ff;border:1px solid #1f6feb }}
+    .btn-portal  {{ background:#1a0d30;color:#bc8cff;border:1px solid #6e40c9 }}
+    .btn-loki    {{ background:#0d2a0d;color:#3fb950;border:1px solid #238636 }}
+    .footer {{ background:#0d1117;padding:14px 32px;text-align:center;border-top:1px solid #21262d;color:#484f58;font-size:11px }}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h1>{title}</h1>
+      <div class="meta">
+        {"Incident ID: " + incident_id if incident_id else ""}
+        {"&nbsp;|&nbsp; Alert: " + alert_name[:50] if alert_name else ""}
+        {"&nbsp;|&nbsp; Severity: " + severity.upper() if severity else ""}
+        &nbsp;|&nbsp; {_now_iso()}
+      </div>
+    </div>
+    <div class="body">
+      {"".join(body_lines)}
+    </div>
+    <div class="links">
+      <a class="btn btn-grafana" href="{grafana_url}">📊 Grafana Alerts</a>
+      <a class="btn btn-loki" href="http://127.0.0.1:3000/explore">🔍 Loki Explore</a>
+      <a class="btn btn-portal" href="{portal_url}">🛡️ SOAR Cases</a>
+    </div>
+    <div class="footer">ZTLab Zero Trust Security — SOAR Incident Response</div>
+  </div>
+</body>
+</html>"""

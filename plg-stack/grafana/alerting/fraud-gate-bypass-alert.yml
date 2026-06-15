@@ -7,7 +7,7 @@ groups:
     interval: 1m
     rules:
       - uid: fraud-gate-bypass
-        title: "Fraud Gate Bypass Detected (Gap 2)"
+        title: "Kịch bản 3 — Fraud Gate Bypass (Gap 2)"
         for: 0s
         condition: A
         data:
@@ -27,9 +27,16 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "payment-service attempted core-banking without fraud gate header"
-          description: "Gap 2 validation triggered. ATT&CK T1078.004."
+          summary: "Fraud Gate bypass: payment-service cố thực hiện giao dịch không qua fraud-detection"
+          description: "ATT&CK T1078.004 — Gap 2: payment-service gọi core-banking mà thiếu header X-Fraud-Score. OPA từ chối."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Block transaction ID liên quan trong Redis (TTL 1h)
+            2. Flag user account vào danh sách review
+            3. Tạo case với playbook fraud_response
+            🔧 Admin cần xem xét: Grafana → ZTLab → Fraud Gate dashboard
         labels:
           severity: critical
+          category: security
           gap: gap2
           mitre: T1078.004

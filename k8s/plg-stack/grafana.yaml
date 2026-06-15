@@ -47,6 +47,24 @@ spec:
               value: "true"
             - name: GF_UNIFIED_ALERTING_ENABLED
               value: "true"
+            # SMTP — Gmail để gửi alert email cho admin
+            - name: GF_SMTP_ENABLED
+              value: "true"
+            - name: GF_SMTP_HOST
+              value: "smtp.gmail.com:587"
+            - name: GF_SMTP_USER
+              value: "voha2005@gmail.com"
+            - name: GF_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-smtp-secret
+                  key: password
+            - name: GF_SMTP_FROM_ADDRESS
+              value: "voha2005@gmail.com"
+            - name: GF_SMTP_FROM_NAME
+              value: "ZTLab Security Monitor"
+            - name: GF_SMTP_STARTTLS_POLICY
+              value: "MandatoryStartTLS"
           volumeMounts:
             - name: grafana-data
               mountPath: /var/lib/grafana

@@ -1,111 +1,6 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-analyzer
-  namespace: plg-stack
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: ai-analyzer
-  template:
-    metadata:
-      labels:
-        app: ai-analyzer
-    spec:
-      containers:
-        - name: ai-analyzer
-          image: ztlab/ai-analyzer:1.1.0
-          imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
-          ports:
-            - name: http
-              containerPort: 8080
-          envFrom:
-            - secretRef:
-                name: ai-secrets
-                optional: true
-          env:
-            - name: LOKI_URL
-              value: http://loki.plg-stack.svc.cluster.local:3100
-            - name: SOAR_WEBHOOK_URL
-              value: http://soar-engine.plg-stack.svc.cluster.local:8080/alerts
-            - name: AI_ANALYZER_POLL_ENABLED
-              value: "true"
-            - name: AI_ANALYZER_POLL_INTERVAL_SECONDS
-              value: "120"
-            - name: AI_ANALYZER_LOOKBACK_SECONDS
-              value: "300"
-            - name: AI_ANALYZER_MAX_LOGS_PER_BATCH
-              value: "10"
-            - name: AI_ANALYZER_MIN_ALERT_SEVERITY
-              value: medium
-            # Alerts at or above this severity require admin approval before SOAR executes
-            - name: AI_ANALYZER_ADMIN_APPROVAL_SEVERITY
-              value: high
-            # TTL (seconds) for pending alerts before they auto-expire
-            - name: AI_ANALYZER_PENDING_TTL_SECONDS
-              value: "3600"
-            # Optional webhook URL to notify admin (Telegram bot, Slack, n8n, etc.)
-            # - name: ADMIN_WEBHOOK_URL
-            #   value: "https://your-webhook-url"
-            - name: AI_PROVIDER_COOLDOWN_SECONDS
-              value: "900"
-            - name: AI_ANALYZER_LOKI_QUERY
-              value: '{job=~"envoy-access|opa-decisions|kubernetes-pods"} |~ "(?i)(403|401|denied|fraud_gate_bypass|lateral|xmrig|cryptomin|port.scan|nmap|bytes_sent|large_response|unauthorized|svid|spiffe)"'
-            - name: AI_ANALYZER_IGNORED_ALERT_NAMESPACES
-              value: plg-stack,monitoring,identity,kube-system
-            # Admin notification: primary channel is Grafana Alerting (Contact Points).
-            # Grafana queries Loki for {pending_approval="true"} and notifies via whatever
-            # Contact Point the admin configures in Grafana UI (email/Slack/Telegram/webhook).
-            # PORTAL_URL: link included in webhook payloads so admin can navigate to /alerts.
-            # - name: PORTAL_URL
-            #   value: "http://portal.ztlab.local"
-            # ADMIN_WEBHOOK_URL: optional secondary channel (n8n, Slack, custom endpoint).
-            # - name: ADMIN_WEBHOOK_URL
-            #   value: "https://your-n8n-or-slack-webhook"
-            - name: THEHIVE_URL
-              value: http://thehive.plg-stack.svc.cluster.local:9000
-            - name: THEHIVE_ORG
-              value: ztlab
-            - name: THEHIVE_MIN_SEVERITY
-              value: high
-          readinessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 20
-            periodSeconds: 20
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
-              memory: 512Mi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: ai-analyzer
-  namespace: plg-stack
-spec:
-  selector:
-    app: ai-analyzer
-  ports:
-    - name: http
-      port: 8080
-      targetPort: http
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
   name: soar-engine
   namespace: plg-stack
 spec:
@@ -121,7 +16,7 @@ spec:
       serviceAccountName: soar-engine
       containers:
         - name: soar-engine
-          image: ztlab/soar-engine:1.1.0
+          image: ztlab/soar-engine:3.2.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -133,8 +28,8 @@ spec:
           env:
             - name: LOKI_URL
               value: http://loki.plg-stack.svc.cluster.local:3100
-            - name: AI_ANALYZER_URL
-              value: http://ai-analyzer.plg-stack.svc.cluster.local:8080
+            - name: SCORER_URL
+              value: http://security-scorer.plg-stack.svc.cluster.local:8080
             - name: SOAR_DRY_RUN
               value: "false"
             - name: SOAR_AUTO_EXECUTE
@@ -160,6 +55,36 @@ spec:
                   name: keycloak-admin-secret
                   key: password
                   optional: true
+            - name: REDIS_URL
+              value: redis://redis.financial.svc.cluster.local:6379/2
+            - name: SOAR_BLOCK_IP_TTL_SECONDS
+              value: "86400"
+            - name: SOAR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-secrets
+                  key: SOAR_API_TOKEN
+                  optional: true
+            # SMTP — gửi email SOAR alert cho admin
+            - name: SMTP_HOST
+              value: "smtp.gmail.com"
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_USER
+              value: "voha2005@gmail.com"
+            - name: SMTP_FROM
+              value: "voha2005@gmail.com"
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-smtp-secret
+                  key: password
+            - name: ADMIN_EMAIL
+              value: "voha2005@gmail.com"
+            # URL công khai của SOAR engine — admin click từ email sẽ mở URL này
+            # Phải trỏ tới port-forward: kubectl port-forward svc/soar-engine -n plg-stack 8081:8080
+            - name: SOAR_PUBLIC_URL
+              value: "http://127.0.0.1:8081"
           volumeMounts:
             - name: soar-data
               mountPath: /data

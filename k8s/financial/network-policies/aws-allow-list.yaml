@@ -38,6 +38,14 @@ spec:
           protocol: TCP
         - port: 6379
           protocol: TCP
+    # security-scorer và soar-engine trong plg-stack cần đọc Redis DB1/DB2
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 6379
+          protocol: TCP
   egress:
     - to:
         - namespaceSelector:
@@ -192,6 +200,35 @@ spec:
         - port: 30082
           protocol: TCP
         - port: 30083
+          protocol: TCP
+    # SMTP egress — Grafana gửi email alert qua Gmail
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 587
+          protocol: TCP
+        - port: 465
+          protocol: TCP
+    # Identity namespace (Keycloak)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+      ports:
+        - port: 8080
+          protocol: TCP
+    # security-scorer và soar-engine truy cập Redis financial (DB1, DB2)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 6379
           protocol: TCP
 
 ---

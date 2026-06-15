@@ -7,7 +7,7 @@ groups:
     interval: 1m
     rules:
       - uid: brute-force-login
-        title: "Brute Force Login Attempt Detected"
+        title: "Kịch bản 1 — Brute Force Login Detected"
         for: 0s
         condition: A
         data:
@@ -27,8 +27,15 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Brute force login detected — >5 x 401 in 1m from same source_ip"
-          description: "ATT&CK T1110.001. Check OPA decision logs for blocked identity."
+          summary: "Brute force login — nhiều lần 401 từ cùng source_ip trong 1 phút"
+          description: "ATT&CK T1110.001 — Kẻ tấn công đang thử đoán mật khẩu. OPA đã log request bị từ chối."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Block IP nguồn tấn công (Redis blocklist, 24h TTL)
+            2. Revoke session Keycloak của user bị nhắm tới
+            3. Ghi case vào /data/cases.jsonl
+            🔧 Admin cần xem xét: Grafana → ZTLab → SOAR Cases
         labels:
           severity: high
+          category: security
           mitre: T1110.001

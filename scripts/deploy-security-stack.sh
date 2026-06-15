@@ -100,6 +100,26 @@ financial_manifests_ready() {
   return 0
 }
 
+random_secret() {
+  openssl rand -base64 32 2>/dev/null || date +%s%N
+}
+
+ensure_keycloak_secret() {
+  if kubectl --context $AWS_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
+    log_info "Keycloak secret already exists"
+    return
+  fi
+
+  local admin_password postgres_password
+  admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(random_secret)}"
+  postgres_password="${KEYCLOAK_DB_PASSWORD:-$(random_secret)}"
+
+  kubectl --context $AWS_CONTEXT -n identity create secret generic keycloak-secret \
+    --from-literal=admin-password="$admin_password" \
+    --from-literal=postgres-password="$postgres_password"
+  log_info "Created keycloak-secret from environment/random values"
+}
+
 deploy_step_1_namespaces() {
   log_step "1. Create Namespaces"
 
@@ -117,7 +137,7 @@ deploy_step_2_keycloak() {
   log_step "2. Deploy Keycloak (AWS only)"
 
   log_info "Creating Keycloak secrets..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/secret.yaml"
+  ensure_keycloak_secret
 
   log_info "Deploying Keycloak PostgreSQL..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"

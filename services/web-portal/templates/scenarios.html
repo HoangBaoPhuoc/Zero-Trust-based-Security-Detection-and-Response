@@ -4,81 +4,106 @@
 
 {% block head %}
 <style>
-  .scenario-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .scenario-card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+  .scenario-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .scenario-card { background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; padding: 16px; transition: border-color .2s; }
   .scenario-card.running { border-color: var(--yellow); }
   .scenario-card.success { border-color: var(--green); }
   .scenario-card.blocked { border-color: var(--red); }
-  .scenario-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
+  .scenario-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 6px; gap: 8px; }
   .scenario-title { font-size: 14px; font-weight: 600; }
-  .scenario-desc { font-size: 12px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
-  .mitre-tag { font-size: 10px; font-family: 'SF Mono', monospace; padding: 2px 6px; background: rgba(188,140,255,.15); color: var(--purple); border: 1px solid rgba(188,140,255,.3); border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
-  .expected-tag { font-size: 10px; padding: 2px 6px; background: rgba(63,185,80,.1); color: var(--green); border: 1px solid rgba(63,185,80,.3); border-radius: 4px; margin-bottom: 10px; display: inline-block; }
-  .result-box { margin-top: 10px; padding: 10px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'SF Mono', Consolas, monospace; font-size: 11px; max-height: 180px; overflow-y: auto; display: none; line-height: 1.6; }
+  .scenario-desc { font-size: 12px; color: var(--text3); margin-bottom: 10px; line-height: 1.55; }
+  .mitre-tag { font-size: 10px; font-family: monospace; padding: 2px 6px; background: rgba(168,85,247,.12); color: var(--purple); border: 1px solid rgba(168,85,247,.25); border-radius: 4px; white-space: nowrap; flex-shrink: 0; }
+  .expected-tag { font-size: 10px; padding: 2px 7px; background: rgba(34,197,94,.08); color: var(--green); border: 1px solid rgba(34,197,94,.2); border-radius: 4px; margin-bottom: 10px; display: inline-block; }
+  .result-box { margin-top: 10px; padding: 10px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: monospace; font-size: 11px; max-height: 180px; overflow-y: auto; display: none; line-height: 1.6; }
   .result-ok { color: var(--green); }
   .result-block { color: var(--red); }
-  .result-info { color: var(--accent); }
-  .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
-  .run-btn { width: 100%; margin-top: 8px; justify-content: center; }
+  .result-info { color: var(--accent2); }
+  .section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--text3); margin: 20px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  .run-btn { width: 100%; margin-top: 8px; justify-content: center; font-size: 13px; }
   .run-btn:disabled { opacity: .5; cursor: not-allowed; }
   .velocity-results { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
   .v-chip { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
-  .v-allow { background: rgba(63,185,80,.15); color: var(--green); border: 1px solid rgba(63,185,80,.3); }
-  .v-block { background: rgba(248,81,73,.15); color: var(--red); border: 1px solid rgba(248,81,73,.3); }
+  .v-allow { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.2); }
+  .v-block { background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+
+  .score-widget {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px; display: flex; align-items: center; gap: 20px;
+  }
+  .score-circle {
+    width: 80px; height: 80px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 24px; font-weight: 800;
+    border: 3px solid var(--green);
+    background: rgba(34,197,94,.08);
+    color: var(--green);
+  }
+  .score-circle.medium { border-color: var(--yellow); background: rgba(245,158,11,.08); color: var(--yellow); }
+  .score-circle.high { border-color: var(--red); background: rgba(239,68,68,.08); color: var(--red); }
 </style>
 {% endblock %}
 
 {% block content %}
 
-<!-- ── Nhóm 1: Kiểm soát truy cập (Zero Trust enforcement) ────────────── -->
-<div class="section-title">🛡️ Kiểm soát truy cập — Zero Trust enforcement (kết quả mong đợi: BỊ CHẶN)</div>
+<!-- Anomaly Score Widget -->
+<div class="score-widget" id="score-widget">
+  <div class="score-circle" id="score-circle">—</div>
+  <div>
+    <div style="font-size:15px;font-weight:700">Anomaly Score (Redis 15 phút)</div>
+    <div style="font-size:12px;color:var(--text3);margin-top:4px" id="score-patterns">Đang tải...</div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">Inject các kịch bản bên dưới → score sẽ tăng lên → quan sát trên Grafana</div>
+    <div style="margin-top:8px;display:flex;gap:8px">
+      <a href="http://grafana.ztlab.local:8080" target="_blank" class="btn btn-sm">📊 Grafana</a>
+      <button class="btn btn-sm" onclick="loadScore()">🔄 Refresh Score</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Nhóm 1: Zero Trust enforcement ────────────── -->
+<div class="section-title">🛡 Kiểm soát truy cập — Zero Trust enforcement (mong đợi: BỊ CHẶN)</div>
 <div class="scenario-grid">
 
-  <!-- Không có JWT -->
   <div class="scenario-card" id="card-no-jwt">
     <div class="scenario-header">
       <span class="scenario-title">Không có JWT</span>
       <span class="mitre-tag">T1078</span>
     </div>
-    <div class="scenario-desc">Gọi POST /payments không có Authorization header. OPA nhận input không có Bearer token — policy <code>has_valid_jwt = false</code> → deny.</div>
-    <span class="expected-tag">Expected: HTTP 403 – missing_bearer</span>
-    <button class="btn btn-red run-btn" onclick="runScenario('no_jwt')">▶ Chạy kịch bản</button>
+    <div class="scenario-desc">Gọi POST /payments không có Authorization header. API Gateway chặn ngay — event được push vào Redis Scorer.</div>
+    <span class="expected-tag">Expected: HTTP 401/403 — missing bearer token</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('no_jwt')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-no-jwt"></div>
   </div>
 
-  <!-- JWT giả mạo -->
   <div class="scenario-card" id="card-jwt-forgery">
     <div class="scenario-header">
       <span class="scenario-title">JWT giả mạo (ký sai key)</span>
       <span class="mitre-tag">T1078.001</span>
     </div>
-    <div class="scenario-desc">Gửi JWT ký bằng key không phải Keycloak. API Gateway verify JWKS — signature không khớp → reject ngay trước khi vào Envoy.</div>
+    <div class="scenario-desc">Gửi JWT ký bằng key không phải Keycloak. API Gateway verify JWKS — signature không khớp → reject.</div>
     <span class="expected-tag">Expected: HTTP 401 – invalid_signature</span>
-    <button class="btn btn-red run-btn" onclick="runScenario('jwt_forgery')">▶ Chạy kịch bản</button>
+    <button class="btn btn-danger run-btn" onclick="runScenario('jwt_forgery')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-jwt-forgery"></div>
   </div>
 
-  <!-- Lateral movement -->
   <div class="scenario-card" id="card-lateral-movement">
     <div class="scenario-header">
-      <span class="scenario-title">Lateral Movement — SVID sai</span>
+      <span class="scenario-title">Lateral Movement — SVID giả</span>
       <span class="mitre-tag">T1021</span>
     </div>
-    <div class="scenario-desc">Gọi endpoint nội bộ <code>/payments/internal/execute</code> với SVID giả <code>spiffe://evil.corp/attacker</code>. OPA: <code>svid_in_trust_domain = false</code> → deny.</div>
-    <span class="expected-tag">Expected: HTTP 403 – svid_not_authorized</span>
-    <button class="btn btn-red run-btn" onclick="runScenario('lateral_movement')">▶ Chạy kịch bản</button>
+    <div class="scenario-desc">Gọi endpoint nội bộ với SVID giả <code>spiffe://evil.corp/attacker</code> → bị chặn. Event lateral_movement → Redis Scorer.</div>
+    <span class="expected-tag">Expected: HTTP 403/404 — internal path blocked</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('lateral_movement')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-lateral-movement"></div>
   </div>
 
-  <!-- Fraud gate -->
   <div class="scenario-card" id="card-fraud-gate">
     <div class="scenario-header">
       <span class="scenario-title">Fraud Gate Block</span>
       <span class="mitre-tag">T1078.002</span>
     </div>
-    <div class="scenario-desc">Chuyển 500,000,000 ₫ qua kênh <code>tor</code>. Fraud score = 75 (500M: +55, tor: +15, baseline: +5). Payment service chặn trước khi gọi core-banking.</div>
-    <span class="expected-tag">Expected: HTTP 403 – fraud_block (score=75)</span>
-    <button class="btn btn-red run-btn" onclick="runScenario('fraud_gate')">▶ Chạy kịch bản</button>
+    <div class="scenario-desc">Chuyển 500,000,000 ₫ qua kênh <code>tor</code>. Fraud score=75 (500M: +55, tor: +15) → fraud_gate_bypass event → Redis Scorer.</div>
+    <span class="expected-tag">Expected: HTTP 403 – fraud_block</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('fraud_gate')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-fraud-gate"></div>
   </div>
 
@@ -88,242 +113,214 @@
 <div class="section-title">⚡ Velocity & Rate Limit</div>
 <div class="scenario-grid">
 
-  <!-- High velocity -->
   <div class="scenario-card" id="card-high-velocity">
     <div class="scenario-header">
-      <span class="scenario-title">High Velocity (10 lần / 15s)</span>
+      <span class="scenario-title">High Velocity (10 tx/15s)</span>
       <span class="mitre-tag">T1499</span>
     </div>
-    <div class="scenario-desc">Gửi 10 giao dịch nhỏ liên tiếp từ cùng tài khoản. Redis đếm velocity trong 60s — các lần sau fraud score tăng dần. Sau khi count ≥ 5, velocity_score = +10.</div>
+    <div class="scenario-desc">Gửi 10 giao dịch nhỏ liên tiếp. Redis đếm velocity trong 60s — fraud score tăng dần theo từng batch.</div>
     <span class="expected-tag">Expected: score tăng dần, giao dịch cuối score &gt; 30</span>
-    <button class="btn btn-yellow run-btn" onclick="runScenario('high_velocity')">▶ Chạy kịch bản</button>
+    <button class="btn btn-sm run-btn" style="border-color:var(--yellow);color:var(--yellow)" onclick="runScenario('high_velocity')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-high-velocity"></div>
   </div>
 
-  <!-- Rate limit -->
   <div class="scenario-card" id="card-rate-limit">
     <div class="scenario-header">
       <span class="scenario-title">Rate Limit (65 req/min)</span>
       <span class="mitre-tag">T1498</span>
     </div>
-    <div class="scenario-desc">Gửi 65 request GET /health liên tiếp đến API Gateway. Giới hạn 60 req/min/IP — các request vượt ngưỡng bị block ngay tại gateway.</div>
+    <div class="scenario-desc">Gửi 65 GET /health liên tiếp đến API Gateway. Giới hạn 60 req/min/IP — vượt ngưỡng bị block.</div>
     <span class="expected-tag">Expected: req 61+ → HTTP 429 Too Many Requests</span>
-    <button class="btn btn-yellow run-btn" onclick="runScenario('rate_limit')">▶ Chạy kịch bản</button>
+    <button class="btn btn-sm run-btn" style="border-color:var(--yellow);color:var(--yellow)" onclick="runScenario('rate_limit')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-rate-limit"></div>
   </div>
 
 </div>
 
-<!-- ── Nhóm 3: AI Detection (inject log) ─────────────────────────────── -->
-<div class="section-title">🤖 AI Detection — Inject log → chờ AI phân tích</div>
+<!-- ── Nhóm 3: Redis Scorer Injection ─────────────────────────────────── -->
+<div class="section-title">📊 Inject Events → Redis Scorer (15 phút window) — Quan sát trên Grafana</div>
 <div class="scenario-grid">
 
-  <!-- Brute force inject -->
   <div class="scenario-card" id="card-inject-brute-force">
     <div class="scenario-header">
       <span class="scenario-title">Brute Force Login (inject)</span>
       <span class="mitre-tag">T1110.001</span>
     </div>
-    <div class="scenario-desc">Inject log "20 lần login thất bại trong 30 giây" thẳng vào AI Analyzer. AI phân tích → verdict malicious → tạo pending HITL alert.</div>
-    <span class="expected-tag">Expected: verdict=malicious → pending alert → sang trang AI Alerts</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_brute_force')">▶ Inject &amp; Phân tích</button>
+    <div class="scenario-desc">Inject 21 log "login thất bại + brute_force_detected" vào Redis Scorer. Pattern brute_force → score tăng ~30 điểm.</div>
+    <span class="expected-tag">Expected: anomaly score tăng, pattern=brute_force</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_brute_force')">▶ Inject vào Scorer</button>
     <div class="result-box" id="result-inject-brute-force"></div>
   </div>
 
-  <!-- Port scan inject -->
   <div class="scenario-card" id="card-inject-port-scan">
     <div class="scenario-header">
       <span class="scenario-title">Port Scan (inject)</span>
       <span class="mitre-tag">T1046</span>
     </div>
-    <div class="scenario-desc">Inject log "nmap SYN scan 1024 ports from 10.9.8.99" vào AI Analyzer. SOAR playbook gợi ý: <code>block_source_ip</code> → tạo NetworkPolicy.</div>
-    <span class="expected-tag">Expected: verdict=malicious, playbook=block_source_ip</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_port_scan')">▶ Inject &amp; Phân tích</button>
+    <div class="scenario-desc">Inject log "nmap SYN scan 1024 ports". Pattern port_scan → score +25 điểm. Thấy trên Grafana dashboard.</div>
+    <span class="expected-tag">Expected: anomaly score tăng, pattern=port_scan</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_port_scan')">▶ Inject vào Scorer</button>
     <div class="result-box" id="result-inject-port-scan"></div>
   </div>
 
-  <!-- Exfiltration inject -->
   <div class="scenario-card" id="card-inject-exfiltration">
     <div class="scenario-header">
       <span class="scenario-title">Data Exfiltration (inject)</span>
       <span class="mitre-tag">T1041</span>
     </div>
-    <div class="scenario-desc">Inject log response size bất thường (8MB từ /accounts/history). AI nhận diện pattern exfiltration → playbook <code>restrict_egress</code>.</div>
-    <span class="expected-tag">Expected: verdict=malicious, playbook=restrict_egress</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_exfiltration')">▶ Inject &amp; Phân tích</button>
+    <div class="scenario-desc">Inject log response bất thường (8MB từ /accounts/history). Pattern data_exfil → score +35 điểm.</div>
+    <span class="expected-tag">Expected: anomaly score tăng, pattern=data_exfil</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_exfiltration')">▶ Inject vào Scorer</button>
     <div class="result-box" id="result-inject-exfiltration"></div>
   </div>
 
-  <!-- Cryptomining inject -->
   <div class="scenario-card" id="card-inject-cryptomining">
     <div class="scenario-header">
       <span class="scenario-title">Cryptomining (inject)</span>
       <span class="mitre-tag">T1496</span>
     </div>
-    <div class="scenario-desc">Inject log "xmrig stratum+tcp kết nối mining pool" từ trong container financial. AI phát hiện → playbook <code>quarantine_workload</code>.</div>
-    <span class="expected-tag">Expected: verdict=malicious, playbook=quarantine_workload</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cryptomining')">▶ Inject &amp; Phân tích</button>
+    <div class="scenario-desc">Inject log "xmrig stratum+tcp mining pool connected". Pattern cryptomining → score +45 điểm. Nghiêm trọng nhất.</div>
+    <span class="expected-tag">Expected: anomaly score tăng mạnh, pattern=cryptomining</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cryptomining')">▶ Inject vào Scorer</button>
     <div class="result-box" id="result-inject-cryptomining"></div>
   </div>
 
-  <!-- SQL Injection -->
-  <div class="scenario-card" id="card-inject-sqli">
+  <div class="scenario-card" id="card-sqli-probe">
     <div class="scenario-header">
-      <span class="scenario-title">SQL Injection probe (inject)</span>
+      <span class="scenario-title">SQL Injection probe</span>
       <span class="mitre-tag">T1190</span>
     </div>
-    <div class="scenario-desc">Gửi payload SQL injection <code>' OR '1'='1</code> trong trường from_account. API Gateway/payment-service validation reject; log inject cho AI phân tích pattern.</div>
-    <span class="expected-tag">Expected: HTTP 422 từ backend + AI detect exploit_probe</span>
+    <div class="scenario-desc">Gửi payload SQL injection thật <code>' OR '1'='1</code> + inject log exploit_probe. HTTP 422 từ backend + score +35.</div>
+    <span class="expected-tag">Expected: HTTP 422 + anomaly score exploit_probe</span>
     <button class="btn btn-primary run-btn" onclick="runScenario('sqli_probe')">▶ Chạy &amp; Inject</button>
     <div class="result-box" id="result-sqli-probe"></div>
   </div>
 
-  <!-- Credential stuffing -->
   <div class="scenario-card" id="card-inject-cred-stuffing">
     <div class="scenario-header">
       <span class="scenario-title">Credential Stuffing (inject)</span>
       <span class="mitre-tag">T1078.001</span>
     </div>
-    <div class="scenario-desc">Inject log "25 username khác nhau × 5 password = 125 lần thử trong 60s". AI: credential_stuffing → SOAR playbook <code>revoke_user_sessions</code>.</div>
-    <span class="expected-tag">Expected: verdict=malicious, playbook=revoke_user_sessions</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cred_stuffing')">▶ Inject &amp; Phân tích</button>
+    <div class="scenario-desc">Inject log "25 username × 5 password = 125 lần trong 60s". Pattern cred_stuffing → score +30 điểm.</div>
+    <span class="expected-tag">Expected: anomaly score tăng, pattern=cred_stuffing</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cred_stuffing')">▶ Inject vào Scorer</button>
     <div class="result-box" id="result-inject-cred-stuffing"></div>
   </div>
 
 </div>
 
-<!-- ── Quick links ────────────────────────────────────────────────────── -->
+<!-- Quick links -->
 <div class="section-title">🔗 Liên kết nhanh</div>
 <div style="display:flex;gap:10px;flex-wrap:wrap">
-  <a href="/alerts" class="btn btn-primary">🚨 Xem AI Alerts (HITL)</a>
-  <a href="/transfer" class="btn">💸 Chuyển tiền bình thường</a>
-  <a href="http://localhost:3000/d/ztlab-ai-siem-soar" target="_blank" class="btn">📊 Grafana SIEM Dashboard</a>
-  <a href="http://localhost:3000/d/ztlab-threat-intel" target="_blank" class="btn">🌐 Threat Intel Feed</a>
-  <a href="http://localhost:19000/index.html#/alerts" target="_blank" class="btn">🐝 TheHive Alerts</a>
+  <a href="http://grafana.ztlab.local:8080/d/ztlab-security-v2" target="_blank" class="btn btn-primary">📊 Grafana Security Dashboard</a>
+  <a href="/transfer" class="btn">↗ Chuyển tiền bình thường</a>
+  <a href="/dashboard" class="btn">🏠 Dashboard</a>
 </div>
 
 {% endblock %}
 
 {% block scripts %}
 <script>
-async function runScenario(scenarioId) {
-  const card = document.getElementById('card-' + scenarioId);
-  const resultBox = document.getElementById('result-' + scenarioId);
-  const btn = card ? card.querySelector('button') : null;
-
-  if (card) { card.className = card.className.replace(/running|success|blocked/g, '').trim() + ' running'; }
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang chạy...'; }
-  if (resultBox) { resultBox.style.display = 'block'; resultBox.innerHTML = '<span style="color:var(--yellow)">Đang gửi request...</span>'; }
-
+async function loadScore() {
   try {
-    const resp = await fetch('/api/scenarios/' + scenarioId + '/run', { method: 'POST' });
-    const data = await resp.json();
-    renderResult(scenarioId, data, card, resultBox);
-  } catch(e) {
-    if (resultBox) { resultBox.innerHTML = '<span class="result-block">Lỗi kết nối đến server</span>'; }
-    if (card) { card.className = card.className.replace('running','blocked'); }
-  } finally {
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = btn.textContent.replace('⏳ Đang chạy...', '▶ Chạy lại');
-      if (!btn.textContent.includes('▶')) btn.textContent = '▶ Chạy lại';
-    }
-  }
-}
-
-function fmtJson(obj) {
-  // Escape HTML first, then apply safe color-coding patterns
-  const escaped = JSON.stringify(obj, null, 2)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  return escaped
-    .replace(/"verdict": "malicious"/g, '<span class="result-block">"verdict": "malicious"</span>')
-    .replace(/"verdict": "suspicious"/g, '<span style="color:var(--yellow)">"verdict": "suspicious"</span>')
-    .replace(/"verdict": "normal"/g, '<span class="result-ok">"verdict": "normal"</span>')
-    .replace(/"status": "completed"/g, '<span class="result-ok">"status": "completed"</span>')
-    .replace(/"gate": "blocked"/g, '<span class="result-block">"gate": "blocked"</span>')
-    .replace(/"gate": "passed"/g, '<span class="result-ok">"gate": "passed"</span>');
-}
-
-function renderResult(id, data, card, box) {
-  if (!box) return;
-
-  // Special handling for high_velocity
-  if (id === 'high_velocity' && data.results) {
-    const chips = data.results.map(r => {
-      const cls = r.gate === 'blocked' || r.status_code === 403 ? 'v-block' : 'v-allow';
-      return `<span class="v-chip ${cls}">#${r.attempt} score=${r.fraud_score} ${r.gate || r.status_code}</span>`;
-    }).join('');
-    box.innerHTML = '<div class="velocity-results">' + chips + '</div>';
-    if (card) { card.className = card.className.replace('running','success'); }
-    return;
-  }
-
-  // Special handling for rate_limit
-  if (id === 'rate_limit' && data.results) {
-    const blocked = data.results.filter(r => r.status_code === 429).length;
-    const allowed = data.results.filter(r => r.status_code !== 429).length;
-    box.innerHTML = `<span class="result-ok">✓ Passed: ${allowed}</span>  <span class="result-block">✗ Rate-limited (429): ${blocked}</span>\n` +
-      data.results.slice(-8).map(r =>
-        `<span class="${r.status_code===429?'result-block':'result-ok'}">#${r.req} → ${r.status_code}</span>`
-      ).join('  ');
-    if (card) { card.className = card.className.replace('running', blocked > 0 ? 'blocked' : 'success'); }
-    return;
-  }
-
-  const sc = data.status_code || data.http_status;
-  const isBlocked = sc >= 400;
-  const isAlert = data.verdict === 'malicious' || data.verdict === 'suspicious';
-
-  if (card) {
-    card.className = card.className.replace('running', isBlocked && !isAlert ? 'blocked' : 'success');
-  }
-
-  let html = '';
-
-  // Status line
-  if (sc) {
-    const color = sc >= 400 ? 'var(--red)' : 'var(--green)';
-    html += `<span style="color:${color};font-weight:bold">HTTP ${sc}</span>  `;
-  }
-  if (data.expected) {
-    const expEsc = String(data.expected).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    html += `<span style="color:var(--muted)">expected: ${expEsc}</span>\n\n`;
-  }
-
-  // Result payload
-  const payload = data.result || data;
-  html += '<pre>' + fmtJson(payload) + '</pre>';
-
-  // Post-action hint for AI scenarios
-  if (data.verdict && data.verdict !== 'normal') {
-    html += `\n<span class="result-info">→ Nếu severity = high/critical: kiểm tra <a href="/alerts" style="color:var(--accent)">AI Alerts</a> để approve/dismiss</span>`;
-  }
-  if (data.soar_case_id || (data.result && data.result.soar_case_id)) {
-    html += `\n<span class="result-ok">→ SOAR case đã tạo</span>`;
-  }
-
-  box.innerHTML = html;
-}
-
-// Auto-refresh alert badge in topbar
-async function checkPendingCount() {
-  try {
-    const r = await fetch('/api/alerts?status=pending');
-    const alerts = await r.json();
-    if (Array.isArray(alerts) && alerts.length > 0) {
-      const nav = document.querySelector('a[href="/alerts"]');
-      if (nav && !nav.querySelector('.pending-count')) {
-        const span = document.createElement('span');
-        span.className = 'badge badge-red pending-count';
-        span.style.cssText = 'margin-left:auto;font-size:10px;padding:1px 5px';
-        span.textContent = alerts.length;
-        nav.appendChild(span);
+    const r = await fetch('/api/security/score');
+    const d = await r.json();
+    if (d.score !== undefined) {
+      const sc = d.score;
+      const circle = document.getElementById('score-circle');
+      circle.textContent = sc;
+      circle.className = 'score-circle' + (sc >= 70 ? ' high' : sc >= 40 ? ' medium' : '');
+      const patterns = Object.entries(d.breakdown || {});
+      if (patterns.length > 0) {
+        document.getElementById('score-patterns').innerHTML = patterns.map(([k,v]) =>
+          `<span class="badge badge-${v.contribution>20?'red':'yellow'}" style="margin-right:4px">${k}: ${v.count}x (+${v.contribution})</span>`
+        ).join('');
+      } else {
+        document.getElementById('score-patterns').textContent = 'Không phát hiện pattern bất thường trong 15 phút qua';
       }
     }
   } catch(e) {}
 }
 
-checkPendingCount();
-setInterval(checkPendingCount, 20000);
+async function runScenario(scenarioId) {
+  const domId = scenarioId.replace(/_/g, '-');
+  const card = document.getElementById('card-' + domId);
+  const resultBox = document.getElementById('result-' + domId);
+  const btn = card ? card.querySelector('button') : null;
+
+  if (card) card.className = card.className.replace(/running|success|blocked/g,'').trim() + ' running';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang chạy...'; }
+  if (resultBox) { resultBox.style.display='block'; resultBox.innerHTML='<span style="color:var(--yellow)">Đang gửi request...</span>'; }
+
+  try {
+    const resp = await fetch('/api/scenarios/' + scenarioId + '/run', {method:'POST'});
+    const data = await resp.json();
+    renderResult(scenarioId, data, card, resultBox);
+    // Refresh score after injection
+    setTimeout(loadScore, 2000);
+  } catch(e) {
+    if (resultBox) resultBox.innerHTML = '<span class="result-block">Lỗi kết nối: ' + e.message + '</span>';
+    if (card) card.className = card.className.replace('running','blocked');
+  } finally {
+    if (btn) { btn.disabled=false; btn.textContent = btn.textContent.includes('Inject') ? '▶ Inject lại' : '▶ Chạy lại'; }
+  }
+}
+
+function fmtJson(obj) {
+  const escaped = JSON.stringify(obj, null, 2)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return escaped
+    .replace(/"score": (\d+)/g, (m,n) => `"score": <span style="color:${n>=70?'var(--red)':n>=40?'var(--yellow)':'var(--green)'}"><b>${n}</b></span>`)
+    .replace(/"gate": "blocked"/g, '"gate": <span class="result-block"><b>"blocked"</b></span>')
+    .replace(/"gate": "passed"/g, '"gate": <span class="result-ok"><b>"passed"</b></span>')
+    .replace(/"status": "completed"/g, '"status": <span class="result-ok">"completed"</span>');
+}
+
+function renderResult(id, data, card, box) {
+  if (!box) return;
+
+  if (id === 'high_velocity' && data.results) {
+    const chips = data.results.map(r => {
+      const cls = r.gate==='blocked'||r.status_code===403 ? 'v-block' : 'v-allow';
+      return `<span class="v-chip ${cls}">#${r.attempt} s=${r.fraud_score} ${r.gate||r.status_code}</span>`;
+    }).join('');
+    box.innerHTML = '<div class="velocity-results">' + chips + '</div>';
+    if (card) card.className = card.className.replace('running','success');
+    return;
+  }
+
+  if (id === 'rate_limit' && data.results) {
+    const blocked = data.results.filter(r=>r.status_code===429).length;
+    const allowed = data.results.filter(r=>r.status_code!==429).length;
+    box.innerHTML = `<span class="result-ok">✓ Allowed: ${allowed}</span>  <span class="result-block">✗ Rate-limited: ${blocked}</span>\n` +
+      data.results.slice(-6).map(r=>`<span class="${r.status_code===429?'result-block':'result-ok'}">#${r.req}→${r.status_code}</span>`).join(' ');
+    if (card) card.className = card.className.replace('running', blocked>0?'blocked':'success');
+    return;
+  }
+
+  const sc = data.status_code;
+  const isBlocked = sc >= 400;
+  if (card) card.className = card.className.replace('running', isBlocked?'blocked':'success');
+
+  let html = '';
+  if (sc) {
+    const color = sc>=400?'var(--red)':'var(--green)';
+    html += `<span style="color:${color};font-weight:bold">HTTP ${sc}</span>  `;
+  }
+  if (data.expected) {
+    html += `<span style="color:var(--text3)">← ${String(data.expected).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>\n\n`;
+  }
+  if (data.result === 'injected') {
+    html += `<span class="result-ok">✓ ${data.events||1} event(s) đã được inject vào Redis Scorer\n→ Anomaly score sẽ tăng trong ~30 giây tới</span>`;
+  } else {
+    const payload = data.result || data;
+    html += '<pre>' + fmtJson(payload) + '</pre>';
+  }
+
+  box.innerHTML = html;
+}
+
+loadScore();
+setInterval(loadScore, 30000);
 </script>
 {% endblock %}

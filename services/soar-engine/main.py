@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException
+import redis.asyncio as aioredis
+from fastapi import FastAPI, Header, HTTPException, Request
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from pydantic import BaseModel, Field
@@ -17,6 +18,11 @@ from pydantic import BaseModel, Field
 APP_NAME = "soar-engine"
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc.cluster.local:8080").rstrip("/")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/2")
+REDIS_BLOCKED_IPS_KEY = "ztlab:blocked_ips"
+REDIS_BLOCKED_IPS_TTL = int(os.getenv("SOAR_BLOCK_IP_TTL_SECONDS", "86400"))  # 24h default
+
+_redis: aioredis.Redis | None = None
 KEYCLOAK_URL = os.getenv("KEYCLOAK_URL", "http://keycloak.identity.svc.cluster.local:8080").rstrip("/")
 KEYCLOAK_REALM = os.getenv("KEYCLOAK_REALM", "ztlab")
 KEYCLOAK_ADMIN_USER = os.getenv("KEYCLOAK_ADMIN_USER", "admin")
@@ -397,7 +403,6 @@ def _block_source_ip(context: str, source_ip: str) -> str:
 
     try:
         existing = api.read_namespaced_network_policy(name=policy_name, namespace=SOAR_NAMESPACE)
-        # Update except list in case additional IPs need to be added later
         existing.metadata.annotations = existing.metadata.annotations or {}
         existing.metadata.annotations["soar.ztlab.io/updated-at"] = _now_iso()
         existing.spec.ingress[0]["from"][0]["ipBlock"]["except"] = [cidr]
@@ -583,6 +588,8 @@ async def _run_steps(
         elif playbook == "block_source_ip":
             if source_ip and context:
                 contain_action = _block_source_ip(context, source_ip)
+                # Also write to Redis so api-gateway can enforce in real-time
+                await redis_block_ip(source_ip, reason=f"SOAR: {attack_type}")
             else:
                 contain_action = "skipped: no source_ip or context available"
         elif playbook == "revoke_user_sessions":
@@ -592,6 +599,9 @@ async def _run_steps(
                 contain_action = "skipped: no username in alert"
         elif playbook == "monitor_only":
             contain_action = "monitor only — no automated action"
+        # Always write source_ip to Redis blocklist for any playbook when IP is known
+        if source_ip and playbook not in {"revoke_user_sessions", "monitor_only"}:
+            await redis_block_ip(source_ip, reason=f"SOAR: {attack_type} via {playbook}")
         _step("contain", contain_action)
     except Exception as exc:
         _step("contain", error=str(exc))
@@ -700,11 +710,65 @@ async def record_case(case: CaseRecord) -> CaseRecord:
     return case
 
 
+# ── Redis helpers ────────────────────────────────────────────────────────────
+
+async def _get_redis() -> aioredis.Redis:
+    global _redis
+    if _redis is None:
+        _redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+    return _redis
+
+
+async def redis_block_ip(ip: str, reason: str = "SOAR automated block") -> None:
+    try:
+        r = await _get_redis()
+        key = f"ztlab:blocked_ip:{ip}"
+        await r.setex(key, REDIS_BLOCKED_IPS_TTL, json.dumps({
+            "ip": ip, "reason": reason, "ts": _now_iso(),
+            "ttl_seconds": REDIS_BLOCKED_IPS_TTL,
+        }))
+        await r.sadd(REDIS_BLOCKED_IPS_KEY, ip)
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "redis_block_ip_failed", "ip": ip, "error": str(exc)}))
+
+
+async def redis_unblock_ip(ip: str) -> None:
+    try:
+        r = await _get_redis()
+        await r.delete(f"ztlab:blocked_ip:{ip}")
+        await r.srem(REDIS_BLOCKED_IPS_KEY, ip)
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "redis_unblock_ip_failed", "ip": ip, "error": str(exc)}))
+
+
+async def redis_get_blocked_ips() -> list[dict]:
+    try:
+        r = await _get_redis()
+        members = await r.smembers(REDIS_BLOCKED_IPS_KEY)
+        result = []
+        for ip in members:
+            raw = await r.get(f"ztlab:blocked_ip:{ip}")
+            if raw:
+                result.append(json.loads(raw))
+            else:
+                # Entry in set but no TTL key — stale, clean up
+                await r.srem(REDIS_BLOCKED_IPS_KEY, ip)
+        return sorted(result, key=lambda x: x.get("ts", ""), reverse=True)
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "redis_get_blocked_ips_failed", "error": str(exc)}))
+        return []
+
+
 # ── FastAPI lifecycle ────────────────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup() -> None:
     load_cases()
+    try:
+        await _get_redis()
+        logger.info(json.dumps({"event_type": "redis_connected", "url": REDIS_URL}))
+    except Exception as exc:
+        logger.warning(json.dumps({"event_type": "redis_connect_failed", "error": str(exc)}))
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -842,3 +906,166 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
     if result.status == "failed":
         raise HTTPException(status_code=500, detail=result.model_dump())
     return result
+
+
+# ── Grafana Alertmanager webhook ─────────────────────────────────────────────
+
+GRAFANA_SEVERITY_MAP = {
+    "critical": "critical",
+    "high": "high",
+    "warning": "medium",
+    "medium": "medium",
+    "info": "low",
+    "low": "low",
+}
+
+GRAFANA_ATTACK_MAP = {
+    "fraud": "fraud_gate_bypass",
+    "brute": "brute_force",
+    "anomaly": "access_denied",
+    "lateral": "lateral_movement",
+    "port_scan": "port_scan",
+    "exploit": "exploit_probe",
+    "jwt": "jwt_replay",
+}
+
+
+def _grafana_to_alert(payload: dict) -> SecurityAlert | None:
+    alerts_list = payload.get("alerts", [])
+    if not alerts_list:
+        return None
+
+    alert_data = alerts_list[0]
+    labels      = alert_data.get("labels", {})
+    annotations = alert_data.get("annotations", {})
+    state       = alert_data.get("status", "firing")
+
+    if state != "firing":
+        return None
+
+    raw_severity = labels.get("severity", "medium").lower()
+    severity = GRAFANA_SEVERITY_MAP.get(raw_severity, "medium")
+    summary  = annotations.get("summary", labels.get("alertname", "unknown alert"))
+    desc     = annotations.get("description", "")
+
+    # Infer attack type from alert title/summary
+    text_lower = (summary + " " + desc).lower()
+    attack_type = "access_denied"
+    for keyword, mapped in GRAFANA_ATTACK_MAP.items():
+        if keyword in text_lower:
+            attack_type = mapped
+            break
+
+    source_ip = labels.get("source_ip") or annotations.get("source_ip")
+
+    return SecurityAlert(
+        event_type   = "grafana_alert",
+        analyzer     = "grafana",
+        provider     = "grafana-alertmanager",
+        model        = "rule-based",
+        source       = "grafana",
+        verdict      = "malicious",
+        severity     = severity,  # type: ignore[arg-type]
+        confidence   = 0.75,
+        attack_type  = attack_type,
+        summary      = summary,
+        evidence     = [desc] if desc else [],
+        recommended_action = f"respond to {attack_type}",
+        recommended_playbook = PLAYBOOK_BY_ATTACK.get(attack_type),
+        source_ip    = source_ip,
+        ts           = _now_iso(),
+    )
+
+
+@app.post("/grafana-webhook")
+async def grafana_webhook(request: Request) -> dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid JSON")
+
+    alert = _grafana_to_alert(payload)
+    if not alert:
+        return {"status": "ignored", "reason": "no firing alerts or resolved"}
+
+    alert_hash = _hash_alert(alert)
+    case_id    = _case_id(alert_hash)
+    attack     = _first_known_attack(alert)
+    playbook   = _select_playbook(alert, attack)
+    target     = _infer_target(alert, attack)
+    eligible, reason = _should_execute(alert)
+
+    status: Literal["skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
+    action = "no action"
+    error:  str | None = None
+    steps:  list[PlaybookStep] = []
+
+    if not eligible:
+        status = "skipped"
+    else:
+        try:
+            action, steps = await _run_steps(
+                playbook    = playbook,
+                context     = target.get("context"),
+                workload    = target.get("workload"),
+                source_ip   = alert.source_ip,
+                username    = alert.username,
+                attack_type = attack,
+                dry_run     = SOAR_DRY_RUN,
+            )
+            status = "dry_run" if SOAR_DRY_RUN else "executed"
+        except Exception as exc:
+            status = "failed"
+            error  = str(exc)
+            action = "execution failed"
+
+    case = CaseRecord(
+        case_id         = case_id,
+        status          = status,
+        alert_hash      = alert_hash,
+        attack_type     = attack,
+        severity        = alert.severity,
+        confidence      = alert.confidence,
+        playbook        = playbook,
+        target_context  = target.get("context"),
+        target_workload = target.get("workload"),
+        source_ip       = alert.source_ip,
+        username        = alert.username,
+        action          = action,
+        reason          = reason,
+        error           = error,
+        dry_run         = SOAR_DRY_RUN,
+        steps           = steps,
+        ts              = _now_iso(),
+    )
+    await record_case(case)
+    return {"status": status, "case_id": case_id, "playbook": playbook, "action": action}
+
+
+# ── Blocked IPs management ───────────────────────────────────────────────────
+
+@app.get("/blocked-ips")
+async def list_blocked_ips(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_soar_token(authorization)
+    ips = await redis_get_blocked_ips()
+    return {"blocked_ips": ips, "count": len(ips), "ttl_seconds": REDIS_BLOCKED_IPS_TTL}
+
+
+@app.post("/blocked-ips/{ip}")
+async def manual_block_ip(ip: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_soar_token(authorization)
+    ip = ip.strip()
+    if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+        raise HTTPException(status_code=400, detail="invalid IPv4 address")
+    await redis_block_ip(ip, reason="manual block via SOAR API")
+    logger.warning(json.dumps({"event_type": "manual_ip_block", "ip": ip}))
+    return {"status": "blocked", "ip": ip, "ttl_seconds": REDIS_BLOCKED_IPS_TTL}
+
+
+@app.delete("/blocked-ips/{ip}")
+async def unblock_ip(ip: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    require_soar_token(authorization)
+    ip = ip.strip()
+    await redis_unblock_ip(ip)
+    logger.warning(json.dumps({"event_type": "ip_unblocked", "ip": ip}))
+    return {"status": "unblocked", "ip": ip}

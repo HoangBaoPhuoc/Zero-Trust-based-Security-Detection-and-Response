@@ -1,39 +1,61 @@
 apiVersion: 1
 
-# Notification routing policy.
-# ZTLab security alerts (requires_approval="true") are routed to the
-# "ztlab-security-admin" contact point.
-#
-# To receive alerts, admin must configure the "ztlab-security-admin" contact
-# point in Grafana UI: Alerting → Contact points → Edit "ztlab-security-admin".
-# Supported channels: Email, Slack, Telegram, Webhook, PagerDuty, etc.
-#
-# Default contact point is also set to "ztlab-security-admin" so all other
-# ZTLab alerts (brute-force, fraud-gate-bypass, etc.) also go there.
+contactPoints:
+  - orgId: 1
+    name: ztlab-security-admin
+    receivers:
+      # Kênh 1: SOAR engine tự động xử lý
+      - uid: ztlab-soar-webhook
+        type: webhook
+        settings:
+          url: "http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook"
+          httpMethod: POST
+          title: "[ZTLab SOAR] {{ .CommonAnnotations.summary }}"
+          message: "Severity: {{ .CommonLabels.severity }} | {{ .CommonAnnotations.description }}"
+        disableResolveMessage: false
+      # Kênh 2: Email cho admin
+      - uid: ztlab-admin-email
+        type: email
+        settings:
+          addresses: "voha2005@gmail.com"
+          subject: >-
+            [ZTLab SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.severity | toUpper }}
+          message: |
+            🚨 CẢNH BÁO BẢO MẬT — ZTLab Zero Trust
+
+            Alert:     {{ .CommonLabels.alertname }}
+            Severity:  {{ .CommonLabels.severity | toUpper }}
+            MITRE:     {{ .CommonLabels.mitre }}
+            Time:      {{ .Alerts.Firing | len }} firing, {{ .Alerts.Resolved | len }} resolved
+
+            ─────────────────────────────────────────
+            {{ range .Alerts.Firing }}
+            [{{ .StartsAt.Format "15:04:05" }}] {{ .Annotations.summary }}
+            {{ .Annotations.description }}
+            {{ end }}
+            ─────────────────────────────────────────
+
+            SOAR REMEDIATION:
+            {{ .CommonAnnotations.soar_action }}
+
+            👉 Xem chi tiết: http://127.0.0.1:3000/alerting/list
+            👉 SOAR Cases:   http://127.0.0.1:3000/d/soar-cases
+        disableResolveMessage: false
 
 policies:
   - orgId: 1
-    receiver: grafana-default-email
+    receiver: ztlab-security-admin
     group_by:
       - grafana_folder
       - alertname
+    group_wait: 10s
+    group_interval: 5m
+    repeat_interval: 4h
     routes:
+      # Tất cả alert category=security đều vào đây
       - receiver: ztlab-security-admin
         matchers:
           - 'category="security"'
         group_wait: 10s
         group_interval: 5m
         repeat_interval: 1h
-
-contactPoints:
-  - orgId: 1
-    name: ztlab-security-admin
-    receivers:
-      - uid: ztlab-admin-webhook
-        type: webhook
-        settings:
-          url: "http://soar-engine:8091/health"
-          httpMethod: POST
-          title: "[ZTLab] {{ .CommonAnnotations.summary }}"
-          message: "{{ .CommonAnnotations.description }}"
-        disableResolveMessage: false
