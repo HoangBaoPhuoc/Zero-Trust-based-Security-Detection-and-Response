@@ -163,6 +163,9 @@ deploy_financial_infra() {
 deploy_financial_services() {
   step "Step 5: Financial workloads"
 
+  create_financial_runtime_secrets
+  create_core_banking_integrity_secret
+
   # AWS: ingress-facing + fraud + notification
   kaws apply -f "$REPO_ROOT/k8s/financial/aws-services.yaml"
   for svc in api-gateway payment-service fraud-detection notification-service; do
@@ -178,13 +181,31 @@ deploy_financial_services() {
   ok "AWS services and OpenStack core banking ready"
 }
 
+keycloak_admin_password() {
+  if [[ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ]]; then
+    printf '%s' "$KEYCLOAK_ADMIN_PASSWORD"
+    return
+  fi
+
+  local encoded
+  encoded="$(kaws -n identity get secret keycloak-secret -o jsonpath='{.data.admin-password}' 2>/dev/null || true)"
+  if [[ -n "$encoded" ]]; then
+    printf '%s' "$encoded" | base64 -d
+    return
+  fi
+
+  fail "KEYCLOAK_ADMIN_PASSWORD is unset and identity/keycloak-secret does not exist"
+}
+
 create_keycloak_admin_secret() {
   if kaws get secret keycloak-admin-secret -n plg-stack >/dev/null 2>&1; then
     log "keycloak-admin-secret already exists"
     return
   fi
+  local admin_password
+  admin_password="$(keycloak_admin_password)"
   kaws create secret generic keycloak-admin-secret -n plg-stack \
-    --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
+    --from-literal=password="$admin_password"
   ok "keycloak-admin-secret created"
 }
 
@@ -218,6 +239,42 @@ create_ai_secret() {
     --from-literal=THEHIVE_API_KEY="${THEHIVE_API_KEY:-}" \
     --from-literal=PORTAL_URL="${PORTAL_URL:-http://portal.ztlab.local}" \
     --from-literal=ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-}"
+}
+
+create_core_banking_integrity_secret() {
+  local secret_value
+  if kaws get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
+    secret_value="$(kaws -n financial get secret core-banking-integrity-secret -o jsonpath='{.data.shared-secret}' | base64 -d)"
+    log "core-banking-integrity-secret already exists on AWS"
+  else
+    secret_value="$(openssl rand -hex 32 2>/dev/null || date +%s%N)"
+    kaws create secret generic core-banking-integrity-secret -n financial \
+      --from-literal=shared-secret="$secret_value"
+    ok "core-banking-integrity-secret created on AWS"
+  fi
+
+  if kos get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
+    log "core-banking-integrity-secret already exists on OpenStack"
+  else
+    kos create secret generic core-banking-integrity-secret -n financial \
+      --from-literal=shared-secret="$secret_value"
+    ok "core-banking-integrity-secret created on OpenStack"
+  fi
+}
+
+create_financial_runtime_secrets() {
+  if kaws get secret web-portal-secret -n financial >/dev/null 2>&1; then
+    log "web-portal-secret already exists"
+    return
+  fi
+
+  local admin_password session_secret
+  admin_password="$(keycloak_admin_password)"
+  session_secret="$(openssl rand -hex 32 2>/dev/null || date +%s%N)"
+  kaws create secret generic web-portal-secret -n financial \
+    --from-literal=admin-password="$admin_password" \
+    --from-literal=session-secret="$session_secret"
+  ok "web-portal-secret created"
 }
 
 provision_grafana_configmaps() {
@@ -262,8 +319,27 @@ deploy_observability_response() {
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
   wait_daemonset "$AWS_CONTEXT" plg-stack promtail 180s
 
+  # Ensure socat relay is persistent on AWS worker (OpenStack Promtail → Loki cross-cluster)
+  LOKI_CIP=$(kubectl --context "$AWS_CONTEXT" -n plg-stack get svc loki -o jsonpath='{.spec.clusterIP}')
+  ssh -o StrictHostKeyChecking=no -i ~/.ssh/zta-siem-soar-key \
+      -J ubuntu@54.254.252.106 ubuntu@10.10.1.11 \
+      "sudo tee /etc/systemd/system/loki-relay.service > /dev/null << 'EOF'
+[Unit]
+Description=Loki Relay (OpenStack cross-cluster)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:31100,fork,reuseaddr TCP:${LOKI_CIP}:3100
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/null || warn "socat relay setup skipped (SSH unavailable)"
+
   kos apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
-  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://10.10.1.10:31000/loki/api/v1/push CLOUD_PROVIDER=openstack
+  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://10.10.1.11:31100/loki/api/v1/push CLOUD_PROVIDER=openstack
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"

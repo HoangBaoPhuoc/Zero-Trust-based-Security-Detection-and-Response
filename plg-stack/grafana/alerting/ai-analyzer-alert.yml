@@ -2,36 +2,32 @@ apiVersion: 1
 
 groups:
   - orgId: 1
-    name: ai-analyzer
+    name: security-scorer
     folder: ZTLab
     interval: 1m
     rules:
 
-      # Fires when AI Analyzer creates a pending alert waiting for admin approval.
-      # Primary notification path: Grafana sends this alert via whatever Contact Point
-      # the admin has configured (email, Slack, Telegram, webhook, etc.).
-      # Admin then approves or dismisses at the web portal /alerts page.
-      - uid: ai-pending-approval-alert
-        title: "[ZTLab] Security Alert Requires Admin Approval"
-        for: 0s
+      # Fires when anomaly score (Redis 15-minute window) exceeds 70 (high risk)
+      - uid: anomaly-score-high-alert
+        title: "[ZTLab] Anomaly Score Cao — Score >= 70"
+        for: 2m
         condition: B
         data:
           - refId: A
             relativeTimeRange:
-              from: 120
+              from: 300
               to: 0
-            datasourceUid: Loki
+            datasourceUid: Prometheus
             model:
               datasource:
-                type: loki
-                uid: Loki
-              expr: 'count_over_time({job="ai-analyzer", pending_approval="true"}[2m])'
+                type: prometheus
+                uid: Prometheus
+              expr: "ztlab_anomaly_score"
               instant: true
-              queryType: instant
               refId: A
           - refId: B
             relativeTimeRange:
-              from: 120
+              from: 300
               to: 0
             datasourceUid: __expr__
             model:
@@ -39,7 +35,7 @@ groups:
               conditions:
                 - evaluator:
                     params:
-                      - 0
+                      - 70
                     type: gt
                   operator:
                     type: and
@@ -56,29 +52,74 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "High/Critical security alert detected — admin approval required before SOAR executes"
-          description: |
-            AI Analyzer has flagged one or more logs as high or critical severity.
-            The alert is in PENDING state — SOAR will NOT run until you approve.
+          summary: "Kịch bản 5 — AI Anomaly Score CRITICAL (>=70): hành vi bất thường nghiêm trọng"
+          description: "ATT&CK T1071 — Redis Security Scorer ghi nhận điểm nguy hiểm cao. Score >= 70 biểu hiện nhiều pattern tấn công đồng thời."
+          soar_action: |
+            SOAR tự động: Kích hoạt full_investigation, snapshot Loki 30 phút, revoke session user có score cao nhất.
+            Admin: Grafana → ZTLab Security Overview → AI Anomaly
+        labels:
+          severity: critical
+          category: security
+          mitre: T1071
 
-            Review and act at: Grafana → Explore (Loki) or the ZTLab Web Portal /alerts page.
-
-            Query pending alerts:
-              GET http://ai-analyzer.plg-stack.svc.cluster.local:8080/pending
-
-            To approve (triggers SOAR):
-              POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/pending/{alert_id}/approve
-
-            To dismiss:
-              POST http://ai-analyzer.plg-stack.svc.cluster.local:8080/pending/{alert_id}/dismiss
+      # Fires when anomaly score reaches medium level (40-70)
+      - uid: anomaly-score-medium-alert
+        title: "[ZTLab] Anomaly Score Trung Bình — Score >= 40"
+        for: 5m
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: Prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: Prometheus
+              expr: "ztlab_anomaly_score"
+              instant: true
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              conditions:
+                - evaluator:
+                    params:
+                      - 40
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - A
+                  reducer:
+                    type: last
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              refId: B
+        noDataState: OK
+        execErrState: OK
+        annotations:
+          summary: "Kịch bản 5b — AI Anomaly Score HIGH (40-70): cần theo dõi"
+          description: "ATT&CK T1071 — AI Analyzer phát hiện pattern khả nghi mức trung bình. Theo dõi 15 phút tiếp theo."
+          soar_action: |
+            SOAR tự động: Tạo case priority=medium, ghi snapshot metrics, watchlist IP/user liên quan.
+            Admin: Grafana → AI Analyzer dashboard
         labels:
           severity: high
           category: security
-          requires_approval: "true"
+          mitre: T1071
 
-      # Fires when any malicious verdict is logged by AI Analyzer (informational).
-      - uid: ai-malicious-log-alert
-        title: "[ZTLab] AI Analyzer — Malicious Activity Logged"
+      # Fires when fraud gate blocks more than 3 transactions in 5 minutes
+      - uid: fraud-gate-block-alert
+        title: "[ZTLab] Nhiều Giao Dịch Bị Fraud Block"
         for: 0s
         condition: B
         data:
@@ -91,7 +132,7 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'count_over_time({job="ai-analyzer"} |= "\"verdict\":\"malicious\"" [5m])'
+              expr: 'count_over_time({namespace="financial"} |= "fraud_gate_bypass" [5m])'
               instant: true
               queryType: instant
               refId: A
@@ -105,7 +146,7 @@ groups:
               conditions:
                 - evaluator:
                     params:
-                      - 0
+                      - 3
                     type: gt
                   operator:
                     type: and
@@ -122,8 +163,12 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "AI Analyzer detected malicious activity in the last 5 minutes"
-          description: "Check the ai-siem-soar Grafana dashboard or query {job=\"ai-analyzer\"} in Loki Explore."
+          summary: "Nhiều giao dịch bị fraud block trong 5 phút"
+          description: "ATT&CK T1078.004 — Fraud detection chặn >3 giao dịch trong 5 phút. Có thể đang dùng card ăn cắp hoặc ATO."
+          soar_action: |
+            SOAR tự động: Block account liên quan tạm thời, flag transaction IDs vào Redis, tạo case fraud_response.
+            Admin: Grafana → Fraud Gate dashboard
         labels:
           severity: high
           category: security
+          mitre: T1078.004

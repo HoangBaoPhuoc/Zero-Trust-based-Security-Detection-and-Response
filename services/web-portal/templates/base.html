@@ -259,10 +259,20 @@
         <span class="nav-icon">🛡</span> Quản trị
       </a>
       {% endif %}
+      <a href="/security" class="nav-item {% if page=='security' %}active{% endif %}">
+        <span class="nav-icon">🔴</span> SOAR & Threats
+      </a>
       <a href="/scenarios" class="nav-item {% if page=='scenarios' %}active{% endif %}">
         <span class="nav-icon">⚔</span> Kịch bản demo
       </a>
       {% endif %}
+      <div class="nav-section" style="margin-top:8px">Monitoring</div>
+      <a href="http://grafana.ztlab.local:8080/d/ztlab-full-logs/full-logs" target="_blank" class="nav-item">
+        <span class="nav-icon">📊</span> Grafana Logs
+      </a>
+      <a href="http://grafana.ztlab.local:8080/d/ztlab-soar/soar-dashboard" target="_blank" class="nav-item">
+        <span class="nav-icon">🚨</span> SOAR Dashboard
+      </a>
     </nav>
 
     <div class="sidebar-footer">

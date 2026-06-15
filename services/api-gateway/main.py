@@ -6,6 +6,7 @@ import uuid
 from collections import defaultdict, deque
 
 import httpx
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Header, HTTPException, Request
 from jose import JWTError, jwk, jwt
 from prometheus_client import make_asgi_app
@@ -23,6 +24,8 @@ JWT_ISSUER = os.getenv("JWT_ISSUER", "http://keycloak.ztlab.local/realms/ztlab")
 JWKS_URL = os.getenv("JWKS_URL", "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs")
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 ALLOW_DEV_TOKENS = os.getenv("ALLOW_DEV_TOKENS", "false").lower() == "true"
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/2")
+IP_BLOCK_ENABLED = os.getenv("IP_BLOCK_ENABLED", "true").lower() == "true"
 
 app = FastAPI(title="ZTLab API Gateway")
 app.add_middleware(trace_middleware(SERVICE, CLOUD))
@@ -32,6 +35,24 @@ SERVICE_UP.labels(service=SERVICE, cloud=CLOUD).set(1)
 
 _recent_by_source: dict[str, deque[float]] = defaultdict(deque)
 _jwks_keys: list = []
+_redis: aioredis.Redis | None = None
+
+
+async def _get_redis() -> aioredis.Redis:
+    global _redis
+    if _redis is None:
+        _redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+    return _redis
+
+
+async def _is_ip_blocked(ip: str) -> bool:
+    if not IP_BLOCK_ENABLED:
+        return False
+    try:
+        r = await _get_redis()
+        return bool(await r.exists(f"ztlab:blocked_ip:{ip}"))
+    except Exception:
+        return False
 
 
 def _load_jwks() -> None:
@@ -139,6 +160,9 @@ async def startup() -> None:
 @app.post("/payments")
 async def create_payment(request: Request, body: PaymentRequest, authorization: str | None = Header(default=None)):
     source_ip = _source_ip(request)
+    if await _is_ip_blocked(source_ip):
+        logger.warn("ip_blocked_request", source_ip=source_ip, path="/payments")
+        raise HTTPException(status_code=403, detail={"reason": "ip_blocked", "source_ip": source_ip, "message": "IP bị chặn bởi hệ thống SOAR"})
     _check_rate_limit(source_ip)
     claims = _verify_token(authorization, source_ip)
     _require_role(claims, "financial-write", source_ip)
@@ -150,12 +174,16 @@ async def create_payment(request: Request, body: PaymentRequest, authorization: 
                 json=body.model_dump(),
                 headers={"X-Trace-ID": trace_id, "X-User-ID": str(claims.get("sub", "unknown")), "Authorization": authorization},
             )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            raise HTTPException(status_code=exc.response.status_code, detail="upstream payment service error") from exc
         except Exception as exc:
             logger.error("payment_route_failed", trace_id=trace_id, error=str(exc))
             raise HTTPException(status_code=503, detail="payment service unavailable") from exc
+    if response.status_code >= 400:
+        try:
+            body = response.json()
+            detail = body.get("detail", body) if isinstance(body, dict) else body
+        except Exception:
+            detail = "upstream payment service error"
+        raise HTTPException(status_code=response.status_code, detail=detail)
     return response.json()
 
 

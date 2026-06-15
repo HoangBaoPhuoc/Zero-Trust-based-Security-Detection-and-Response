@@ -1,6 +1,9 @@
 # ZTLab - core-banking
 
+import hashlib
+import hmac
 import os
+import time
 import uuid
 import httpx
 from fastapi import FastAPI, Request, HTTPException
@@ -15,6 +18,7 @@ CLOUD = os.getenv("CLOUD_PROVIDER", "aws")
 MAX_FRAUD_SCORE = int(os.getenv("MAX_ALLOWED_FRAUD_SCORE", os.getenv("MAX_FRAUD_SCORE", "74")))
 ACCOUNT_SERVICE_URL = os.getenv("ACCOUNT_SERVICE_URL", "http://account-service:8080").rstrip("/")
 TRANSACTION_SERVICE_URL = os.getenv("TRANSACTION_SERVICE_URL", "http://transaction-service:8080").rstrip("/")
+CORE_BANKING_SHARED_SECRET = os.getenv("CORE_BANKING_SHARED_SECRET", "")
 
 app = FastAPI(title="ZTLab Core Banking API")
 app.add_middleware(trace_middleware(SERVICE, CLOUD))
@@ -31,6 +35,23 @@ class ExecuteTransactionRequest(BaseModel):
     trace_id: str = ""
 
 
+def _expected_fraud_signature(trace_id: str, body: ExecuteTransactionRequest, score: int, timestamp: int) -> str:
+    canonical = "|".join([
+        str(timestamp),
+        trace_id,
+        body.from_account,
+        body.to_account,
+        f"{body.amount:.2f}",
+        body.currency,
+        str(score),
+    ])
+    return hmac.new(
+        CORE_BANKING_SHARED_SECRET.encode("utf-8"),
+        canonical.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 @app.post("/transactions/execute")
 async def execute_transaction(req: Request, body: ExecuteTransactionRequest):
     trace_id = body.trace_id or req.headers.get("X-Trace-ID", "")
@@ -40,7 +61,22 @@ async def execute_transaction(req: Request, body: ExecuteTransactionRequest):
     except ValueError:
         fraud_score = 999
 
-    if fraud_gate != "passed" or fraud_score > MAX_FRAUD_SCORE:
+    try:
+        fraud_timestamp = int(req.headers.get("X-Fraud-Timestamp", "0"))
+    except ValueError:
+        fraud_timestamp = 0
+    now = int(time.time())
+    timestamp_valid = abs(now - fraud_timestamp) <= 60
+
+    signature = req.headers.get("X-Fraud-Gate-Signature", "")
+    signature_valid = False
+    if CORE_BANKING_SHARED_SECRET and signature and timestamp_valid:
+        signature_valid = hmac.compare_digest(
+            signature,
+            _expected_fraud_signature(trace_id, body, fraud_score, fraud_timestamp),
+        )
+
+    if fraud_gate != "passed" or fraud_score > MAX_FRAUD_SCORE or not signature_valid:
         TXN_TOTAL.labels(service=SERVICE, cloud=CLOUD, type="core_execute", status="fraud_gate_denied").inc()
         logger.audit(
             "fraud_gate_bypass",
@@ -48,6 +84,8 @@ async def execute_transaction(req: Request, body: ExecuteTransactionRequest):
             fraud_gate=fraud_gate,
             fraud_score=fraud_score,
             max_fraud_score=MAX_FRAUD_SCORE,
+            fraud_signature_valid=signature_valid,
+            fraud_timestamp_valid=timestamp_valid,
             from_account=body.from_account,
             to_account=body.to_account,
         )

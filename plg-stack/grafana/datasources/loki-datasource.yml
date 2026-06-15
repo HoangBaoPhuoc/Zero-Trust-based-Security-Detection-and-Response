@@ -9,3 +9,11 @@ datasources:
     jsonData:
       maxLines: 1000
       timeout: 60
+  - name: Prometheus
+    type: prometheus
+    uid: Prometheus
+    access: proxy
+    url: http://prometheus.monitoring.svc.cluster.local:9090
+    isDefault: false
+    jsonData:
+      timeInterval: 15s

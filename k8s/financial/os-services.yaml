@@ -52,7 +52,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: core-banking
-          image: ztlab/core-banking:1.0.0
+          image: ztlab/core-banking:1.1.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -63,6 +63,15 @@ spec:
               value: "74"
             - name: CLOUD_PROVIDER
               value: "openstack"
+            - name: ACCOUNT_SERVICE_URL
+              value: "http://account-service.financial.svc.cluster.local:8080"
+            - name: TRANSACTION_SERVICE_URL
+              value: "http://transaction-service.financial.svc.cluster.local:8080"
+            - name: CORE_BANKING_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: core-banking-integrity-secret
+                  key: shared-secret
           readinessProbe:
             httpGet:
               path: /health
@@ -153,7 +162,7 @@ spec:
         - name: account-service
           image: ztlab/account-service:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          command: ["/bin/sh", "-c", "until python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('postgres-accounts.financial.svc.cluster.local', 5432)); s.close()\" 2>/dev/null; do echo 'waiting for postgres-accounts...'; sleep 2; done && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http

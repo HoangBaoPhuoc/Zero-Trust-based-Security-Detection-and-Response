@@ -55,7 +55,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: api-gateway
-          image: ztlab/api-gateway:1.0.0
+          image: ztlab/api-gateway:1.2.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -64,6 +64,10 @@ spec:
           env:
             - name: PAYMENT_SERVICE_URL
               value: "http://127.0.0.1:15001"
+            - name: REDIS_URL
+              value: "redis://redis.financial.svc.cluster.local:6379/2"
+            - name: IP_BLOCK_ENABLED
+              value: "true"
           readinessProbe:
             httpGet:
               path: /health
@@ -154,7 +158,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: payment-service
-          image: ztlab/payment-service:1.0.0
+          image: ztlab/payment-service:1.2.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -165,6 +169,11 @@ spec:
               value: "http://127.0.0.1:15001"
             - name: CORE_BANKING_URL
               value: "http://127.0.0.1:15001"
+            - name: CORE_BANKING_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: core-banking-integrity-secret
+                  key: shared-secret
             - name: MAX_SINGLE_TXN_VND
               value: "500000000"
           readinessProbe:
@@ -356,12 +365,43 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: notification-service
-          image: ztlab/notification-service:1.0.0
+          image: ztlab/notification-service:2.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - containerPort: 8080
               name: http
+          env:
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: host
+                  optional: true
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: port
+                  optional: true
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: user
+                  optional: true
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: password
+                  optional: true
+            - name: SMTP_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: smtp-secret
+                  key: from
+                  optional: true
           readinessProbe:
             httpGet:
               path: /health

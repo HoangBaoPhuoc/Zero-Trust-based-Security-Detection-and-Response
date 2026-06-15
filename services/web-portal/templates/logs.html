@@ -3,6 +3,17 @@
 {% block page_title %}Security Logs (Loki){% endblock %}
 
 {% block content %}
+
+<!-- Redis Velocity Panel -->
+<div class="card" style="margin-bottom:20px">
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+    <h3 style="margin:0;font-size:14px;font-weight:600">Redis — Fraud Velocity Tracking</h3>
+    <span style="font-size:11px;color:var(--muted)" id="velocity-meta"></span>
+    <button class="btn" style="margin-left:auto;font-size:12px;padding:4px 10px" onclick="loadVelocity()">🔄 Làm mới</button>
+  </div>
+  <div id="velocity-body"><span style="color:var(--muted);font-size:13px">Đang tải...</span></div>
+</div>
+
 <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
   <button class="btn btn-primary" onclick="loadLogs()">🔄 Làm mới</button>
   <select id="filter-job" class="btn" style="cursor:pointer" onchange="renderLogs()">
@@ -105,5 +116,59 @@ function setupAutoRefresh() {
 document.getElementById('auto-refresh').addEventListener('change', setupAutoRefresh);
 loadLogs();
 setupAutoRefresh();
+
+// Redis velocity panel
+const RISK_STYLE = {
+  high:     { bg: 'rgba(248,81,73,.12)',   badge: 'badge-red',    label: 'HIGH' },
+  elevated: { bg: 'rgba(255,166,87,.10)',  badge: 'badge-yellow', label: 'ELEVATED' },
+  low:      { bg: 'rgba(88,166,255,.08)', badge: '',             label: 'LOW' },
+  normal:   { bg: '',                      badge: 'badge-green',  label: 'NORMAL' },
+};
+
+async function loadVelocity() {
+  const el = document.getElementById('velocity-body');
+  const meta = document.getElementById('velocity-meta');
+  try {
+    const r = await fetch('/api/velocity');
+    const d = await r.json();
+    const win = d.window_seconds || 60;
+    const limit = d.soft_limit || 10;
+    meta.textContent = `cửa sổ ${win}s · ngưỡng cảnh báo ${limit} tx`;
+    if (!d.velocity || d.velocity.length === 0) {
+      el.innerHTML = '<span style="color:var(--muted);font-size:13px">Không có dữ liệu — chưa có giao dịch nào trong cửa sổ ' + win + 's.</span>';
+      return;
+    }
+    const rows = d.velocity.map(v => {
+      const rs = RISK_STYLE[v.risk] || RISK_STYLE.normal;
+      const pct = Math.min(100, Math.round((v.tx_in_window / (limit * 3)) * 100));
+      return `<tr style="background:${rs.bg}">
+        <td class="mono" style="font-size:12px">${esc(v.account)}</td>
+        <td style="text-align:center;font-weight:600">${v.tx_in_window}</td>
+        <td style="min-width:120px">
+          <div style="background:rgba(255,255,255,.06);border-radius:3px;height:6px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:${v.risk==='high'?'var(--red)':v.risk==='elevated'?'var(--orange)':'var(--accent)'}"></div>
+          </div>
+        </td>
+        <td><span class="badge ${rs.badge}">${rs.label}</span></td>
+        <td style="font-size:11px;color:var(--muted)">${v.ttl_seconds}s</td>
+      </tr>`;
+    }).join('');
+    el.innerHTML = `<table>
+      <thead><tr>
+        <th>Account</th>
+        <th style="text-align:center">Tx / ${win}s</th>
+        <th>Tải</th>
+        <th>Rủi ro</th>
+        <th>TTL Redis</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--muted);font-size:13px">fraud-detection không khả dụng.</span>';
+  }
+}
+
+loadVelocity();
+setInterval(loadVelocity, 15000);
 </script>
 {% endblock %}

@@ -7,7 +7,7 @@ groups:
     interval: 1m
     rules:
       - uid: lateral-movement-svid
-        title: "Lateral Movement — Invalid SVID Pair Detected"
+        title: "Kịch bản 2 — Lateral Movement: Invalid SVID"
         for: 0s
         condition: A
         data:
@@ -27,8 +27,15 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "OPA denied request with SVID mismatch — possible lateral movement"
-          description: "ATT&CK T1021.007. Check OPA Decision Log dashboard."
+          summary: "OPA từ chối request — SVID không hợp lệ, có thể lateral movement"
+          description: "ATT&CK T1021.007 — Service cố truy cập service khác với SPIFFE ID sai. mTLS bị vi phạm."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Ghi OPA denial vào case với severity=critical
+            2. Revoke token của service account vi phạm
+            3. Cảnh báo SPIRE agent để audit SVID chain
+            🔧 Admin cần xem xét: kubectl logs -n financial deployment/api-gateway -c envoy
         labels:
           severity: critical
+          category: security
           mitre: T1021.007

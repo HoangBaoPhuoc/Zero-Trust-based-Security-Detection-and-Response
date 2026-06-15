@@ -63,14 +63,14 @@ IDENTITY_NAMESPACE = os.environ.get("IDENTITY_NAMESPACE", "identity")
 SPIRE_NAMESPACE = os.environ.get("SPIRE_NAMESPACE", "spire")
 
 PORTS = {
-    "keycloak": 18080,
-    "aws_api_gateway": 18081,
-    "aws_payment": 18082,
-    "aws_fraud": 18083,
-    "os_core_banking": 18084,
-    "os_account": 18085,
-    "os_txn": 18086,
-    "aws_notification": 18087,
+    "keycloak": int(os.environ.get("PF_KEYCLOAK_PORT", "19180")),
+    "aws_api_gateway": int(os.environ.get("PF_API_GATEWAY_PORT", "19181")),
+    "aws_payment": int(os.environ.get("PF_PAYMENT_PORT", "19182")),
+    "aws_fraud": int(os.environ.get("PF_FRAUD_PORT", "19183")),
+    "os_core_banking": int(os.environ.get("PF_CORE_BANKING_PORT", "19184")),
+    "os_account": int(os.environ.get("PF_ACCOUNT_PORT", "19185")),
+    "os_txn": int(os.environ.get("PF_TXN_PORT", "19186")),
+    "aws_notification": int(os.environ.get("PF_NOTIFICATION_PORT", "19187")),
 }
 
 SERVICES = {
@@ -227,6 +227,8 @@ def wait_for_port(port: int, timeout_seconds: int = 60) -> None:
 
 
 def start_port_forward(name: str, context: str, namespace: str, resource: str, local_port: int, remote_port: int) -> PortForward:
+    if port_is_open(local_port):
+        raise SuiteError(f"Local port {local_port} for {name} is already in use")
     log(f"Starting port-forward {name}: {context}/{namespace} {resource} -> 127.0.0.1:{local_port}")
     proc = subprocess.Popen(
         [
@@ -246,6 +248,8 @@ def start_port_forward(name: str, context: str, namespace: str, resource: str, l
     pf = PortForward(name=name, process=proc, local_port=local_port)
     PORT_FORWARDS.append(pf)
     wait_for_port(local_port, timeout_seconds=60)
+    if proc.poll() is not None:
+        raise SuiteError(f"kubectl port-forward for {name} exited early with code {proc.returncode}")
     return pf
 
 
@@ -886,9 +890,10 @@ def main() -> int:
     ]
     _env = {
         **os.environ,
-        "GW_URL": f"http://{endpoints.get('gateway_ip','localhost')}:18080",
-        "KC_URL": f"http://{endpoints.get('keycloak_ip','localhost')}:18443",
-        "AI_URL": f"http://{endpoints.get('gateway_ip','localhost')}:18082",
+        "GW_URL": endpoints["aws_api_gateway"],
+        "KC_URL": endpoints["keycloak"],
+        "AI_URL": os.environ.get("AI_URL", "http://127.0.0.1:8090"),
+        "SOAR_URL": os.environ.get("SOAR_URL", "http://127.0.0.1:8091"),
         "LOKI_URL": DEFAULT_LOKI_URL,
     }
     for name, script in _SHELL_SCENARIOS:

@@ -1,0 +1,270 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "description": "ZTLab — Full System Logs từ tất cả namespaces qua Loki",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 200,
+      "title": "🔍 Full System Logs — All Namespaces",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Toàn bộ logs từ namespace financial (api-gateway, payment, fraud, core-banking...)",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 1 },
+      "id": 201,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "title": "💰 Financial Namespace Logs",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{namespace=\"financial\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Logs từ Grafana, Loki, Prometheus, SOAR Engine, AI Analyzer",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 13 },
+      "id": 202,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "title": "📊 PLG Stack Logs (Grafana, Loki, SOAR, AI)",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{namespace=\"plg-stack\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Logs từ Keycloak (identity namespace)",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 13 },
+      "id": 203,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "title": "🔑 Identity Logs (Keycloak)",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{namespace=\"identity\"}",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "id": 210,
+      "title": "⚠️ Security Events & Anomalies",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Log các sự kiện bất thường: fraud, blocked, denied, error",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 24 },
+      "id": 211,
+      "options": {
+        "dedupStrategy": "signature",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "🚨 Security Anomaly Logs (fraud | blocked | denied | attack | error)",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{namespace=~\"financial|plg-stack|identity\"} |~ \"(?i)(fraud|blocked|denied|attack|anomaly|error|401|403|malicious|bypass|injection|xmrig|brute.force|lateral|port.scan|credential.stuffing|soar_action)\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "SOAR engine action logs",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 36 },
+      "id": 212,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "🤖 SOAR Actions Log",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"soar-engine\"} |~ \"soar_action\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Notification service logs — email sent/failed",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 36 },
+      "id": 213,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": true,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      },
+      "title": "📧 Email Notification Logs",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"notification-service\"} |~ \"(?i)(email|notification|smtp|queued|sent|failed)\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 46 },
+      "id": 220,
+      "title": "📈 Log Volume Stats",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Số lượng log entries theo namespace theo thời gian",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 47 },
+      "id": 221,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "title": "Log Volume by Namespace",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by (namespace) (rate({namespace=~\"financial|plg-stack|identity|monitoring\"}[5m]))",
+          "legendFormat": "{{namespace}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "description": "Số lượng error/warn logs theo service",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 47 },
+      "id": 222,
+      "options": {
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "title": "Error/Warning Rate by Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by (app) (rate({namespace=~\"financial|plg-stack\"} |~ \"(?i)(error|warn|denied|fraud|blocked)\" [5m]))",
+          "legendFormat": "{{app}}",
+          "refId": "A"
+        }
+      ]
+    }
+
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["ztlab", "logs", "loki"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "ZTLab Full Logs",
+  "uid": "ztlab-full-logs",
+  "version": 1
+}

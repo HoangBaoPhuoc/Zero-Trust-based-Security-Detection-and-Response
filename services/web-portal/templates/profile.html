@@ -1,70 +1,75 @@
 {% extends "base.html" %}
-{% block title %}Hồ sơ — ZTLab{% endblock %}
+{% block title %}Hồ sơ — ZTLab Banking{% endblock %}
 {% block page_title %}Hồ sơ tài khoản{% endblock %}
 
 {% block content %}
-<div class="grid-2" style="max-width:900px">
+<div class="grid grid-2" style="max-width:900px;gap:20px;align-items:start">
 
-  <div>
+  <div style="display:flex;flex-direction:column;gap:16px">
     <div class="card">
-      <h3>Thông tin cá nhân</h3>
+      <div class="card-header">
+        <div class="card-title">Thông tin cá nhân</div>
+      </div>
       <table>
         <tr>
-          <td style="color:var(--muted);width:140px">Họ và tên</td>
-          <td><strong>{{ full_name }}</strong></td>
+          <td style="color:var(--text3);width:140px;padding:10px 14px">Họ và tên</td>
+          <td style="padding:10px 14px"><strong>{{ full_name }}</strong></td>
         </tr>
         <tr>
-          <td style="color:var(--muted)">Tên đăng nhập</td>
-          <td><code style="font-family:monospace;font-size:13px">{{ username }}</code></td>
+          <td style="color:var(--text3);padding:10px 14px">Tên đăng nhập</td>
+          <td style="padding:10px 14px"><span class="mono" style="color:var(--accent2)">{{ username }}</span></td>
         </tr>
         <tr>
-          <td style="color:var(--muted)">Email</td>
-          <td>{{ email or '—' }}</td>
+          <td style="color:var(--text3);padding:10px 14px">Email</td>
+          <td style="padding:10px 14px">{{ email or '—' }}</td>
         </tr>
         <tr>
-          <td style="color:var(--muted)">Đăng nhập lúc</td>
-          <td id="login-time" class="mono" style="font-size:12px">—</td>
+          <td style="color:var(--text3);padding:10px 14px">Đăng nhập lúc</td>
+          <td style="padding:10px 14px"><span id="login-time" class="mono text-sm">—</span></td>
         </tr>
       </table>
     </div>
 
     <div class="card">
-      <h3>Quyền truy cập</h3>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:4px">
+      <div class="card-header">
+        <div class="card-title">Quyền truy cập</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
         {% for role in roles %}
           {% if role in ('financial-read','financial-write','security-analyst','security-admin') %}
             <span class="badge
               {% if 'write' in role or 'admin' in role %}badge-green
               {% elif 'analyst' in role %}badge-purple
-              {% else %}badge-yellow{% endif %}">
+              {% else %}badge-blue{% endif %}">
               {{ role }}
             </span>
           {% endif %}
         {% endfor %}
       </div>
-      <div style="margin-top:12px;font-size:12px;color:var(--muted);line-height:1.7">
+      <div class="mt-8" style="font-size:12px;color:var(--text3);line-height:1.7">
         Quyền được xác thực tại Keycloak → OPA policy enforcement → Envoy sidecar.
         Mỗi request đều qua kiểm tra issuer + expiry + role.
       </div>
     </div>
   </div>
 
-  <div>
+  <div style="display:flex;flex-direction:column;gap:16px">
     <div class="card">
-      <h3>Tài khoản ngân hàng</h3>
-      <div id="accounts-loading" class="loading">Đang tải...</div>
+      <div class="card-header">
+        <div class="card-title">Tài khoản ngân hàng</div>
+        <a href="/transfer" class="btn btn-primary btn-sm">↗ Chuyển tiền</a>
+      </div>
+      <div id="accounts-loading" class="loading"><div class="spinner"></div> Đang tải...</div>
       <div id="accounts-content" style="display:none">
-        <table id="accounts-table">
-          <thead>
-            <tr>
-              <th>Số tài khoản</th>
-              <th>Số dư</th>
-              <th>Tiền tệ</th>
-            </tr>
-          </thead>
-          <tbody id="accounts-body"></tbody>
-        </table>
-        <div id="no-account" style="display:none;font-size:13px;color:var(--muted);padding:8px 0">
+        <div class="table-wrap">
+          <table id="accounts-table">
+            <thead>
+              <tr><th>Số tài khoản</th><th>Số dư</th><th>Tiền tệ</th></tr>
+            </thead>
+            <tbody id="accounts-body"></tbody>
+          </table>
+        </div>
+        <div id="no-account" style="display:none;font-size:13px;color:var(--text3);padding:8px 0">
           Chưa có tài khoản ngân hàng nào.<br>
           Liên hệ quản trị viên để được cấp tài khoản.
         </div>
@@ -72,30 +77,35 @@
     </div>
 
     <div class="card">
-      <h3>Bảo mật phiên</h3>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
-        <div style="display:flex;justify-content:space-between;font-size:13px">
+      <div class="card-header">
+        <div class="card-title">Bảo mật phiên làm việc</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
           <span>Xác thực JWT</span>
           <span class="badge badge-green">✓ Keycloak RS256</span>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
           <span>Kiểm tra quyền</span>
           <span class="badge badge-green">✓ OPA ext_authz</span>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:13px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
           <span>Phiên web</span>
           <span class="badge badge-green">✓ Cookie HMAC-signed</span>
         </div>
-        <div style="display:flex;justify-content:space-between;font-size:13px">
-          <span>Thời gian hết hạn</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>mTLS</span>
+          <span class="badge badge-green">✓ SPIRE SVID</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>Phiên hết hạn trong</span>
           <span class="badge badge-yellow" id="expire-in">—</span>
         </div>
       </div>
-      <div style="margin-top:16px">
-        <a href="/auth/logout" class="btn btn-red" style="font-size:13px;text-decoration:none">
-          Đăng xuất
-        </a>
-      </div>
+      <hr class="divider" style="margin:16px 0">
+      <a href="/auth/logout" class="btn btn-danger" style="text-decoration:none;width:100%;justify-content:center">
+        ⏻ Đăng xuất khỏi hệ thống
+      </a>
     </div>
   </div>
 
@@ -108,50 +118,42 @@ const loginAt = {{ logged_in_at | int }};
 
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// Show login time
-document.getElementById('login-time').textContent =
-  new Date(loginAt * 1000).toLocaleString('vi-VN');
+document.getElementById('login-time').textContent = new Date(loginAt * 1000).toLocaleString('vi-VN');
 
-// Show session expiry countdown
 function updateExpiry() {
   const remaining = 3600 - (Date.now() / 1000 - loginAt);
-  if (remaining <= 0) {
-    document.getElementById('expire-in').textContent = 'Đã hết hạn';
-    return;
-  }
-  const m = Math.floor(remaining / 60);
-  const s = Math.floor(remaining % 60);
-  document.getElementById('expire-in').textContent = `Còn ${m}p ${s}s`;
+  const el = document.getElementById('expire-in');
+  if (remaining <= 0) { el.textContent = 'Đã hết hạn'; el.className = 'badge badge-red'; return; }
+  const m = Math.floor(remaining / 60), s = Math.floor(remaining % 60);
+  el.textContent = `Còn ${m}p ${s}s`;
+  if (remaining < 300) el.className = 'badge badge-red';
+  else if (remaining < 900) el.className = 'badge badge-yellow';
+  else el.className = 'badge badge-green';
 }
 updateExpiry();
 setInterval(updateExpiry, 1000);
 
-// Load bank accounts
 async function loadAccounts() {
   try {
     const r = await fetch('/api/account/me');
     const d = await r.json();
     document.getElementById('accounts-loading').style.display = 'none';
     document.getElementById('accounts-content').style.display = '';
-
     const accounts = d.accounts || [];
-    if (accounts.length === 0) {
+    if (!accounts.length) {
       document.getElementById('no-account').style.display = '';
       document.getElementById('accounts-table').style.display = 'none';
       return;
     }
-
-    const tbody = document.getElementById('accounts-body');
-    tbody.innerHTML = accounts.map(a => `
+    document.getElementById('accounts-body').innerHTML = accounts.map(a => `
       <tr>
-        <td><code style="font-family:monospace;font-size:13px">${esc(a.account_id)}</code></td>
-        <td style="font-weight:600;color:var(--green)">${parseFloat(a.balance).toLocaleString('vi-VN')} ₫</td>
-        <td>${esc(a.currency)}</td>
-      </tr>
-    `).join('');
+        <td><span class="mono" style="color:var(--accent2)">${esc(a.account_id)}</span></td>
+        <td class="amount-positive">${parseFloat(a.balance).toLocaleString('vi-VN')} ₫</td>
+        <td style="color:var(--text3)">${esc(a.currency)}</td>
+      </tr>`).join('');
   } catch(e) {
     document.getElementById('accounts-loading').textContent = 'Lỗi kết nối account-service';
   }

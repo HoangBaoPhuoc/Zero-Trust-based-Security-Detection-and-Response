@@ -7,7 +7,7 @@ groups:
     interval: 1m
     rules:
       - uid: gap1-large-response
-        title: "Large Response — Exfiltration Suspect (Gap 1)"
+        title: "Kịch bản 4 — Data Exfiltration Suspect (Gap 1)"
         for: 0s
         condition: A
         data:
@@ -27,9 +27,19 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Large response (>1MB) from OpenStack — possible data exfiltration"
-          description: "Envoy log from OpenStack has bytes_sent > 1MB. ATT&CK T1041."
+          summary: "Response >1MB từ OpenStack — nghi ngờ data exfiltration"
+          description: "ATT&CK T1041 — Gap 1: Envoy log từ OpenStack có bytes_sent vượt ngưỡng 1MB. Có thể đang dump database hoặc exfiltrate file."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Ghi alert vào case với evidence từ Loki
+            2. Tăng anomaly score cho service liên quan
+            3. Notify admin để manual review
+            🔧 Admin cần xem xét:
+            - kubectl logs -n financial deployment/core-banking | grep bytes_sent
+            - Kiểm tra OpenStack Security Group rules
+            - Xem xét rate-limit response size tại Envoy
         labels:
           severity: high
+          category: security
           gap: gap1
           mitre: T1041
