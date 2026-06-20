@@ -288,7 +288,7 @@ run_normal_traffic() {
   send_payment "ACC-1001" "ACC-2001" "50000"    "testuser01" "small-transfer"
   send_payment "ACC-1001" "ACC-2001" "2500000"  "testuser01" "medium-transfer"
   send_payment "ACC-1001" "ACC-2001" "15000000" "testuser01" "large-transfer"
-  send_payment "ACC-2001" "ACC-3001" "100000"   "testuser02" "user02-transfer"
+  send_payment "ACC-2001" "ACC-1001" "100000"   "testuser02" "user02-transfer"
   sleep 1
 }
 
