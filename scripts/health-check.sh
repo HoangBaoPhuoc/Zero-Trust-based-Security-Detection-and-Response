@@ -3,10 +3,9 @@ set -uE -o pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INVENTORY_FILE="${INVENTORY_FILE:-$ROOT_DIR/ansible/inventory/hosts.yml}"
-PLG_COMPOSE="$ROOT_DIR/plg-stack/docker-compose.plg.yml"
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
 OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
-LOKI_URL="${LOKI_URL:-http://127.0.0.1:3100}"
+LOKI_URL="${LOKI_URL:-http://127.0.0.1:13100}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
 AI_URL="${AI_URL:-http://127.0.0.1:8090}"
 SOAR_URL="${SOAR_URL:-http://127.0.0.1:8091}"
@@ -119,7 +118,6 @@ section() {
 check_files() {
   section "Repository Files"
   [[ -f "$INVENTORY_FILE" ]] && pass "inventory exists: $INVENTORY_FILE" || fail "inventory missing: $INVENTORY_FILE"
-  [[ -f "$PLG_COMPOSE" ]] && pass "PLG compose exists" || fail "PLG compose missing"
   [[ -f "$ROOT_DIR/.env.ai" ]] && pass ".env.ai exists and is gitignored" || warn ".env.ai missing; AI/SOAR will use defaults/placeholders"
   [[ -f "$ROOT_DIR/.env" ]] && pass ".env exists and is gitignored" || warn ".env missing; Terraform/Ansible may need env vars"
   [[ -f "$HOME/.ssh/zta-siem-soar-key" ]] && pass "SSH key exists: ~/.ssh/zta-siem-soar-key" || warn "SSH key missing: ~/.ssh/zta-siem-soar-key"
@@ -127,7 +125,7 @@ check_files() {
 
 check_commands() {
   section "Local Tooling"
-  for cmd in docker curl ssh; do
+  for cmd in curl ssh; do
     need_cmd "$cmd"
   done
   if [[ "$RUN_REMOTE" == "1" || "$RUN_K8S" == "1" ]]; then
@@ -146,7 +144,6 @@ check_commands() {
   else
     warn "terraform not needed unless provisioning/rebuilding cloud infra"
   fi
-  if docker compose version >/dev/null 2>&1; then pass "docker compose available"; else fail "docker compose unavailable"; fi
 }
 
 check_inventory() {
@@ -192,19 +189,29 @@ check_k8s() {
 }
 
 check_local_stack() {
-  section "Local PLG / AI / SOAR"
+  section "Local PLG / AI / SOAR (port-forward required)"
   if [[ "$RUN_LOCAL" != "1" ]]; then
     warn "local PLG checks skipped"
     return
   fi
-  run_warn_check "docker compose config valid" docker compose -f "$PLG_COMPOSE" config --quiet
-  run_warn_check "docker compose services status" docker compose -f "$PLG_COMPOSE" ps
-  http_check "Loki API labels" "$LOKI_URL/loki/api/v1/labels"
-  http_check "Grafana health" "$GRAFANA_URL/api/health"
-  http_check "AI Analyzer health" "$AI_URL/health"
-  http_check "SOAR health" "$SOAR_URL/health"
-  soar_http_check "SOAR playbooks" "$SOAR_URL/playbooks"
-  soar_http_check "SOAR cases" "$SOAR_URL/cases"
+  http_check "Loki ready              (port 13100)" "$LOKI_URL/ready"
+  http_check "Loki API labels         (port 13100)" "$LOKI_URL/loki/api/v1/labels"
+  http_check "Grafana health          (port 3000)"  "$GRAFANA_URL/api/health"
+  http_check "AI Analyzer health      (port 8090)"  "$AI_URL/health"
+  http_check "SOAR health             (port 8091)"  "$SOAR_URL/health"
+  soar_http_check "SOAR incidents      (port 8091)" "$SOAR_URL/incidents"
+  if [[ "$RUN_K8S" == "1" ]]; then
+    _check_api_gw_jwks() {
+      local d
+      d=$(curl -fsS --max-time 5 http://127.0.0.1:18080/health 2>&1) || return 1
+      echo "$d" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('jwks_keys_loaded',0)>0,'jwks=0 — restart api-gateway pod'; print(d)" 2>&1
+    }
+    run_warn_check "API Gateway health (jwks loaded)" _check_api_gw_jwks
+    run_warn_check "Security Scorer health (port 18092)" \
+      curl -fsS --max-time 5 http://127.0.0.1:18092/health
+    run_warn_check "Keycloak realm reachable (port 8180)" \
+      curl -fsS --max-time 5 "http://127.0.0.1:8180/realms/ztlab/.well-known/openid-configuration"
+  fi
 }
 
 check_loki_data() {

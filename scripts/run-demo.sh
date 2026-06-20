@@ -8,17 +8,21 @@
 #   ./scripts/run-demo.sh --brute-force      # Demo brute force (10 lần 401)
 #   ./scripts/run-demo.sh --continuous       # Loop liên tục (Ctrl+C để dừng)
 #
-# Trước khi chạy: phải mở tunnel (xem REDEPLOY.md)
+# Trước khi chạy: phải mở tunnel (xem HUONG_DAN.md mục 3)
 
 set -euo pipefail
 
 AI_URL="${AI_URL:-http://127.0.0.1:8090}"
 SOAR_URL="${SOAR_URL:-http://127.0.0.1:8091}"
 LOKI_URL="${LOKI_URL:-http://127.0.0.1:13100}"
-GW_URL="${GW_URL:-http://127.0.0.1:8080}"
-GW_HOST="${GW_HOST:-api.ztlab.local}"
+GW_URL="${GW_URL:-http://127.0.0.1:18080}"
+KC_URL="${KC_URL:-http://127.0.0.1:8180}"
+KC_REALM="${KC_REALM:-ztlab}"
+KC_ADMIN_PASS="${KC_ADMIN_PASS:-ztlab-admin-2026}"
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
 SOAR_API_TOKEN="${SOAR_API_TOKEN:-}"
+_KC_CLIENT_SECRET=""
+_KC_TOKEN=""
 
 TRAFFIC_ONLY=false
 ATTACK_ONLY=false
@@ -58,24 +62,34 @@ attack()  { echo -e "${RED}[ATTACK]${NC} $*"; }
 normal()  { echo -e "${GREEN}[NORMAL]${NC} $*"; }
 info()    { echo -e "${CYAN}[INFO]${NC} $*"; }
 
-# ─── Token generation ─────────────────────────────────────────────────────────
+# ─── Token generation (Keycloak RS256 via ROPC) ───────────────────────────────
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+_get_kc_client_secret() {
+  if [[ -n "$_KC_CLIENT_SECRET" ]]; then return 0; fi
+  local admin_token
+  admin_token=$(curl -s --max-time 10 -X POST \
+    "$KC_URL/realms/master/protocol/openid-connect/token" \
+    -d "grant_type=password&client_id=admin-cli&username=admin&password=$KC_ADMIN_PASS" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
+  if [[ -z "$admin_token" ]]; then
+    echo "[WARN] Không lấy được Keycloak admin token — kiểm tra port-forward 8180" >&2
+    return 1
+  fi
+  _KC_CLIENT_SECRET=$(curl -s --max-time 10 \
+    -H "Authorization: Bearer $admin_token" \
+    "$KC_URL/admin/realms/$KC_REALM/clients?clientId=api-gateway" \
+    | python3 -c "import json,sys; c=json.load(sys.stdin); print(c[0]['secret'] if c else '')" 2>/dev/null)
+}
+
 gen_token() {
-  local user="${1:-testuser01}" role="${2:-financial-write}"
-  python3 - "$user" "$role" <<'PY'
-import sys, time, json, base64, hmac, hashlib
-username, role = sys.argv[1], sys.argv[2]
-secret, issuer, audience = "ztlab-dev-secret", "https://keycloak.ztlab.local/realms/ztlab", "api-gateway"
-now = int(time.time())
-def b64url(data):
-    if isinstance(data, str): data = data.encode()
-    return base64.urlsafe_b64encode(data).rstrip(b'=').decode()
-header  = b64url(json.dumps({"alg":"HS256","typ":"JWT"}))
-payload = b64url(json.dumps({"sub":username,"iss":issuer,"aud":audience,"iat":now,"exp":now+3600,"preferred_username":username,"realm_access":{"roles":[role]}}))
-sig = hmac.new(secret.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest()
-print(f"{header}.{payload}.{b64url(sig)}")
-PY
+  local user="${1:-testuser01}"
+  _get_kc_client_secret || { echo ""; return 1; }
+  curl -s --max-time 10 -X POST \
+    "$KC_URL/realms/$KC_REALM/protocol/openid-connect/token" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&client_id=api-gateway&client_secret=$_KC_CLIENT_SECRET&username=$user&password=Test1234!" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null
 }
 
 # ─── Service check ────────────────────────────────────────────────────────────
@@ -83,18 +97,21 @@ check_services() {
   log "Kiểm tra services..."
   local ok=true
 
-  if curl -fsS --max-time 3 -H "Host: $GW_HOST" "$GW_URL/health" >/dev/null 2>&1; then
-    ok "API Gateway  : http://${GW_HOST}:8080"
+  if curl -fsS --max-time 5 "$GW_URL/health" >/dev/null 2>&1; then
+    local jwks
+    jwks=$(curl -s --max-time 5 "$GW_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin).get('jwks_keys_loaded',0))" 2>/dev/null)
+    ok "API Gateway  : $GW_URL  (jwks_keys_loaded=$jwks)"
+    if [[ "$jwks" == "0" ]]; then
+      echo -e "${YELLOW}[WARN]${NC} JWKS chưa load — restart api-gateway: kubectl --context ctx-aws -n financial rollout restart deploy/api-gateway"
+    fi
   else
-    # Fallback: try direct port-forward to api-gateway
+    # Fallback: auto port-forward
     if command -v kubectl >/dev/null 2>&1 && kubectl --context "$AWS_CONTEXT" get svc api-gateway -n financial >/dev/null 2>&1; then
-      echo -e "${YELLOW}[WARN]${NC} UI tunnel chưa mở — tự mở port-forward api-gateway:8080..."
-      kubectl --context "$AWS_CONTEXT" port-forward -n financial svc/api-gateway 8080:8080 --address=127.0.0.1 &
-      sleep 2
-      if curl -fsS --max-time 3 "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
-        ok "API Gateway  : http://127.0.0.1:8080 (via kubectl port-forward)"
-        GW_URL="http://127.0.0.1:8080"
-        GW_HOST=""
+      echo -e "${YELLOW}[WARN]${NC} Tự mở port-forward api-gateway:18080..."
+      nohup kubectl --context "$AWS_CONTEXT" port-forward -n financial svc/api-gateway 18080:8080 --address=127.0.0.1 >/tmp/pf-gw.log 2>&1 &
+      sleep 3
+      if curl -fsS --max-time 3 "$GW_URL/health" >/dev/null 2>&1; then
+        ok "API Gateway  : $GW_URL (via kubectl port-forward)"
       else
         echo -e "${YELLOW}[WARN]${NC} API Gateway không accessible — bỏ qua normal traffic test"
         SKIP_PAYMENTS=true
@@ -105,29 +122,29 @@ check_services() {
     fi
   fi
 
-  if curl -fsS --max-time 3 "$AI_URL/health" >/dev/null 2>&1; then
-    PROVIDER=$(curl -s "$AI_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin)['provider'])" 2>/dev/null)
+  if curl -fsS --max-time 5 "$AI_URL/health" >/dev/null 2>&1; then
+    PROVIDER=$(curl -s --max-time 5 "$AI_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin).get('provider','?'))" 2>/dev/null)
     ok "AI Analyzer  : $AI_URL  (provider=$PROVIDER)"
   else
-    echo -e "${YELLOW}[WARN]${NC} AI Analyzer không accessible — cần port-forward:"
-    echo "       kubectl port-forward -n plg-stack svc/ai-analyzer 8090:8080"
+    echo -e "${YELLOW}[WARN]${NC} AI Analyzer không accessible:"
+    echo "       nohup kubectl --context ctx-aws -n plg-stack port-forward svc/ai-analyzer 8090:8080 --address=127.0.0.1 &"
     ok=false
   fi
 
-  if curl -fsS --max-time 3 "$SOAR_URL/health" >/dev/null 2>&1; then
-    DRY=$(curl -s "$SOAR_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin)['dry_run'])" 2>/dev/null)
+  if curl -fsS --max-time 5 "$SOAR_URL/health" >/dev/null 2>&1; then
+    DRY=$(curl -s --max-time 5 "$SOAR_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin).get('dry_run','?'))" 2>/dev/null)
     ok "SOAR Engine  : $SOAR_URL  (dry_run=$DRY)"
   else
-    echo -e "${YELLOW}[WARN]${NC} SOAR Engine không accessible — cần port-forward:"
-    echo "       kubectl port-forward -n plg-stack svc/soar-engine 8091:8080"
+    echo -e "${YELLOW}[WARN]${NC} SOAR Engine không accessible:"
+    echo "       nohup kubectl --context ctx-aws -n plg-stack port-forward svc/soar-engine 8091:8080 --address=127.0.0.1 &"
     ok=false
   fi
 
-  if curl -fsS --max-time 3 "$LOKI_URL/loki/api/v1/labels" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "$LOKI_URL/ready" >/dev/null 2>&1; then
     ok "Loki         : $LOKI_URL"
   else
-    echo -e "${YELLOW}[WARN]${NC} Loki không accessible — cần port-forward:"
-    echo "       kubectl port-forward -n plg-stack svc/loki 13100:3100"
+    echo -e "${YELLOW}[WARN]${NC} Loki không accessible:"
+    echo "       nohup kubectl --context ctx-aws -n plg-stack port-forward svc/loki 13100:3100 --address=127.0.0.1 &"
     ok=false
   fi
 
@@ -142,19 +159,18 @@ check_services() {
 }
 
 help_tunnels() {
-  echo "Mở 3 terminal song song:"
+  echo "Xem HUONG_DAN.md mục 3 để biết đầy đủ. Tóm tắt nhanh:"
   echo ""
-  echo "Terminal 1 — kubectl tunnel:"
-  echo -e "  ${YELLOW}ssh -f -N -i ~/.ssh/zta-siem-soar-key -L 6444:10.10.1.10:6443 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10${NC}"
+  echo "Bước 1 — K8s tunnel (dùng script):"
+  echo -e "  ${YELLOW}bash scripts/k8s-tunnel.sh up all${NC}"
   echo ""
-  echo "Terminal 2 — UI tunnel (Traefik/Grafana/Keycloak/API):"
-  echo -e "  ${YELLOW}ssh -N -i ~/.ssh/zta-siem-soar-key -L 8080:10.10.1.10:80 -J ubuntu@54.254.145.86 ubuntu@10.10.1.10${NC}"
-  echo ""
-  echo "Terminal 3 — port-forward AI/SOAR/Loki:"
-  echo -e "  ${YELLOW}export KUBECONFIG=~/.kube/ztlab/aws-tunnel.yaml${NC}"
-  echo -e "  ${YELLOW}kubectl port-forward -n plg-stack svc/ai-analyzer 8090:8080 &${NC}"
-  echo -e "  ${YELLOW}kubectl port-forward -n plg-stack svc/soar-engine  8091:8080 &${NC}"
-  echo -e "  ${YELLOW}kubectl port-forward -n plg-stack svc/loki          13100:3100 &${NC}"
+  echo "Bước 2 — Port-forwards (copy & paste):"
+  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n identity port-forward svc/keycloak 8180:8080 --address=127.0.0.1 >/tmp/pf-kc.log 2>&1 &${NC}"
+  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n financial port-forward svc/api-gateway 18080:8080 --address=127.0.0.1 >/tmp/pf-gw.log 2>&1 &${NC}"
+  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/loki 13100:3100 --address=127.0.0.1 >/tmp/pf-loki.log 2>&1 &${NC}"
+  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/soar-engine 8091:8080 --address=127.0.0.1 >/tmp/pf-soar.log 2>&1 &${NC}"
+  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/ai-analyzer 8090:8080 --address=127.0.0.1 >/tmp/pf-ai.log 2>&1 &${NC}"
+  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/grafana 3000:3000 --address=127.0.0.1 >/tmp/pf-grafana.log 2>&1 &${NC}"
   exit 0
 }
 
@@ -164,27 +180,30 @@ help_tunnels() {
 send_payment() {
   local from="$1" to="$2" amount="$3" user="${4:-testuser01}" label="${5:-normal}"
   local TOKEN
-  TOKEN=$(gen_token "$user" "financial-write")
+  TOKEN=$(gen_token "$user")
+  if [[ -z "$TOKEN" ]]; then
+    echo -e "${YELLOW}[WARN]${NC} Không lấy được token Keycloak — bỏ qua payment $label"
+    return
+  fi
   local RESULT
-  RESULT=$(python3 - "$GW_URL" "$GW_HOST" "$TOKEN" "$from" "$to" "$amount" <<'PY'
+  RESULT=$(python3 - "$GW_URL" "$TOKEN" "$from" "$to" "$amount" <<'PY'
 import json, sys, urllib.request
-url, host, token, frm, to, amount = sys.argv[1:]
+url, token, frm, to, amount = sys.argv[1:]
 headers = {"Content-Type":"application/json", "Authorization":f"Bearer {token}"}
-if host:
-    headers["Host"] = host
 req = urllib.request.Request(
     f"{url}/payments",
     data=json.dumps({"from_account":frm,"to_account":to,"amount":float(amount),"currency":"VND"}).encode(),
     headers=headers,
     method="POST")
 try:
-    r=urllib.request.urlopen(req, timeout=10)
+    r=urllib.request.urlopen(req, timeout=15)
     d=json.loads(r.read().decode())
     score=d.get("fraud",{}).get("score","?")
+    gate=d.get("fraud",{}).get("gate","?")
     txid=d.get("core_banking",{}).get("transaction_id","?")[:12]
-    print(f"completed score={score} tx={txid}...")
+    print(f"completed fraud_score={score} gate={gate} tx={txid}...")
 except urllib.error.HTTPError as e:
-    body=e.read().decode()[:100]
+    body=e.read().decode()[:120]
     print(f"HTTP {e.code}: {body}")
 PY
   )
@@ -254,7 +273,7 @@ print_banner() {
   echo -e "${CYAN}╔══════════════════════════════════════════════════════════╗${NC}"
   echo -e "${CYAN}║         ZTLab — Zero Trust Security Demo                 ║${NC}"
   echo -e "${CYAN}╠══════════════════════════════════════════════════════════╣${NC}"
-  echo -e "${CYAN}║  Grafana  →  http://grafana.ztlab.local:8080             ║${NC}"
+  echo -e "${CYAN}║  Grafana  →  http://127.0.0.1:3000                       ║${NC}"
   echo -e "${CYAN}║  Dashboard: ZTLab AI SIEM SOAR                           ║${NC}"
   echo -e "${CYAN}╚══════════════════════════════════════════════════════════╝${NC}"
   echo ""
@@ -266,10 +285,10 @@ run_normal_traffic() {
     return
   fi
   log "─── Normal traffic (baseline) ───"
-  send_payment "acc001" "acc002" "50000"    "testuser01" "small-transfer"
-  send_payment "acc003" "acc004" "2500000"  "testuser01" "medium-transfer"
-  send_payment "acc005" "acc006" "15000000" "testuser01" "large-transfer"
-  send_payment "acc001" "acc007" "100000"   "testuser02" "read-user"
+  send_payment "ACC-1001" "ACC-2001" "50000"    "testuser01" "small-transfer"
+  send_payment "ACC-1001" "ACC-2001" "2500000"  "testuser01" "medium-transfer"
+  send_payment "ACC-1001" "ACC-2001" "15000000" "testuser01" "large-transfer"
+  send_payment "ACC-2001" "ACC-3001" "100000"   "testuser02" "user02-transfer"
   sleep 1
 }
 
@@ -287,29 +306,27 @@ run_attack_scenarios() {
 
 print_soar_summary() {
   echo ""
-  log "─── SOAR Cases ───"
+  log "─── SOAR Incidents ───"
   python3 - "$SOAR_URL" "$SOAR_API_TOKEN" <<'PY' 2>/dev/null
 import json, sys, urllib.request
 soar_url, token = sys.argv[1:]
 try:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    req = urllib.request.Request(f"{soar_url}/cases", headers=headers)
+    req = urllib.request.Request(f"{soar_url}/incidents", headers=headers)
     r = urllib.request.urlopen(req, timeout=5)
-    cases = json.loads(r.read().decode())
-    print(f"  Total cases: {len(cases)}")
-    for c in cases[-6:]:
-        status=c['status']
-        attack=c['attack_type']
-        playbook=c['playbook']
-        sev=c['severity']
-        conf=c['confidence']
-        print(f"  [{status:8}] {attack:22} → {playbook:22} sev={sev} conf={conf}")
+    incidents = json.loads(r.read().decode())
+    print(f"  Total incidents: {len(incidents)}")
+    for i in incidents[-6:]:
+        status=i.get('status','?')
+        name=i.get('alert_name','?')[:35]
+        sev=i.get('severity','?')
+        print(f"  [{status:8}] {name:35} sev={sev}")
 except Exception as e:
     print(f"  (Cannot reach SOAR: {e})")
 PY
   echo ""
-  echo -e "  ${CYAN}Xem chi tiết: http://soar.ztlab.local:8080/cases${NC}"
-  echo -e "  ${CYAN}Grafana AI SIEM SOAR: http://grafana.ztlab.local:8080/d/ztlab-ai-siem-soar${NC}"
+  echo -e "  ${CYAN}SOAR incidents: http://127.0.0.1:8091/incidents${NC}"
+  echo -e "  ${CYAN}Grafana AI SIEM SOAR: http://127.0.0.1:3000/d/ztlab-ai-siem-soar${NC}"
   echo ""
 }
 
