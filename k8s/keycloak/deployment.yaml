@@ -41,7 +41,7 @@ spec:
                   name: keycloak-secret
                   key: postgres-password
             - name: KC_HOSTNAME
-              value: localhost
+              value: keycloak.ztlab.local
             - name: KC_HOSTNAME_ADMIN
               value: localhost
             - name: KC_HTTP_ENABLED
@@ -55,7 +55,7 @@ spec:
               subPath: realm-config.json
           startupProbe:
             httpGet:
-              path: /
+              path: /realms/master
               port: 8080
             initialDelaySeconds: 10
             failureThreshold: 60
@@ -68,7 +68,7 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /realms/master
               port: 8080
             initialDelaySeconds: 90
             periodSeconds: 20

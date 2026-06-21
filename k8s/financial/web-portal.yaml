@@ -21,11 +21,27 @@ spec:
     metadata:
       labels:
         app: web-portal
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/web-portal"
     spec:
       serviceAccountName: web-portal
+      volumes:
+        - name: patch-web-portal
+          configMap:
+            name: patch-web-portal
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: web-portal
-          image: ztlab/web-portal:1.2.1
+          image: ztlab/web-portal:1.2.2
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -39,7 +55,7 @@ spec:
             - name: KEYCLOAK_URL
               value: "http://keycloak.identity.svc.cluster.local:8080"
             - name: KEYCLOAK_PUBLIC_URL
-              value: "http://127.0.0.1:8180"
+              value: "http://keycloak.ztlab.local:8180"
             - name: KEYCLOAK_REALM
               value: "ztlab"
             - name: KEYCLOAK_CLIENT_ID
@@ -48,10 +64,17 @@ spec:
               value: "http://account-service.financial.svc.cluster.local:8080"
             - name: TRANSACTION_SERVICE_URL
               value: "http://transaction-service.financial.svc.cluster.local:8080"
-            - name: SECURITY_SCORER_URL
-              value: "http://security-scorer.plg-stack.svc.cluster.local:8080"
             - name: FRAUD_DETECTION_URL
               value: "http://fraud-detection.financial.svc.cluster.local:8080"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/0"
+            - name: LOKI_URL
+              value: "http://loki.plg-stack.svc.cluster.local:3100"
             - name: KEYCLOAK_ADMIN_USER
               value: "admin"
             - name: KEYCLOAK_ADMIN_PASS
@@ -61,14 +84,6 @@ spec:
                   key: admin-password
             - name: INITIAL_BALANCE
               value: "10000000"
-            - name: SOAR_ENGINE_URL
-              value: "http://soar-engine.plg-stack.svc.cluster.local:8080"
-            - name: SOAR_API_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: ai-secrets
-                  key: SOAR_API_TOKEN
-                  optional: true
             - name: SESSION_SECRET
               valueFrom:
                 secretKeyRef:
@@ -86,6 +101,10 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          volumeMounts:
+            - name: patch-web-portal
+              mountPath: /app/main.py
+              subPath: main.py
           resources:
             requests:
               cpu: 50m
@@ -93,6 +112,37 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -106,6 +156,9 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+    - name: envoy-inbound
+      port: 15006
+      targetPort: 15006
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
