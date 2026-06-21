@@ -43,6 +43,9 @@ spec:
     spec:
       serviceAccountName: api-gateway
       volumes:
+        - name: patch-api-gateway
+          configMap:
+            name: patch-api-gateway
         - name: envoy-config
           configMap:
             name: envoy-config
@@ -64,8 +67,13 @@ spec:
           env:
             - name: PAYMENT_SERVICE_URL
               value: "http://127.0.0.1:15001"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
             - name: REDIS_URL
-              value: "redis://redis.financial.svc.cluster.local:6379/2"
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/0"
             - name: IP_BLOCK_ENABLED
               value: "true"
           readinessProbe:
@@ -80,6 +88,10 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
+          volumeMounts:
+            - name: patch-api-gateway
+              mountPath: /app/main.py
+              subPath: main.py
         - name: envoy
           image: envoyproxy/envoy:v1.29-latest
           command: ["/bin/sh", "-c"]
@@ -273,8 +285,15 @@ spec:
             - containerPort: 8080
               name: http
           env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
             - name: REDIS_URL
-              value: "redis://redis.financial.svc.cluster.local:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/0"
+            - name: FRAUD_VELOCITY_WINDOW_SECONDS
+              value: "900"
           readinessProbe:
             httpGet:
               path: /health

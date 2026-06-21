@@ -6,7 +6,6 @@ metadata:
 data:
   APP_PORT: "8080"
   METRICS_PORT: "9090"
-  REDIS_URL: "redis://redis.financial.svc.cluster.local:6379/0"
   ACCOUNTS_DB_HOST: "postgres-accounts.financial.svc.cluster.local"
   ACCOUNTS_DB_PORT: "5432"
   TXN_DB_HOST: "postgres-txn.financial.svc.cluster.local"

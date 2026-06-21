@@ -84,7 +84,9 @@
       "realmRoles": [
         "financial-read",
         "financial-write"
-      ]
+      ],
+      "firstName": "Test",
+      "lastName": "User01"
     },
     {
       "username": "merchant01",
@@ -100,7 +102,9 @@
       ],
       "realmRoles": [
         "financial-read"
-      ]
+      ],
+      "firstName": "Merchant",
+      "lastName": "01"
     },
     {
       "username": "testuser02",
@@ -117,7 +121,9 @@
       "realmRoles": [
         "financial-read",
         "financial-write"
-      ]
+      ],
+      "firstName": "Test",
+      "lastName": "User02"
     },
     {
       "username": "analyst01",
@@ -133,7 +139,9 @@
       ],
       "realmRoles": [
         "security-analyst"
-      ]
+      ],
+      "firstName": "Analyst",
+      "lastName": "01"
     },
     {
       "username": "demoadmin",

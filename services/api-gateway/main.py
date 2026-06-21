@@ -1,5 +1,6 @@
 # ZTLab - api-gateway
 
+import asyncio
 import os
 import time
 import uuid
@@ -20,11 +21,11 @@ CLOUD = "aws"
 PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8080").rstrip("/")
 JWT_SECRET = os.getenv("JWT_DEV_SECRET", "")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "")
-JWT_ISSUER = os.getenv("JWT_ISSUER", "http://keycloak.ztlab.local/realms/ztlab")
+JWT_ISSUER = os.getenv("JWT_ISSUER", "http://keycloak.ztlab.local:8180/realms/ztlab")
 JWKS_URL = os.getenv("JWKS_URL", "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs")
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 ALLOW_DEV_TOKENS = os.getenv("ALLOW_DEV_TOKENS", "false").lower() == "true"
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/2")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/0")
 IP_BLOCK_ENABLED = os.getenv("IP_BLOCK_ENABLED", "true").lower() == "true"
 
 app = FastAPI(title="ZTLab API Gateway")
@@ -152,9 +153,17 @@ def _verify_token(authorization: str | None, source_ip: str) -> dict:
         raise HTTPException(status_code=401, detail="invalid token") from exc
 
 
+async def _jwks_refresh_loop() -> None:
+    while True:
+        if not _jwks_keys:
+            _load_jwks()
+        await asyncio.sleep(300)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     _load_jwks()
+    asyncio.create_task(_jwks_refresh_loop())
 
 
 @app.post("/payments")
@@ -162,7 +171,7 @@ async def create_payment(request: Request, body: PaymentRequest, authorization: 
     source_ip = _source_ip(request)
     if await _is_ip_blocked(source_ip):
         logger.warn("ip_blocked_request", source_ip=source_ip, path="/payments")
-        raise HTTPException(status_code=403, detail={"reason": "ip_blocked", "source_ip": source_ip, "message": "IP bị chặn bởi hệ thống SOAR"})
+        raise HTTPException(status_code=403, detail={"reason": "ip_blocked", "source_ip": source_ip, "message": "IP bị chặn bởi hệ thống bảo mật"})
     _check_rate_limit(source_ip)
     claims = _verify_token(authorization, source_ip)
     _require_role(claims, "financial-write", source_ip)
@@ -213,15 +222,19 @@ async def create_account(request: Request, authorization: str | None = Header(de
 
 
 @app.get("/accounts")
-async def list_accounts(request: Request, authorization: str | None = Header(default=None)):
+async def list_accounts(request: Request, owner: str = "", authorization: str | None = Header(default=None)):
     source_ip = _source_ip(request)
     _check_rate_limit(source_ip)
     claims = _verify_token(authorization, source_ip)
     _require_role(claims, "financial-read", source_ip)
-    owner = claims.get("preferred_username", "")
+    roles = claims.get("realm_access", {}).get("roles", [])
+    if "security-admin" in roles:
+        params = {"owner": owner} if owner else {}
+    else:
+        params = {"owner": claims.get("preferred_username", "")}
     async with httpx.AsyncClient(timeout=10) as client:
         try:
-            resp = await client.get(f"{PAYMENT_SERVICE_URL}/accounts", params={"owner": owner})
+            resp = await client.get(f"{PAYMENT_SERVICE_URL}/accounts", params=params)
             resp.raise_for_status()
             return resp.json()
         except httpx.HTTPStatusError as exc:
