@@ -9,7 +9,7 @@ Sinh viên: Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)
 
 1. [Tổng quan kiến trúc](#1-tổng-quan-kiến-trúc)
 2. [Hạ tầng & IP](#2-hạ-tầng--ip)
-3. [Kết nối vào hệ thống](#3-kết-nối-vào-hệ-thống)
+3. [Kết nối vào hệ thống](#3-kết-nối-vào-hệ-thống) — WireGuard VPN + K8s tunnel
 4. [Deploy lần đầu](#4-deploy-lần-đầu)
 5. [Mở port-forwards (mỗi lần demo)](#5-mở-port-forwards-mỗi-lần-demo)
 6. [Health check](#6-health-check)
@@ -52,7 +52,9 @@ Internet  (HTTPS / PKCE OIDC)
 │  namespace: monitoring                                                  │
 │    Prometheus                                                           │
 └────────────────────────────────────────────────────────────────────────┘
-           │  cross-cloud (NodePort 30081)
+           │  WireGuard VPN (UDP 51820) · 10.200.200.0/24
+           │  aws-gateway (10.200.200.1) ←→ os-gateway (10.200.200.2)
+           │  cross-cloud NodePort 30081 đi qua WireGuard
            ▼
 ┌─────────────────── OpenStack K3s ──────────────────────────────────────┐
 │  namespace: financial                                                   │
@@ -77,11 +79,13 @@ web-portal → api-gateway (JWT verify + OPA) → payment-service (HMAC sign)
 | Node | Private IP | Public IP | Vai trò |
 |------|-----------|-----------|---------|
 | aws_bastion | — | 52.221.255.36 | SSH jump host |
-| aws_gateway | — | 13.213.245.227 | NAT gateway |
+| aws_gateway | 10.10.0.10 / WG 10.200.200.1 | 13.213.245.227 | NAT + WireGuard server |
 | aws_k3s_master | 10.10.1.10 | — | K8s control plane (AWS) |
 | aws_k3s_worker_1 | 10.10.1.11 | — | K8s worker (AWS) |
-| os_gateway | — | 10.10.10.188 | OpenStack floating IP |
-| os_k3s_master | 10.10.1.12 | — | K8s control plane + worker (OpenStack) |
+| os_gateway | WG 10.200.200.2 | 10.10.10.188 | WireGuard client (OpenStack) |
+| os_k3s_master | 10.10.1.12 *(via WireGuard)* | — | K8s control plane + worker (OpenStack) |
+
+> `os_k3s_master` có IP `10.10.1.12` trong cùng subnet `10.10.1.0/24` với AWS nodes — đây là IP WireGuard, cho phép Envoy trên AWS route thẳng sang OpenStack mà không cần DNS cross-cluster.
 
 **K8s contexts:**
 - `ctx-aws` → API server `127.0.0.1:6444` (qua SSH tunnel)
@@ -93,13 +97,48 @@ web-portal → api-gateway (JWT verify + OPA) → payment-service (HMAC sign)
 
 ## 3. Kết nối vào hệ thống
 
+### Bước 0 — Bật WireGuard VPN (nếu chưa chạy)
+
+WireGuard là kết nối layer-3 giữa AWS và OpenStack. **Phải bật trước khi deploy hoặc dùng cross-cloud traffic.**
+
+```bash
+# Cấu hình lần đầu (generate keypair + deploy config)
+ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/wireguard.yml
+
+# Kiểm tra tunnel đang chạy
+ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml -m shell -a "wg show wg0"
+
+# Kiểm tra connectivity AWS → OpenStack
+ansible aws_gateway -i ansible/inventory/hosts.yml -m shell \
+  -a "ping -c 3 10.200.200.2"   # ping tới os_gateway
+
+# Kiểm tra os_k3s_master reachable từ AWS (IP WireGuard)
+ansible aws_k3s_master -i ansible/inventory/hosts.yml -m shell \
+  -a "ping -c 3 10.10.1.12"
+```
+
+**Cấu hình WireGuard:**
+- Interface: `wg0` · Subnet: `10.200.200.0/24` · Port: UDP 51820
+- `aws_gateway` (10.200.200.1) — server, lắng nghe UDP 51820, EIP 13.213.245.227
+- `os_gateway` (10.200.200.2) — client, kết nối về EIP aws_gateway
+- Routes qua WireGuard: `10.10.1.0/24` (K8s nodes), `10.200.200.0/24` (WG subnet)
+- `wg-quick@wg0` systemd service — tự start khi reboot
+
+**Nếu WireGuard đang chạy nhưng mất kết nối:**
+```bash
+ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml -m shell \
+  -a "systemctl restart wg-quick@wg0"
+```
+
+---
+
 ### Bước 1 — Mở K8s API tunnel
 
 ```bash
 bash scripts/k8s-tunnel.sh up all
 ```
 
-Tunnel forward:
+Tunnel forward (qua SSH bastion, độc lập với WireGuard):
 - `127.0.0.1:6444` → `aws_k3s_master:6443` qua bastion 52.221.255.36
 - `127.0.0.1:6445` → `os_k3s_master:6443` qua os_gateway 10.10.10.188
 
@@ -589,6 +628,24 @@ Mặc định `heuristic` — hoạt động không cần API key. Nếu `gemini
 bash scripts/k8s-tunnel.sh status
 bash scripts/k8s-tunnel.sh down all
 bash scripts/k8s-tunnel.sh up all
+```
+
+### Cross-cloud traffic không hoạt động (payment-service không gọi được core-banking)
+
+WireGuard tunnel có thể bị ngắt sau khi reboot gateway nodes.
+
+```bash
+# Kiểm tra WireGuard status
+ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml \
+  -m shell -a "wg show wg0"
+
+# Restart nếu cần
+ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml \
+  -m shell -a "systemctl restart wg-quick@wg0"
+
+# Verify ping aws_gateway → os_gateway
+ansible aws_gateway -i ansible/inventory/hosts.yml \
+  -m shell -a "ping -c 3 10.200.200.2"
 ```
 
 ### SPIRE SVID hết hạn (lỗi mTLS sau ~1h)
