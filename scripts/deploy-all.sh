@@ -245,9 +245,6 @@ create_ai_secret() {
     --from-literal=SOAR_ALLOWED_CONTEXTS="${SOAR_ALLOWED_CONTEXTS:-ctx-aws,ctx-openstack}" \
     --from-literal=SOAR_API_TOKEN="${SOAR_API_TOKEN:-}" \
     --from-literal=SOAR_CASE_STORE_PATH="/data/cases.jsonl" \
-    --from-literal=THEHIVE_URL="${THEHIVE_URL:-http://thehive.plg-stack.svc.cluster.local:9000}" \
-    --from-literal=THEHIVE_ORG="${THEHIVE_ORG:-ztlab}" \
-    --from-literal=THEHIVE_API_KEY="${THEHIVE_API_KEY:-}" \
     --from-literal=PORTAL_URL="${PORTAL_URL:-http://portal.ztlab.local}" \
     --from-literal=ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-}"
 }
@@ -354,9 +351,6 @@ sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/n
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/thehive.yaml"
-  wait_statefulset "$AWS_CONTEXT" plg-stack thehive-cassandra 300s
-  wait_deployment "$AWS_CONTEXT" plg-stack thehive 300s
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/security-scorer.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack security-scorer 120s
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"

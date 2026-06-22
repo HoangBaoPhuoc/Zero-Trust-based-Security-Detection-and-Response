@@ -165,8 +165,14 @@ spec:
                   name: keycloak-admin-secret
                   key: password
                   optional: true
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+                  optional: false
             - name: REDIS_URL
-              value: redis://redis.financial.svc.cluster.local:6379/2
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/2"
             - name: SOAR_BLOCK_IP_TTL_SECONDS
               value: "86400"
             - name: SOAR_API_TOKEN

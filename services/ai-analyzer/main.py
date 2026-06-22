@@ -38,12 +38,6 @@ SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "").strip()
 ADMIN_WEBHOOK_URL = os.getenv("ADMIN_WEBHOOK_URL", "").strip()
 # Web portal base URL — included in webhook payload so admin can navigate directly to /alerts
 PORTAL_URL = os.getenv("PORTAL_URL", "").rstrip("/")
-THEHIVE_URL = os.getenv("THEHIVE_URL", "").rstrip("/")
-THEHIVE_API_KEY = os.getenv("THEHIVE_API_KEY", "").strip()
-THEHIVE_ORG = os.getenv("THEHIVE_ORG", "").strip()
-THEHIVE_API_BASE = os.getenv("THEHIVE_API_BASE", "/api/v1").strip().rstrip("/") or "/api/v1"
-THEHIVE_MIN_SEVERITY = os.getenv("THEHIVE_MIN_SEVERITY", "high").lower()
-THEHIVE_ENABLED = bool(THEHIVE_URL and THEHIVE_API_KEY)
 PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "900"))
 _provider_backoff_until = 0.0
 
@@ -173,8 +167,6 @@ class PendingAlert(BaseModel):
     status: Literal["pending", "approved", "dismissed", "expired"] = "pending"
     reviewed_at: str | None = None
     note: str | None = None
-    thehive_alert_id: str | None = None
-    thehive_case_id: str | None = None
 
 
 class ApproveRequest(BaseModel):
@@ -555,93 +547,6 @@ def _filter_actionable_logs(logs: list[LogEntry]) -> list[LogEntry]:
     return filtered
 
 
-def _thehive_severity(severity: str) -> int:
-    return {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(severity.lower(), 2)
-
-
-def _thehive_headers() -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {THEHIVE_API_KEY}", "Content-Type": "application/json"}
-    if THEHIVE_ORG:
-        headers["X-Organisation"] = THEHIVE_ORG
-    return headers
-
-
-def _thehive_description(alert: AlertRecord, alert_id: str) -> str:
-    evidence = "\n".join(f"- {item}" for item in alert.evidence[:5]) or "- none"
-    return (
-        f"AI pending alert: {alert_id}\n\n"
-        f"Severity: {alert.severity}\n"
-        f"Attack type: {alert.attack_type}\n"
-        f"Affected service: {alert.affected_service or 'unknown'}\n"
-        f"Source IP: {alert.source_ip or 'unknown'}\n"
-        f"Confidence: {alert.confidence}\n"
-        f"Recommended playbook: {alert.recommended_playbook or 'manual_review'}\n\n"
-        f"Summary:\n{alert.summary}\n\nEvidence:\n{evidence}\n"
-    )
-
-
-def _extract_thehive_id(data: Any) -> str | None:
-    if isinstance(data, dict):
-        for key in ("_id", "id", "caseId", "number"):
-            value = data.get(key)
-            if value is not None:
-                return str(value)
-    return None
-
-
-async def _thehive_post(client: httpx.AsyncClient, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-    bases = [THEHIVE_API_BASE]
-    if THEHIVE_API_BASE != "/api":
-        bases.append("/api")
-    last_exc: Exception | None = None
-    for base in bases:
-        try:
-            response = await client.post(f"{THEHIVE_URL}{base}{path}", headers=_thehive_headers(), json=payload, timeout=15)
-            response.raise_for_status()
-            data = response.json() if response.content else {}
-            return data if isinstance(data, dict) else {"raw": data}
-        except Exception as exc:
-            last_exc = exc
-    assert last_exc is not None
-    raise last_exc
-
-
-async def create_thehive_alert(alert: AlertRecord, alert_id: str) -> str | None:
-    if not THEHIVE_ENABLED or SEVERITY_RANK[alert.severity] < SEVERITY_RANK.get(THEHIVE_MIN_SEVERITY, 3):
-        return None
-    payload = {
-        "type": "ztlab-ai",
-        "source": alert.source or APP_NAME,
-        "sourceRef": f"{alert_id}-{alert.log_hash}",
-        "title": f"[{alert.severity.upper()}] {alert.attack_type} on {alert.affected_service or 'unknown service'}",
-        "description": _thehive_description(alert, alert_id),
-        "severity": _thehive_severity(alert.severity),
-        "tlp": 2,
-        "pap": 2,
-        "tags": ["ztlab", "ai", "soar", alert.attack_type, alert.severity],
-        "summary": alert.summary,
-    }
-    async with httpx.AsyncClient() as client:
-        data = await _thehive_post(client, "/alert", payload)
-    return _extract_thehive_id(data)
-
-
-async def create_thehive_case(alert: AlertRecord, alert_id: str) -> str | None:
-    if not THEHIVE_ENABLED:
-        return None
-    payload = {
-        "title": f"SOAR approved: {alert.attack_type} on {alert.affected_service or 'unknown service'}",
-        "description": _thehive_description(alert, alert_id),
-        "severity": _thehive_severity(alert.severity),
-        "tlp": 2,
-        "pap": 2,
-        "tags": ["ztlab", "soar-approved", alert.attack_type, alert.severity],
-    }
-    async with httpx.AsyncClient() as client:
-        data = await _thehive_post(client, "/case", payload)
-    return _extract_thehive_id(data)
-
-
 async def forward_alert_to_soar(alert: AlertRecord) -> None:
     if not SOAR_WEBHOOK_URL:
         return
@@ -784,14 +689,6 @@ async def handle_logs(logs: list[LogEntry], source: str) -> AnalyzeResult:
             expires_at=expires_ts,
         )
         PENDING_ALERTS[alert_id] = pending
-        try:
-            thehive_alert_id = await create_thehive_alert(alert, alert_id)
-            if thehive_alert_id:
-                pending = pending.model_copy(update={"thehive_alert_id": thehive_alert_id})
-                PENDING_ALERTS[alert_id] = pending
-                logger.warning(json.dumps({"event_type": "thehive_alert_created", "alert_id": alert_id, "thehive_alert_id": thehive_alert_id}))
-        except Exception as exc:
-            logger.error(json.dumps({"event_type": "thehive_alert_create_failed", "error": str(exc), "alert_id": alert_id}))
         logger.warning(json.dumps({
             "event_type": "ai_pending_alert_created",
             "alert_id": alert_id,
@@ -914,8 +811,6 @@ async def health() -> dict[str, Any]:
         "pending_alerts_count": pending_count,
         "admin_webhook_configured": bool(ADMIN_WEBHOOK_URL),
         "portal_url": PORTAL_URL or "",
-        "thehive_configured": THEHIVE_ENABLED,
-        "thehive_url": THEHIVE_URL if THEHIVE_ENABLED else "",
         "ignored_alert_namespaces": sorted(IGNORED_ALERT_NAMESPACES),
     }
 
@@ -973,15 +868,6 @@ async def approve_pending(alert_id: str, body: ApproveRequest = ApproveRequest()
         "attack_type": pending.alert.attack_type,
         "note": updated.note,
     }))
-
-    try:
-        thehive_case_id = await create_thehive_case(pending.alert, alert_id)
-        if thehive_case_id:
-            updated = updated.model_copy(update={"thehive_case_id": thehive_case_id})
-            PENDING_ALERTS[alert_id] = updated
-            logger.warning(json.dumps({"event_type": "thehive_case_created", "alert_id": alert_id, "thehive_case_id": thehive_case_id}))
-    except Exception as exc:
-        logger.error(json.dumps({"event_type": "thehive_case_create_failed", "error": str(exc), "alert_id": alert_id}))
 
     # Forward to SOAR
     try:
