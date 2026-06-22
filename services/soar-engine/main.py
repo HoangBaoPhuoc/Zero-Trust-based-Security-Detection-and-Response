@@ -930,17 +930,12 @@ GRAFANA_ATTACK_MAP = {
 }
 
 
-def _grafana_to_alert(payload: dict) -> SecurityAlert | None:
-    alerts_list = payload.get("alerts", [])
-    if not alerts_list:
-        return None
-
-    alert_data = alerts_list[0]
+def _grafana_to_alert(alert_data: dict) -> SecurityAlert | None:
+    """Convert a single Grafana alert object to SecurityAlert. Returns None if not firing."""
     labels      = alert_data.get("labels", {})
     annotations = alert_data.get("annotations", {})
-    state       = alert_data.get("status", "firing")
 
-    if state != "firing":
+    if alert_data.get("status", "firing") != "firing":
         return None
 
     raw_severity = labels.get("severity", "medium").lower()
@@ -948,30 +943,37 @@ def _grafana_to_alert(payload: dict) -> SecurityAlert | None:
     summary  = annotations.get("summary", labels.get("alertname", "unknown alert"))
     desc     = annotations.get("description", "")
 
-    # Infer attack type from alert title/summary
-    text_lower = (summary + " " + desc).lower()
-    attack_type = "access_denied"
-    for keyword, mapped in GRAFANA_ATTACK_MAP.items():
-        if keyword in text_lower:
-            attack_type = mapped
-            break
+    # Prefer explicit attack_type label (set in alert rule YAML).
+    # Fall back to keyword matching on summary+description for older rules.
+    attack_type = labels.get("attack_type", "")
+    if not attack_type:
+        text_lower = (summary + " " + desc).lower()
+        attack_type = "access_denied"
+        for keyword, mapped in GRAFANA_ATTACK_MAP.items():
+            if keyword in text_lower:
+                attack_type = mapped
+                break
 
+    # gap1 label means OpenStack-side exfiltration
+    affected_service = "core-banking" if labels.get("gap") == "gap1" else None
     source_ip = labels.get("source_ip") or annotations.get("source_ip")
+    fingerprint = alert_data.get("fingerprint", "")
+    evidence = [e for e in [desc, f"mitre={labels.get('mitre', '')}", f"fingerprint={fingerprint}"] if e]
 
     return SecurityAlert(
-        event_type   = "grafana_alert",
         analyzer     = "grafana",
         provider     = "grafana-alertmanager",
         model        = "rule-based",
-        source       = "grafana",
+        source       = labels.get("alertname", "grafana-alert"),
         verdict      = "malicious",
         severity     = severity,  # type: ignore[arg-type]
-        confidence   = 0.75,
+        confidence   = 0.85,
         attack_type  = attack_type,
         summary      = summary,
-        evidence     = [desc] if desc else [],
+        evidence     = evidence,
         recommended_action = f"respond to {attack_type}",
         recommended_playbook = PLAYBOOK_BY_ATTACK.get(attack_type),
+        affected_service = affected_service,
         source_ip    = source_ip,
         ts           = _now_iso(),
     )
@@ -979,67 +981,82 @@ def _grafana_to_alert(payload: dict) -> SecurityAlert | None:
 
 @app.post("/grafana-webhook")
 async def grafana_webhook(request: Request) -> dict[str, Any]:
+    """
+    Receives Grafana alertmanager-compatible webhook (no auth — internal network only).
+    Processes ALL firing alerts in the payload, one SOAR case per alert.
+    """
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid JSON")
 
-    alert = _grafana_to_alert(payload)
-    if not alert:
-        return {"status": "ignored", "reason": "no firing alerts or resolved"}
+    firing_data = [a for a in payload.get("alerts", []) if a.get("status") == "firing"]
+    if not firing_data:
+        logger.info(json.dumps({"event_type": "grafana_webhook_noop", "total": len(payload.get("alerts", []))}))
+        return {"processed": 0, "message": "no firing alerts"}
 
-    alert_hash = _hash_alert(alert)
-    case_id    = _case_id(alert_hash)
-    attack     = _first_known_attack(alert)
-    playbook   = _select_playbook(alert, attack)
-    target     = _infer_target(alert, attack)
-    eligible, reason = _should_execute(alert)
+    results: list[dict[str, Any]] = []
+    for alert_data in firing_data:
+        alert = _grafana_to_alert(alert_data)
+        if alert is None:
+            continue
 
-    status: Literal["skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
-    action = "no action"
-    error:  str | None = None
-    steps:  list[PlaybookStep] = []
+        fingerprint = alert_data.get("fingerprint", "")
+        alert_hash = fingerprint or _hash_alert(alert)
+        case_id    = _case_id(alert_hash)
+        attack     = _first_known_attack(alert)
+        playbook   = _select_playbook(alert, attack)
+        target     = _infer_target(alert, attack)
+        eligible, reason = _should_execute(alert)
 
-    if not eligible:
-        status = "skipped"
-    else:
-        try:
-            action, steps = await _run_steps(
-                playbook    = playbook,
-                context     = target.get("context"),
-                workload    = target.get("workload"),
-                source_ip   = alert.source_ip,
-                username    = alert.username,
-                attack_type = attack,
-                dry_run     = SOAR_DRY_RUN,
-            )
-            status = "dry_run" if SOAR_DRY_RUN else "executed"
-        except Exception as exc:
-            status = "failed"
-            error  = str(exc)
-            action = "execution failed"
+        status: Literal["skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
+        action = "no action"
+        error:  str | None = None
+        steps:  list[PlaybookStep] = []
 
-    case = CaseRecord(
-        case_id         = case_id,
-        status          = status,
-        alert_hash      = alert_hash,
-        attack_type     = attack,
-        severity        = alert.severity,
-        confidence      = alert.confidence,
-        playbook        = playbook,
-        target_context  = target.get("context"),
-        target_workload = target.get("workload"),
-        source_ip       = alert.source_ip,
-        username        = alert.username,
-        action          = action,
-        reason          = reason,
-        error           = error,
-        dry_run         = SOAR_DRY_RUN,
-        steps           = steps,
-        ts              = _now_iso(),
-    )
-    await record_case(case)
-    return {"status": status, "case_id": case_id, "playbook": playbook, "action": action}
+        if not eligible or playbook == "monitor_only":
+            status = "skipped"
+        else:
+            try:
+                action, steps = await _run_steps(
+                    playbook    = playbook,
+                    context     = target.get("context"),
+                    workload    = target.get("workload"),
+                    source_ip   = alert.source_ip,
+                    username    = alert.username,
+                    attack_type = attack,
+                    dry_run     = SOAR_DRY_RUN,
+                )
+                status = "dry_run" if SOAR_DRY_RUN else "executed"
+            except Exception as exc:
+                status = "failed"
+                error  = str(exc)
+                action = "execution failed"
+
+        case = CaseRecord(
+            case_id         = case_id,
+            status          = status,
+            alert_hash      = alert_hash,
+            attack_type     = attack,
+            severity        = alert.severity,
+            confidence      = alert.confidence,
+            playbook        = playbook,
+            target_context  = target.get("context"),
+            target_workload = target.get("workload"),
+            source_ip       = alert.source_ip,
+            username        = alert.username,
+            action          = action,
+            reason          = reason,
+            error           = error,
+            dry_run         = SOAR_DRY_RUN,
+            steps           = steps,
+            ts              = _now_iso(),
+        )
+        await record_case(case)
+        logger.warning(json.dumps({"event_type": "grafana_soar_triggered", "case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status}))
+        results.append({"case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status})
+
+    return {"processed": len(results), "cases": results}
 
 
 # ── Blocked IPs management ───────────────────────────────────────────────────

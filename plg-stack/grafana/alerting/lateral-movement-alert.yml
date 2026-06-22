@@ -39,3 +39,4 @@ groups:
           severity: critical
           category: security
           mitre: T1021.007
+          attack_type: lateral_movement
