@@ -1,6 +1,116 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: ai-analyzer
+  namespace: plg-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-analyzer
+  template:
+    metadata:
+      labels:
+        app: ai-analyzer
+    spec:
+      containers:
+        - name: ai-analyzer
+          image: ztlab/ai-analyzer:3.2.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: ai-secrets
+                optional: true
+          env:
+            - name: LOKI_URL
+              value: http://loki.plg-stack.svc.cluster.local:3100
+            - name: SOAR_WEBHOOK_URL
+              value: http://soar-engine.plg-stack.svc.cluster.local:8080/alerts
+            - name: SCORER_URL
+              value: http://security-scorer.plg-stack.svc.cluster.local:8080
+            - name: AI_PROVIDER
+              value: heuristic
+            - name: AI_ANALYZER_POLL_ENABLED
+              value: "true"
+            - name: AI_ANALYZER_POLL_INTERVAL_SECONDS
+              value: "30"
+            - name: AI_ANALYZER_MIN_ALERT_SEVERITY
+              value: medium
+            - name: AI_ANALYZER_ADMIN_APPROVAL_SEVERITY
+              value: high
+            - name: SOAR_PUBLIC_URL
+              value: "http://127.0.0.1:8091"
+            - name: PORTAL_URL
+              value: "http://127.0.0.1:18080"
+            # Keycloak — for revoke_user_sessions SOAR action
+            - name: KEYCLOAK_URL
+              value: http://keycloak.identity.svc.cluster.local:8080
+            - name: KEYCLOAK_REALM
+              value: ztlab
+            - name: KEYCLOAK_ADMIN_USER
+              value: admin
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin-secret
+                  key: password
+                  optional: true
+            # SMTP — notify admin on high/critical alert
+            - name: SMTP_HOST
+              value: "smtp.gmail.com"
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_USER
+              value: "voha2005@gmail.com"
+            - name: SMTP_FROM
+              value: "voha2005@gmail.com"
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-smtp-secret
+                  key: password
+            - name: ADMIN_EMAIL
+              value: "voha2005@gmail.com"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-analyzer
+  namespace: plg-stack
+spec:
+  selector:
+    app: ai-analyzer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: soar-engine
   namespace: plg-stack
 spec:

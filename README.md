@@ -2,7 +2,7 @@
 
 **Đồ án chuyên ngành UIT** · Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)
 
-Hệ thống lab multi-cloud minh họa Zero Trust Security cho microservices tài chính: user đăng nhập Keycloak OIDC/PKCE, gọi API Gateway qua Envoy+OPA, xử lý payment qua fraud detection, rồi thực hiện giao dịch tại Core Banking trên OpenStack bằng SPIRE mTLS. Log từ hai cloud được đưa về Loki/Grafana, AI Analyzer phát hiện bất thường, SOAR Engine thực thi phản ứng (block IP, isolate service, revoke session).
+Hệ thống lab multi-cloud minh họa Zero Trust Security cho microservices tài chính: user đăng nhập Keycloak OIDC/PKCE, gọi API Gateway qua Envoy+OPA, xử lý payment qua fraud detection, rồi thực hiện giao dịch tại Core Banking trên OpenStack bằng SPIRE mTLS. Log từ hai cloud được đưa về PLG Stack (Promtail → Loki → Grafana), Grafana alert rules phát hiện tấn công và gửi email cảnh báo admin.
 
 ---
 
@@ -18,10 +18,9 @@ User (browser)      │                                                      │
   │                 │      │ cross-cloud SPIRE mTLS                        │
   │                 │      └──────────────────────────────────────────────►│── OpenStack K3s
   │                 │                                                       │      core-banking
-  │                 │  Promtail → Loki → Grafana (8 dashboards)            │      account-service
-  │                 │                       │ alert → SOAR → email admin   │      transaction-service
-  │                 │  security-scorer (Redis anomaly score)                │
-  │                 │  ai-analyzer (heuristic + OpenAI)                    │
+  │                 │  Promtail → Loki → Grafana (5 dashboards)            │      account-service
+  │                 │                       │ 4 alert rules → email admin  │      transaction-service
+  │                 │                       │ (phản ứng thủ công bởi admin)│
   │                 └──────────────────────────────────────────────────────┘
 ```
 
@@ -29,8 +28,8 @@ User (browser)      │                                                      │
 - **Identity:** Keycloak OIDC, SPIFFE/SPIRE X.509 SVIDs
 - **Policy:** Envoy sidecar + OPA (ext_authz gRPC, 3 policies: zta, fraud_gate, cross_cloud)
 - **Services:** FastAPI microservices (K3s K8s), Redis, PostgreSQL
-- **Observability:** Promtail → Loki → Grafana (10 alert rules, email SMTP)
-- **Security Ops:** SOAR engine (playbooks K8s), AI Analyzer, Security Scorer
+- **Observability:** Promtail → Loki → Grafana (4 alert rules, email SMTP)
+- **Security Ops:** Grafana Alerting (LogQL), email contact point, phản ứng thủ công bởi admin
 
 ---
 
@@ -85,8 +84,6 @@ bash scripts/run-demo.sh
 | API Gateway | http://127.0.0.1:18080 | JWT Bearer |
 | Keycloak Admin | http://127.0.0.1:8180 | admin / ztlab-admin-2026 |
 | Grafana | http://127.0.0.1:3000 | admin / ZTALab2026! |
-| SOAR Engine | http://127.0.0.1:8091 | — |
-| AI Analyzer | http://127.0.0.1:8090 | — |
 | Loki | http://127.0.0.1:13100 | — |
 | Prometheus | http://127.0.0.1:9090 | — |
 

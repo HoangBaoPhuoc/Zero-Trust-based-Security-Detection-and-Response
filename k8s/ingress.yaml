@@ -1,0 +1,118 @@
+# Traefik IngressRoute — expose key services via HTTP
+# Access via SSH tunnel: ssh -L 8080:10.10.1.10:80 -J ubuntu@<BASTION> ubuntu@10.10.1.10 -N
+# Then: api-gateway  → curl -H 'Host: api.ztlab.local' http://localhost:8080/health
+#        grafana      → curl -H 'Host: grafana.ztlab.local' http://localhost:8080
+#        keycloak     → curl -H 'Host: keycloak.ztlab.local' http://localhost:8080
+
+---
+# api-gateway — financial namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: api-gateway
+  namespace: financial
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`api.ztlab.local`)
+      kind: Rule
+      services:
+        - name: api-gateway
+          port: 8080
+---
+# Grafana — plg-stack namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: grafana
+  namespace: plg-stack
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`grafana.ztlab.local`)
+      kind: Rule
+      services:
+        - name: grafana
+          port: 3000
+---
+# Keycloak — identity namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: keycloak
+  namespace: identity
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`keycloak.ztlab.local`)
+      kind: Rule
+      services:
+        - name: keycloak
+          port: 8080
+---
+# Keycloak localhost fallback — identity namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: keycloak-localhost
+  namespace: identity
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`localhost`)
+      kind: Rule
+      services:
+        - name: keycloak
+          port: 8080
+---
+# AI Analyzer — plg-stack namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: ai-analyzer
+  namespace: plg-stack
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`ai.ztlab.local`)
+      kind: Rule
+      services:
+        - name: ai-analyzer
+          port: 8080
+---
+# SOAR Engine — plg-stack namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: soar-engine
+  namespace: plg-stack
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`soar.ztlab.local`)
+      kind: Rule
+      services:
+        - name: soar-engine
+          port: 8080
+---
+# Prometheus — monitoring namespace
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`prometheus.ztlab.local`)
+      kind: Rule
+      services:
+        - name: prometheus
+          port: 9090

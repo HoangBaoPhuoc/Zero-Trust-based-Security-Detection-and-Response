@@ -123,6 +123,7 @@
     }
     .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
     .card-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+    .card-subtitle { font-size: 11px; color: var(--text3); margin-top: 2px; }
 
     /* Grid */
     .grid { display: grid; gap: 16px; }
@@ -188,6 +189,8 @@
     .btn-primary:hover { background: var(--accent2); border-color: var(--accent2); color: #fff; }
     .btn-green { background: rgba(34,197,94,.15); color: var(--green); border-color: rgba(34,197,94,.3); }
     .btn-green:hover { background: rgba(34,197,94,.25); }
+    .btn-yellow { background: rgba(234,179,8,.12); color: var(--yellow); border-color: rgba(234,179,8,.35); }
+    .btn-yellow:hover { background: rgba(234,179,8,.22); }
     .btn-danger { background: rgba(239,68,68,.1); color: var(--red); border-color: rgba(239,68,68,.3); }
     .btn-sm { padding: 5px 10px; font-size: 12px; }
     .btn-lg { padding: 12px 24px; font-size: 15px; }
@@ -260,18 +263,21 @@
       </a>
       {% endif %}
       <a href="/security" class="nav-item {% if page=='security' %}active{% endif %}">
-        <span class="nav-icon">🔴</span> SOAR & Threats
+        <span class="nav-icon">🔴</span> Security
       </a>
       <a href="/scenarios" class="nav-item {% if page=='scenarios' %}active{% endif %}">
         <span class="nav-icon">⚔</span> Kịch bản demo
       </a>
       {% endif %}
       <div class="nav-section" style="margin-top:8px">Monitoring</div>
+      <a href="/monitor" class="nav-item {% if page=='monitor' %}active{% endif %}">
+        <span class="nav-icon">🖥</span> System Monitor
+      </a>
       <a href="http://grafana.ztlab.local:8080/d/ztlab-full-logs/full-logs" target="_blank" class="nav-item">
         <span class="nav-icon">📊</span> Grafana Logs
       </a>
-      <a href="http://grafana.ztlab.local:8080/d/ztlab-soar/soar-dashboard" target="_blank" class="nav-item">
-        <span class="nav-icon">🚨</span> SOAR Dashboard
+      <a href="http://grafana.ztlab.local:8080/alerting/list" target="_blank" class="nav-item">
+        <span class="nav-icon">🚨</span> Alert Rules
       </a>
     </nav>
 

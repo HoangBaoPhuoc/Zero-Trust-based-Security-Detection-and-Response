@@ -71,6 +71,11 @@ spec:
               value: "http://account-service.financial.svc.cluster.local:8080"
             - name: TRANSACTION_SERVICE_URL
               value: "http://transaction-service.financial.svc.cluster.local:8080"
+            - name: CORE_BANKING_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: core-banking-integrity-secret
+                  key: shared-secret
           readinessProbe:
             httpGet:
               path: /health
@@ -161,6 +166,17 @@ spec:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/account-service"
     spec:
       serviceAccountName: account-service
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: account-service
           image: ztlab/account-service:1.0.0
@@ -205,6 +221,37 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/aws/account-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -219,6 +266,9 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+    - name: envoy-inbound
+      port: 15006
+      targetPort: 15006
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -242,6 +292,17 @@ spec:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/transaction-service"
     spec:
       serviceAccountName: transaction-service
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
       containers:
         - name: transaction-service
           image: ztlab/transaction-service:1.0.0
@@ -282,6 +343,37 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/aws/transaction-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -296,3 +388,6 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
+    - name: envoy-inbound
+      port: 15006
+      targetPort: 15006
