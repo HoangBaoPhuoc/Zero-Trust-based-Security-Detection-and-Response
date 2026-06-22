@@ -38,14 +38,6 @@ spec:
           protocol: TCP
         - port: 6379
           protocol: TCP
-    # security-scorer và soar-engine trong plg-stack cần đọc Redis DB1/DB2
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: plg-stack
-      ports:
-        - port: 6379
-          protocol: TCP
   egress:
     - to:
         - namespaceSelector:
@@ -221,32 +213,4 @@ spec:
               kubernetes.io/metadata.name: identity
       ports:
         - port: 8080
-          protocol: TCP
-    # security-scorer và soar-engine truy cập Redis financial (DB1, DB2)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: financial
-      ports:
-        - port: 6379
-          protocol: TCP
-
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: ai-analyzer-provider-egress
-  namespace: plg-stack
-spec:
-  podSelector:
-    matchLabels:
-      app: ai-analyzer
-  policyTypes:
-    - Egress
-  egress:
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-      ports:
-        - port: 443
           protocol: TCP

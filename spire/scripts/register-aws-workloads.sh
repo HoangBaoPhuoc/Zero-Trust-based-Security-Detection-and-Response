@@ -18,18 +18,21 @@ register() {
 		-ttl 3600 || true
 }
 
-register "spiffe://ztlab.local/aws/payment-service" \
-	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
-	"financial" "payment-service"
+# Each service needs one entry per node agent.
+# Node agent IDs are stable per EC2 instance (k8s_psat uses node UID).
+# Run: kubectl -n spire exec deploy/spire-server -- spire-server agent list
+# to get the current agent SPIFFE IDs for this cluster.
+AGENT_GENERIC="spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent"
+AGENT_NODE1="spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/3548edb2-d8fb-46e0-a55d-ffd3a4b170c2"
+AGENT_NODE2="spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/ce6be52e-c114-44fd-a9cc-88a4a5801aef"
 
-register "spiffe://ztlab.local/aws/fraud-detection" \
-	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
-	"financial" "fraud-detection"
-
-register "spiffe://ztlab.local/aws/notification-service" \
-	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
-	"financial" "notification-service"
-
-register "spiffe://ztlab.local/aws/api-gateway" \
-	"spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent" \
-	"financial" "api-gateway"
+for AGENT in "$AGENT_GENERIC" "$AGENT_NODE1" "$AGENT_NODE2"; do
+	register "spiffe://ztlab.local/aws/api-gateway"          "$AGENT" "financial" "api-gateway"
+	register "spiffe://ztlab.local/aws/payment-service"      "$AGENT" "financial" "payment-service"
+	register "spiffe://ztlab.local/aws/fraud-detection"      "$AGENT" "financial" "fraud-detection"
+	register "spiffe://ztlab.local/aws/notification-service" "$AGENT" "financial" "notification-service"
+	register "spiffe://ztlab.local/aws/core-banking"         "$AGENT" "financial" "core-banking"
+	register "spiffe://ztlab.local/aws/account-service"      "$AGENT" "financial" "account-service"
+	register "spiffe://ztlab.local/aws/transaction-service"  "$AGENT" "financial" "transaction-service"
+	register "spiffe://ztlab.local/aws/web-portal"           "$AGENT" "financial" "web-portal"
+done

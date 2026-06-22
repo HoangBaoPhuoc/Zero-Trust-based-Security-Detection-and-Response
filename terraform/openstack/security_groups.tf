@@ -24,6 +24,17 @@ resource "openstack_networking_secgroup_rule_v2" "os_dmz_ingress_ssh_from_aio" {
   security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_dmz.id
 }
 
+resource "openstack_networking_secgroup_rule_v2" "os_dmz_ingress_wireguard" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "udp"
+  port_range_min    = 51820
+  port_range_max    = 51820
+  remote_ip_prefix  = "0.0.0.0/0"
+  security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_dmz.id
+  description       = "WireGuard cross-cloud VPN from aws_gateway"
+}
+
 # Private Security Group 
 resource "openstack_networking_secgroup_v2" "neutron_sg_os_private" {
   name        = "neutron-sg-os-private"
@@ -77,7 +88,7 @@ resource "openstack_networking_secgroup_rule_v2" "os_private_egress_loki" {
   port_range_max    = 3100
   remote_ip_prefix  = "10.10.2.10/32"
   security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_private.id
-  description       = "Loki log collection (via WireGuard tunnel)"
+  description       = "Loki log collection (via WireGuard cross-cloud tunnel)"
 }
 
 resource "openstack_networking_secgroup_rule_v2" "os_private_egress_spire" {
@@ -193,7 +204,7 @@ resource "openstack_networking_secgroup_rule_v2" "os_identity_egress_loki" {
   port_range_max    = 3100
   remote_ip_prefix  = "10.10.2.10/32"
   security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_identity.id
-  description       = "Loki log collection (via WireGuard tunnel)"
+  description       = "Loki log collection (via WireGuard cross-cloud tunnel)"
 }
 
 resource "openstack_networking_secgroup_rule_v2" "os_identity_egress_kubelet_attestation" {

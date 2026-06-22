@@ -31,9 +31,9 @@
     <div class="stat-sub">Tổng giao dịch gửi</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Anomaly Score</div>
-    <div class="stat-value" id="anomaly-score" style="color:var(--green)">—</div>
-    <div class="stat-sub" id="anomaly-label">15 phút gần nhất</div>
+    <div class="stat-label">Grafana Alerts</div>
+    <div class="stat-value" style="color:var(--green);font-size:14px">4 rules</div>
+    <div class="stat-sub"><a href="http://grafana.ztlab.local:8080/alerting/list" target="_blank" style="color:var(--accent)">Xem Alerting</a></div>
   </div>
 </div>
 
@@ -90,11 +90,11 @@
         <div style="display:flex;align-items:center;gap:8px">
           <span style="font-size:16px">📊</span>
           <div>
-            <div style="font-size:13px;font-weight:600">Anomaly Scoring</div>
-            <div style="font-size:11px;color:var(--text3)">Redis · 15 phút window</div>
+            <div style="font-size:13px;font-weight:600">Grafana Alerting</div>
+            <div style="font-size:11px;color:var(--text3)">4 alert rules · LogQL</div>
           </div>
         </div>
-        <span class="badge badge-green" id="scorer-badge">Active</span>
+        <span class="badge badge-green">Active</span>
       </div>
     </div>
     <div style="margin-top:16px;padding:10px;background:var(--surface2);border-radius:8px;font-size:11px;color:var(--text3);line-height:1.6">
@@ -275,27 +275,7 @@ async function loadTransactions() {
   document.getElementById('txn-loading').style.display = 'none';
 }
 
-async function loadAnomalyScore() {
-  try {
-    const r = await fetch('/api/security/score');
-    const d = await r.json();
-    if (d.score !== undefined) {
-      const score = d.score;
-      const el = document.getElementById('anomaly-score');
-      el.textContent = score;
-      el.style.color = score >= 70 ? 'var(--red)' : score >= 40 ? 'var(--yellow)' : 'var(--green)';
-      const patterns = Object.keys(d.breakdown || {});
-      document.getElementById('anomaly-label').textContent =
-        patterns.length ? '⚠ ' + patterns.join(', ') : 'Không phát hiện bất thường';
-      if (score >= 70) document.getElementById('scorer-badge').className = 'badge badge-red';
-      else if (score >= 40) document.getElementById('scorer-badge').className = 'badge badge-yellow';
-    }
-  } catch(_) {}
-}
-
 loadAccounts();
-loadAnomalyScore();
-setInterval(loadAnomalyScore, 60000);
 setInterval(() => { if (myAccounts.length) loadTransactions(); }, 30000);
 </script>
 {% endblock %}

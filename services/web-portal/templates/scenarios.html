@@ -26,38 +26,10 @@
   .v-allow { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.2); }
   .v-block { background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
 
-  .score-widget {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
-    padding: 16px; margin-bottom: 20px; display: flex; align-items: center; gap: 20px;
-  }
-  .score-circle {
-    width: 80px; height: 80px; border-radius: 50%; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 24px; font-weight: 800;
-    border: 3px solid var(--green);
-    background: rgba(34,197,94,.08);
-    color: var(--green);
-  }
-  .score-circle.medium { border-color: var(--yellow); background: rgba(245,158,11,.08); color: var(--yellow); }
-  .score-circle.high { border-color: var(--red); background: rgba(239,68,68,.08); color: var(--red); }
 </style>
 {% endblock %}
 
 {% block content %}
-
-<!-- Anomaly Score Widget -->
-<div class="score-widget" id="score-widget">
-  <div class="score-circle" id="score-circle">—</div>
-  <div>
-    <div style="font-size:15px;font-weight:700">Anomaly Score (Redis 15 phút)</div>
-    <div style="font-size:12px;color:var(--text3);margin-top:4px" id="score-patterns">Đang tải...</div>
-    <div style="font-size:11px;color:var(--text3);margin-top:4px">Inject các kịch bản bên dưới → score sẽ tăng lên → quan sát trên Grafana</div>
-    <div style="margin-top:8px;display:flex;gap:8px">
-      <a href="http://grafana.ztlab.local:8080" target="_blank" class="btn btn-sm">📊 Grafana</a>
-      <button class="btn btn-sm" onclick="loadScore()">🔄 Refresh Score</button>
-    </div>
-  </div>
-</div>
 
 <!-- ── Nhóm 1: Zero Trust enforcement ────────────── -->
 <div class="section-title">🛡 Kiểm soát truy cập — Zero Trust enforcement (mong đợi: BỊ CHẶN)</div>
@@ -68,7 +40,7 @@
       <span class="scenario-title">Không có JWT</span>
       <span class="mitre-tag">T1078</span>
     </div>
-    <div class="scenario-desc">Gọi POST /payments không có Authorization header. API Gateway chặn ngay — event được push vào Redis Scorer.</div>
+    <div class="scenario-desc">Gọi POST /payments không có Authorization header. API Gateway chặn ngay — Envoy log ghi lại trong Loki.</div>
     <span class="expected-tag">Expected: HTTP 401/403 — missing bearer token</span>
     <button class="btn btn-danger run-btn" onclick="runScenario('no_jwt')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-no-jwt"></div>
@@ -90,7 +62,7 @@
       <span class="scenario-title">Lateral Movement — SVID giả</span>
       <span class="mitre-tag">T1021</span>
     </div>
-    <div class="scenario-desc">Gọi endpoint nội bộ với SVID giả <code>spiffe://evil.corp/attacker</code> → bị chặn. Event lateral_movement → Redis Scorer.</div>
+    <div class="scenario-desc">Gọi endpoint nội bộ với SVID giả <code>spiffe://evil.corp/attacker</code> → bị chặn. OPA log ghi lại — kích hoạt Grafana alert "Lateral Movement".</div>
     <span class="expected-tag">Expected: HTTP 403/404 — internal path blocked</span>
     <button class="btn btn-danger run-btn" onclick="runScenario('lateral_movement')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-lateral-movement"></div>
@@ -101,7 +73,7 @@
       <span class="scenario-title">Fraud Gate Block</span>
       <span class="mitre-tag">T1078.002</span>
     </div>
-    <div class="scenario-desc">Chuyển 500,000,000 ₫ qua kênh <code>tor</code>. Fraud score=75 (500M: +55, tor: +15) → fraud_gate_bypass event → Redis Scorer.</div>
+    <div class="scenario-desc">Chuyển 500,000,000 ₫ qua kênh <code>tor</code>. Fraud score=75 (500M: +55, tor: +15) → OPA từ chối → Grafana alert "Fraud Gate Bypass".</div>
     <span class="expected-tag">Expected: HTTP 403 – fraud_block</span>
     <button class="btn btn-danger run-btn" onclick="runScenario('fraud_gate')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-fraud-gate"></div>
@@ -137,8 +109,8 @@
 
 </div>
 
-<!-- ── Nhóm 3: Redis Scorer Injection ─────────────────────────────────── -->
-<div class="section-title">📊 Inject Events → Redis Scorer (15 phút window) — Quan sát trên Grafana</div>
+<!-- ── Nhóm 3: Loki Log Injection ─────────────────────────────────── -->
+<div class="section-title">📊 Inject Logs → Loki — Kích hoạt Grafana Alert Rules</div>
 <div class="scenario-grid">
 
   <div class="scenario-card" id="card-inject-brute-force">
@@ -146,9 +118,9 @@
       <span class="scenario-title">Brute Force Login (inject)</span>
       <span class="mitre-tag">T1110.001</span>
     </div>
-    <div class="scenario-desc">Inject 21 log "login thất bại + brute_force_detected" vào Redis Scorer. Pattern brute_force → score tăng ~30 điểm.</div>
-    <span class="expected-tag">Expected: anomaly score tăng, pattern=brute_force</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_brute_force')">▶ Inject vào Scorer</button>
+    <div class="scenario-desc">Inject 20 log response_code=401 vào Loki stream <code>{job="envoy-access"}</code>. Grafana alert rule đánh giá mỗi 1 phút → fire ngay.</div>
+    <span class="expected-tag">Expected: Grafana alert "Brute Force Login" → Firing trong ~1 phút</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_brute_force')">▶ Inject vào Loki</button>
     <div class="result-box" id="result-inject-brute-force"></div>
   </div>
 
@@ -157,9 +129,9 @@
       <span class="scenario-title">Port Scan (inject)</span>
       <span class="mitre-tag">T1046</span>
     </div>
-    <div class="scenario-desc">Inject log "nmap SYN scan 1024 ports". Pattern port_scan → score +25 điểm. Thấy trên Grafana dashboard.</div>
-    <span class="expected-tag">Expected: anomaly score tăng, pattern=port_scan</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_port_scan')">▶ Inject vào Scorer</button>
+    <div class="scenario-desc">Inject log "nmap SYN scan 1024 ports" vào Loki stream <code>{job="security-events"}</code>. Quan sát trong Grafana Explore.</div>
+    <span class="expected-tag">Expected: log visible in Grafana Explore → {job="security-events"}</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_port_scan')">▶ Inject vào Loki</button>
     <div class="result-box" id="result-inject-port-scan"></div>
   </div>
 
@@ -168,9 +140,9 @@
       <span class="scenario-title">Data Exfiltration (inject)</span>
       <span class="mitre-tag">T1041</span>
     </div>
-    <div class="scenario-desc">Inject log response bất thường (8MB từ /accounts/history). Pattern data_exfil → score +35 điểm.</div>
-    <span class="expected-tag">Expected: anomaly score tăng, pattern=data_exfil</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_exfiltration')">▶ Inject vào Scorer</button>
+    <div class="scenario-desc">Inject log bytes_sent=8MB vào Loki stream <code>{job="envoy-access", cloud="openstack"}</code>. Grafana alert rule phát hiện ngay.</div>
+    <span class="expected-tag">Expected: Grafana alert "Data Exfiltration Suspect" → Firing trong ~1 phút</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_exfiltration')">▶ Inject vào Loki</button>
     <div class="result-box" id="result-inject-exfiltration"></div>
   </div>
 
@@ -179,9 +151,9 @@
       <span class="scenario-title">Cryptomining (inject)</span>
       <span class="mitre-tag">T1496</span>
     </div>
-    <div class="scenario-desc">Inject log "xmrig stratum+tcp mining pool connected". Pattern cryptomining → score +45 điểm. Nghiêm trọng nhất.</div>
-    <span class="expected-tag">Expected: anomaly score tăng mạnh, pattern=cryptomining</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cryptomining')">▶ Inject vào Scorer</button>
+    <div class="scenario-desc">Inject log "xmrig mining pool connected" vào Loki stream <code>{job="security-events"}</code>. Quan sát trong Grafana Explore.</div>
+    <span class="expected-tag">Expected: log visible in Grafana Explore → {job="security-events"}</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cryptomining')">▶ Inject vào Loki</button>
     <div class="result-box" id="result-inject-cryptomining"></div>
   </div>
 
@@ -190,9 +162,9 @@
       <span class="scenario-title">SQL Injection probe</span>
       <span class="mitre-tag">T1190</span>
     </div>
-    <div class="scenario-desc">Gửi payload SQL injection thật <code>' OR '1'='1</code> + inject log exploit_probe. HTTP 422 từ backend + score +35.</div>
-    <span class="expected-tag">Expected: HTTP 422 + anomaly score exploit_probe</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('sqli_probe')">▶ Chạy &amp; Inject</button>
+    <div class="scenario-desc">Gửi payload SQL injection thật <code>' OR '1'='1</code>. FastAPI/Pydantic validation reject input — backend không bị ảnh hưởng.</div>
+    <span class="expected-tag">Expected: HTTP 422 Unprocessable Entity (input validation)</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('sqli_probe')">▶ Chạy kịch bản</button>
     <div class="result-box" id="result-sqli-probe"></div>
   </div>
 
@@ -201,9 +173,9 @@
       <span class="scenario-title">Credential Stuffing (inject)</span>
       <span class="mitre-tag">T1078.001</span>
     </div>
-    <div class="scenario-desc">Inject log "25 username × 5 password = 125 lần trong 60s". Pattern cred_stuffing → score +30 điểm.</div>
-    <span class="expected-tag">Expected: anomaly score tăng, pattern=cred_stuffing</span>
-    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cred_stuffing')">▶ Inject vào Scorer</button>
+    <div class="scenario-desc">Inject log "25 username × 5 password = 125 lần" vào Loki stream <code>{job="security-events"}</code>. Quan sát trong Grafana Explore.</div>
+    <span class="expected-tag">Expected: log visible in Grafana Explore → {job="security-events"}</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cred_stuffing')">▶ Inject vào Loki</button>
     <div class="result-box" id="result-inject-cred-stuffing"></div>
   </div>
 
@@ -221,27 +193,6 @@
 
 {% block scripts %}
 <script>
-async function loadScore() {
-  try {
-    const r = await fetch('/api/security/score');
-    const d = await r.json();
-    if (d.score !== undefined) {
-      const sc = d.score;
-      const circle = document.getElementById('score-circle');
-      circle.textContent = sc;
-      circle.className = 'score-circle' + (sc >= 70 ? ' high' : sc >= 40 ? ' medium' : '');
-      const patterns = Object.entries(d.breakdown || {});
-      if (patterns.length > 0) {
-        document.getElementById('score-patterns').innerHTML = patterns.map(([k,v]) =>
-          `<span class="badge badge-${v.contribution>20?'red':'yellow'}" style="margin-right:4px">${k}: ${v.count}x (+${v.contribution})</span>`
-        ).join('');
-      } else {
-        document.getElementById('score-patterns').textContent = 'Không phát hiện pattern bất thường trong 15 phút qua';
-      }
-    }
-  } catch(e) {}
-}
-
 async function runScenario(scenarioId) {
   const domId = scenarioId.replace(/_/g, '-');
   const card = document.getElementById('card-' + domId);
@@ -256,8 +207,6 @@ async function runScenario(scenarioId) {
     const resp = await fetch('/api/scenarios/' + scenarioId + '/run', {method:'POST'});
     const data = await resp.json();
     renderResult(scenarioId, data, card, resultBox);
-    // Refresh score after injection
-    setTimeout(loadScore, 2000);
   } catch(e) {
     if (resultBox) resultBox.innerHTML = '<span class="result-block">Lỗi kết nối: ' + e.message + '</span>';
     if (card) card.className = card.className.replace('running','blocked');
@@ -311,7 +260,7 @@ function renderResult(id, data, card, box) {
     html += `<span style="color:var(--text3)">← ${String(data.expected).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>\n\n`;
   }
   if (data.result === 'injected') {
-    html += `<span class="result-ok">✓ ${data.events||1} event(s) đã được inject vào Redis Scorer\n→ Anomaly score sẽ tăng trong ~30 giây tới</span>`;
+    html += `<span class="result-ok">✓ ${data.events||1} log đã inject vào Loki\n→ Kiểm tra Grafana Alerting hoặc Explore</span>`;
   } else {
     const payload = data.result || data;
     html += '<pre>' + fmtJson(payload) + '</pre>';
@@ -320,7 +269,5 @@ function renderResult(id, data, card, box) {
   box.innerHTML = html;
 }
 
-loadScore();
-setInterval(loadScore, 30000);
 </script>
 {% endblock %}

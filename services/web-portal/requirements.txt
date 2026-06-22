@@ -6,3 +6,4 @@ jinja2==3.1.4
 itsdangerous==2.2.0
 python-multipart==0.0.9
 starlette==0.37.2
+redis[asyncio]==5.0.8

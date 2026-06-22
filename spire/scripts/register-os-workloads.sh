@@ -30,6 +30,3 @@ register "spiffe://ztlab.local/openstack/transaction-service" \
 	"spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent" \
 	"financial" "transaction-service"
 
-register "spiffe://ztlab.local/openstack/identity-service" \
-	"spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent" \
-	"identity" "identity-service"

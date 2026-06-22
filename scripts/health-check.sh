@@ -120,7 +120,7 @@ check_files() {
   [[ -f "$INVENTORY_FILE" ]] && pass "inventory exists: $INVENTORY_FILE" || fail "inventory missing: $INVENTORY_FILE"
   [[ -f "$ROOT_DIR/.env.ai" ]] && pass ".env.ai exists and is gitignored" || warn ".env.ai missing; AI/SOAR will use defaults/placeholders"
   [[ -f "$ROOT_DIR/.env" ]] && pass ".env exists and is gitignored" || warn ".env missing; Terraform/Ansible may need env vars"
-  [[ -f "$HOME/.ssh/zta-siem-soar-key" ]] && pass "SSH key exists: ~/.ssh/zta-siem-soar-key" || warn "SSH key missing: ~/.ssh/zta-siem-soar-key"
+  [[ -f "$HOME/.ssh/ztlab-key" ]] && pass "SSH key exists: ~/.ssh/ztlab-key" || warn "SSH key missing: ~/.ssh/ztlab-key"
 }
 
 check_commands() {
@@ -153,7 +153,7 @@ check_inventory() {
     return
   fi
   run_warn_check "ansible inventory parses" ansible-inventory -i "$INVENTORY_FILE" --graph
-  for host in aws_gateway aws_bastion aws_k3s_master aws_siem os_gateway os_k3s_master; do
+  for host in aws_gateway aws_bastion aws_k3s_master aws_loki os_gateway os_k3s_master; do
     if ansible-inventory -i "$INVENTORY_FILE" --host "$host" >/dev/null 2>&1; then
       pass "inventory host present: $host"
     else
