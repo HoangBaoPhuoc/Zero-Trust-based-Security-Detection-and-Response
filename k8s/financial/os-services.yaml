@@ -52,7 +52,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: core-banking
-          image: ztlab/core-banking:1.1.0
+          image: ztlab/core-banking:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:

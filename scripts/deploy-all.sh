@@ -249,6 +249,18 @@ create_ai_secret() {
     --from-literal=ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-}"
 }
 
+create_smtp_secret() {
+  if kaws get secret grafana-smtp-secret -n plg-stack >/dev/null 2>&1; then
+    log "grafana-smtp-secret already exists"
+    return
+  fi
+  # SMTP_PASS may be empty in lab — secret is created anyway so pods start cleanly.
+  # ai-analyzer and soar-engine reference this secret with optional: true.
+  kaws create secret generic grafana-smtp-secret -n plg-stack \
+    --from-literal=password="${SMTP_PASS:-}"
+  ok "grafana-smtp-secret created"
+}
+
 create_core_banking_integrity_secret() {
   local secret_value
   if kaws get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
@@ -315,6 +327,7 @@ deploy_observability_response() {
 
   create_keycloak_admin_secret
   create_ai_secret
+  create_smtp_secret
 
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki-configmap.yaml"
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki.yaml"

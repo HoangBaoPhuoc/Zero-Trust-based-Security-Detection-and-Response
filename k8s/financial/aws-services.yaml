@@ -58,7 +58,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: api-gateway
-          image: ztlab/api-gateway:1.2.0
+          image: ztlab/api-gateway:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -170,7 +170,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: payment-service
-          image: ztlab/payment-service:1.2.0
+          image: ztlab/payment-service:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -384,7 +384,7 @@ spec:
             type: DirectoryOrCreate
       containers:
         - name: notification-service
-          image: ztlab/notification-service:2.0.0
+          image: ztlab/notification-service:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
