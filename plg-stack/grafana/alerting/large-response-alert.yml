@@ -43,3 +43,4 @@ groups:
           category: security
           gap: gap1
           mitre: T1041
+          attack_type: large_response

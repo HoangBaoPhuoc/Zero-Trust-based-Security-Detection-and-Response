@@ -40,3 +40,4 @@ groups:
           category: security
           gap: gap2
           mitre: T1078.004
+          attack_type: fraud_gate_bypass

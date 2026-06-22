@@ -39,3 +39,4 @@ groups:
           severity: high
           category: security
           mitre: T1110.001
+          attack_type: brute_force
