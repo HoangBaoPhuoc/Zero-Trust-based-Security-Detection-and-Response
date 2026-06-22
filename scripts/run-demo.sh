@@ -249,12 +249,10 @@ run_attack() {
 brute_force_demo() {
   attack "Brute force — 10 invalid JWT requests"
   for i in $(seq 1 10); do
-    python3 - "$GW_URL" "$GW_HOST" "$i" <<'PY' 2>/dev/null
+    python3 - "$GW_URL" "$i" <<'PY' 2>/dev/null
 import sys, urllib.request, json
-url, host, i = sys.argv[1:]
+url, i = sys.argv[1:]
 headers = {"Content-Type":"application/json", "Authorization":"Bearer bad.token.here"}
-if host:
-    headers["Host"] = host
 req = urllib.request.Request(f"{url}/payments",
     data=json.dumps({"from_account":"x","to_account":"y","amount":1}).encode(),
     headers=headers,
@@ -306,27 +304,29 @@ run_attack_scenarios() {
 
 print_soar_summary() {
   echo ""
-  log "─── SOAR Incidents ───"
+  log "─── SOAR Cases ───"
   python3 - "$SOAR_URL" "$SOAR_API_TOKEN" <<'PY' 2>/dev/null
 import json, sys, urllib.request
 soar_url, token = sys.argv[1:]
 try:
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    req = urllib.request.Request(f"{soar_url}/incidents", headers=headers)
+    req = urllib.request.Request(f"{soar_url}/cases", headers=headers)
     r = urllib.request.urlopen(req, timeout=5)
-    incidents = json.loads(r.read().decode())
-    print(f"  Total incidents: {len(incidents)}")
-    for i in incidents[-6:]:
-        status=i.get('status','?')
-        name=i.get('alert_name','?')[:35]
-        sev=i.get('severity','?')
-        print(f"  [{status:8}] {name:35} sev={sev}")
+    cases = json.loads(r.read().decode())
+    print(f"  Total cases: {len(cases)}")
+    for c in cases[-6:]:
+        status   = c.get('status','?')
+        attack   = c.get('attack_type','?')[:30]
+        sev      = c.get('severity','?')
+        playbook = c.get('playbook','?')[:25]
+        print(f"  [{status:8}] {attack:30} sev={sev:8} playbook={playbook}")
 except Exception as e:
     print(f"  (Cannot reach SOAR: {e})")
 PY
   echo ""
-  echo -e "  ${CYAN}SOAR incidents: http://127.0.0.1:8091/incidents${NC}"
-  echo -e "  ${CYAN}Grafana AI SIEM SOAR: http://127.0.0.1:3000/d/ztlab-ai-siem-soar${NC}"
+  echo -e "  ${CYAN}SOAR cases:      http://127.0.0.1:8091/cases${NC}"
+  echo -e "  ${CYAN}Grafana AI SIEM: http://127.0.0.1:3000/d/ztlab-ai-siem-soar${NC}"
+  echo -e "  ${CYAN}Web Portal:      http://127.0.0.1:18081/security${NC}"
   echo ""
 }
 
