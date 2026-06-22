@@ -22,8 +22,14 @@ spec:
             - name: http
               containerPort: 8080
           env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+                  optional: false
             - name: REDIS_URL
-              value: redis://redis.financial.svc.cluster.local:6379/1
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/1"
             - name: SCORER_WINDOW_SECONDS
               value: "900"
             - name: SCORER_INTERVAL_SECONDS
