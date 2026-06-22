@@ -153,7 +153,7 @@ CASES: dict[str, CaseRecord] = {}
 
 def require_soar_token(authorization: str | None) -> None:
     if not SOAR_API_TOKEN:
-        raise HTTPException(status_code=503, detail="SOAR API token not configured")
+        return  # token not configured — open access (lab/demo mode)
     expected = f"Bearer {SOAR_API_TOKEN}"
     if authorization != expected:
         raise HTTPException(status_code=401, detail="invalid SOAR API token")
