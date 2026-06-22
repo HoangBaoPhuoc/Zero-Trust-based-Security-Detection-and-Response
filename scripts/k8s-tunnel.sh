@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INVENTORY_FILE="${INVENTORY_FILE:-$ROOT_DIR/ansible/inventory/hosts.yml}"
 SSH_USER="${SSH_USER:-ubuntu}"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/zta-siem-soar-key}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/ztlab-key}"
 SSH_CONNECT_TIMEOUT="${SSH_CONNECT_TIMEOUT:-10}"
 SSH_COMMAND_TIMEOUT="${SSH_COMMAND_TIMEOUT:-30}"
 SYNC_KUBECONFIG_ON_UP="${SYNC_KUBECONFIG_ON_UP:-false}"
@@ -318,7 +318,7 @@ Usage: $(basename "$0") <up|down|status|verify|sync> [all|aws|openstack]
 
 Env overrides:
   INVENTORY_FILE       Path to Ansible inventory (default: ansible/inventory/hosts.yml)
-  SSH_KEY              SSH private key path (default: ~/.ssh/zta-siem-soar-key)
+  SSH_KEY              SSH private key path (default: ~/.ssh/ztlab-key)
   SSH_USER             SSH username (default: ubuntu)
   SSH_CONNECT_TIMEOUT  SSH connect timeout in seconds (default: 10)
   SSH_COMMAND_TIMEOUT  SSH command timeout in seconds (default: 30)

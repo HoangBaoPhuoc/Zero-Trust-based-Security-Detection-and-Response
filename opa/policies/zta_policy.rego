@@ -29,7 +29,7 @@ jwt_payload := payload if {
 }
 
 valid_jwt if {
-  jwt_payload.iss == "http://keycloak.ztlab.local/realms/ztlab"
+  jwt_payload.iss == "http://keycloak.ztlab.local:8180/realms/ztlab"
   jwt_payload.exp > time.now_ns() / 1000000000
 }
 
