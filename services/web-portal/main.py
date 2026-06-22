@@ -1267,3 +1267,87 @@ async def api_soar_rollback(case_id: str, request: Request):
             return JSONResponse(r.json(), status_code=r.status_code)
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.get("/monitor", response_class=HTMLResponse)
+async def monitor_page(request: Request):
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse("/login", status_code=302)
+    roles = session.get("roles", [])
+    if not any(r in roles for r in ("security-admin", "security-analyst")):
+        raise HTTPException(status_code=403, detail="Chỉ security-admin hoặc security-analyst mới được truy cập")
+    return templates.TemplateResponse("monitor.html", {
+        "request":   request,
+        "username":  session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
+        "roles":     roles,
+        "page":      "monitor",
+        "is_admin":  "security-admin" in roles,
+    })
+
+
+@app.get("/api/system/health")
+async def api_system_health(request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+
+    # Services reachable from AWS cluster (web-portal pod)
+    probes: dict[str, str] = {
+        "api-gateway":          f"{API_GATEWAY_URL}/health",
+        "fraud-detection":      f"{FRAUD_DETECTION_URL}/health",
+        "payment-service":      "http://payment-service.financial.svc.cluster.local:8080/health",
+        "notification-service": "http://notification-service.financial.svc.cluster.local:8080/health",
+        "security-scorer":      f"{SECURITY_SCORER_URL}/health",
+        "soar-engine":          f"{SOAR_ENGINE_URL}/health",
+        "loki":                 "http://loki.plg-stack.svc.cluster.local:3100/ready",
+        "grafana":              "http://grafana.plg-stack.svc.cluster.local:3000/api/health",
+        "prometheus":           "http://prometheus.plg-stack.svc.cluster.local:9090/-/ready",
+        "keycloak":             f"{KEYCLOAK_URL}/health",
+    }
+
+    async def _probe(url: str) -> dict[str, Any]:
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as c:
+                r = await c.get(url)
+            return {"status": "up" if r.status_code < 400 else "down"}
+        except Exception:
+            return {"status": "down"}
+
+    import asyncio
+    keys = list(probes.keys())
+    results_list = await asyncio.gather(*[_probe(u) for u in probes.values()])
+    services: dict[str, Any] = dict(zip(keys, results_list))
+
+    # web-portal is always up (this response proves it)
+    services["web-portal"] = {"status": "up"}
+
+    # Cross-cluster OS services — not reachable from AWS pod, show as unknown
+    for svc in ("core-banking", "account-service", "transaction-service", "spire-agent-os"):
+        services[svc] = {"status": "check"}
+
+    # Non-HTTP services (SPIRE, OPA sidecar) — not directly probeable
+    for svc in ("spire-server", "spire-agent-aws", "opa", "promtail"):
+        services[svc] = {"status": "check"}
+
+    # Redis: derive from SOAR /blocked-ips which reads Redis DB2
+    redis_info: dict[str, Any] = {"status": "down", "blocked_ips": None, "velocity_keys": None, "latency_ms": None}
+    try:
+        import time as _time
+        t0 = _time.monotonic()
+        async with httpx.AsyncClient(timeout=3.0) as c:
+            r = await c.get(f"{SOAR_ENGINE_URL}/blocked-ips", headers=_soar_headers())
+        if r.status_code < 400:
+            data = r.json()
+            redis_info = {
+                "status": "up",
+                "blocked_ips": data.get("count", 0),
+                "velocity_keys": None,
+                "latency_ms": round((_time.monotonic() - t0) * 1000),
+            }
+    except Exception:
+        pass
+    services["redis"] = redis_info
+
+    return JSONResponse({"services": services})
