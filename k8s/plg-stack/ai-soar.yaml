@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: ai-analyzer
-          image: ztlab/ai-analyzer:3.2.0
+          image: ztlab/ai-analyzer:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -73,6 +73,7 @@ spec:
                 secretKeyRef:
                   name: grafana-smtp-secret
                   key: password
+                  optional: true
             - name: ADMIN_EMAIL
               value: "voha2005@gmail.com"
           readinessProbe:
@@ -126,7 +127,7 @@ spec:
       serviceAccountName: soar-engine
       containers:
         - name: soar-engine
-          image: ztlab/soar-engine:3.2.0
+          image: ztlab/soar-engine:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
@@ -195,6 +196,7 @@ spec:
                 secretKeyRef:
                   name: grafana-smtp-secret
                   key: password
+                  optional: true
             - name: ADMIN_EMAIL
               value: "voha2005@gmail.com"
             # URL công khai của SOAR engine — admin click từ email sẽ mở URL này
