@@ -147,7 +147,11 @@ deploy_security_stack() {
 deploy_financial_infra() {
   step "Step 4: Financial infrastructure"
 
-  # Redis: AWS only (fraud-detection velocity cache)
+  # Shared ConfigMap (financial-common-config) — both clusters need it
+  kaws apply -f "$REPO_ROOT/k8s/financial/services.yaml"
+  kos apply -f "$REPO_ROOT/k8s/financial/services.yaml"
+
+  # Redis: AWS only (fraud-detection velocity cache + IP block list)
   kaws apply -f "$REPO_ROOT/k8s/financial/redis.yaml"
   wait_deployment "$AWS_CONTEXT" financial redis 120s
 
@@ -157,7 +161,10 @@ deploy_financial_infra() {
   wait_deployment "$OS_CONTEXT" financial postgres-accounts 180s
   wait_deployment "$OS_CONTEXT" financial postgres-txn 180s
 
-  ok "Redis on AWS, Postgres on OpenStack — ready"
+  # DB admin UIs: pgAdmin (port 80) + RedisInsight (port 5540) on AWS
+  kaws apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
+
+  ok "Redis on AWS, Postgres on OpenStack, DB admin UIs — ready"
 }
 
 deploy_financial_services() {
@@ -166,19 +173,23 @@ deploy_financial_services() {
   create_financial_runtime_secrets
   create_core_banking_integrity_secret
 
-  # AWS: ingress-facing + fraud + notification
+  # OpenStack: OPA + Envoy configmaps must exist before os-services.yaml pods start
+  kos apply -f "$REPO_ROOT/k8s/financial/os-security.yaml"
+
+  # AWS: ingress-facing + fraud + notification + web portal
   kaws apply -f "$REPO_ROOT/k8s/financial/aws-services.yaml"
-  for svc in api-gateway payment-service fraud-detection notification-service; do
+  kaws apply -f "$REPO_ROOT/k8s/financial/web-portal.yaml"
+  for svc in api-gateway payment-service fraud-detection notification-service web-portal; do
     wait_deployment "$AWS_CONTEXT" financial "$svc" 180s
   done
 
-  # OpenStack: core banking backend
+  # OpenStack: core banking backend (requires os-security.yaml applied above)
   kos apply -f "$REPO_ROOT/k8s/financial/os-services.yaml"
   for svc in core-banking account-service transaction-service; do
     wait_deployment "$OS_CONTEXT" financial "$svc" 180s
   done
 
-  ok "AWS services and OpenStack core banking ready"
+  ok "AWS services, web portal, and OpenStack core banking ready"
 }
 
 keycloak_admin_password() {
@@ -321,7 +332,7 @@ deploy_observability_response() {
 
   # Ensure socat relay is persistent on AWS worker (OpenStack Promtail → Loki cross-cluster)
   LOKI_CIP=$(kubectl --context "$AWS_CONTEXT" -n plg-stack get svc loki -o jsonpath='{.spec.clusterIP}')
-  ssh -o StrictHostKeyChecking=no -i ~/.ssh/zta-siem-soar-key \
+  ssh -o StrictHostKeyChecking=no -i ~/.ssh/ztlab-key \
       -J ubuntu@54.254.252.106 ubuntu@10.10.1.11 \
       "sudo tee /etc/systemd/system/loki-relay.service > /dev/null << 'EOF'
 [Unit]
