@@ -170,6 +170,10 @@ static_resources:
                           route:
                             cluster: notification_service
                         - match:
+                            prefix: "/transactions/execute"
+                          route:
+                            cluster: core_banking
+                        - match:
                             prefix: "/transactions"
                           route:
                             cluster: transaction_service
@@ -250,16 +254,22 @@ static_resources:
                     grpc_services:
                       - envoy_grpc:
                           cluster_name: spire_agent
-            validation_context_sds_secret_config:
-              name: ROOTCA
-              sds_config:
-                initial_fetch_timeout: 5s
-                api_config_source:
-                  api_type: GRPC
-                  transport_api_version: V3
-                  grpc_services:
-                    - envoy_grpc:
-                        cluster_name: spire_agent
+            combined_validation_context:
+              default_validation_context:
+                match_subject_alt_names:
+                  - safe_regex:
+                      google_re2: {}
+                      regex: "spiffe://ztlab\\.local/.*"
+              validation_context_sds_secret_config:
+                name: ROOTCA
+                sds_config:
+                  initial_fetch_timeout: 5s
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spire_agent
       load_assignment:
         cluster_name: payment_service
         endpoints:
@@ -319,16 +329,22 @@ static_resources:
                     grpc_services:
                       - envoy_grpc:
                           cluster_name: spire_agent
-            validation_context_sds_secret_config:
-              name: ROOTCA
-              sds_config:
-                initial_fetch_timeout: 10s
-                api_config_source:
-                  api_type: GRPC
-                  transport_api_version: V3
-                  grpc_services:
-                    - envoy_grpc:
-                        cluster_name: spire_agent
+            combined_validation_context:
+              default_validation_context:
+                match_subject_alt_names:
+                  - safe_regex:
+                      google_re2: {}
+                      regex: "spiffe://ztlab\\.local/.*"
+              validation_context_sds_secret_config:
+                name: ROOTCA
+                sds_config:
+                  initial_fetch_timeout: 10s
+                  api_config_source:
+                    api_type: GRPC
+                    transport_api_version: V3
+                    grpc_services:
+                      - envoy_grpc:
+                          cluster_name: spire_agent
       load_assignment:
         cluster_name: core_banking
         endpoints:
