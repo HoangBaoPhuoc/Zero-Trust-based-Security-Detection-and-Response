@@ -79,12 +79,12 @@ spec:
           protocol: TCP
         - port: 3100
           protocol: TCP
-    # Cross-cloud egress: AWS → OpenStack K3s node (core-banking NodePort)
+    # Cross-cloud egress: AWS → OpenStack core-banking NodePort via WireGuard
     - to:
         - ipBlock:
-            cidr: 10.10.1.12/32
+            cidr: 192.168.101.0/24
       ports:
-        - port: 30081
+        - port: 30080
           protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
