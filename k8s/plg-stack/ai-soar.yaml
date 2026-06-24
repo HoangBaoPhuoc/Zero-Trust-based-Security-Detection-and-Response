@@ -136,6 +136,7 @@ spec:
           envFrom:
             - secretRef:
                 name: ai-secrets
+                optional: true
           env:
             - name: LOKI_URL
               value: http://loki.plg-stack.svc.cluster.local:3100
