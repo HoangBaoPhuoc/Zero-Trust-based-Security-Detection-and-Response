@@ -319,7 +319,7 @@ data:
     
         - name: core_banking
           connect_timeout: 8s
-          type: STRICT_DNS
+          type: STATIC
           wait_for_warm_on_init: false
           transport_socket:
             name: envoy.transport_sockets.tls
@@ -359,8 +359,8 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: core-banking.financial.svc.cluster.local
-                          port_value: 15006  # k8s core-banking Envoy inbound mTLS
+                          address: 192.168.101.11  # OpenStack core-banking via WireGuard
+                          port_value: 30080         # NodePort → Envoy mTLS inbound (15006)
     
         - name: account_service
           connect_timeout: 2s
