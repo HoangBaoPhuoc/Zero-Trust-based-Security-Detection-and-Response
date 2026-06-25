@@ -12,7 +12,6 @@
 
 set -euo pipefail
 
-AI_URL="${AI_URL:-http://127.0.0.1:8090}"
 SOAR_URL="${SOAR_URL:-http://127.0.0.1:8091}"
 LOKI_URL="${LOKI_URL:-http://127.0.0.1:13100}"
 GW_URL="${GW_URL:-http://127.0.0.1:18080}"
@@ -122,15 +121,6 @@ check_services() {
     fi
   fi
 
-  if curl -fsS --max-time 5 "$AI_URL/health" >/dev/null 2>&1; then
-    PROVIDER=$(curl -s --max-time 5 "$AI_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin).get('provider','?'))" 2>/dev/null)
-    ok "AI Analyzer  : $AI_URL  (provider=$PROVIDER)"
-  else
-    echo -e "${YELLOW}[WARN]${NC} AI Analyzer không accessible:"
-    echo "       nohup kubectl --context ctx-aws -n plg-stack port-forward svc/ai-analyzer 8090:8080 --address=127.0.0.1 &"
-    ok=false
-  fi
-
   if curl -fsS --max-time 5 "$SOAR_URL/health" >/dev/null 2>&1; then
     DRY=$(curl -s --max-time 5 "$SOAR_URL/health" | python3 -c "import json,sys; print(json.load(sys.stdin).get('dry_run','?'))" 2>/dev/null)
     ok "SOAR Engine  : $SOAR_URL  (dry_run=$DRY)"
@@ -169,7 +159,6 @@ help_tunnels() {
   echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n financial port-forward svc/api-gateway 18080:8080 --address=127.0.0.1 >/tmp/pf-gw.log 2>&1 &${NC}"
   echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/loki 13100:3100 --address=127.0.0.1 >/tmp/pf-loki.log 2>&1 &${NC}"
   echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/soar-engine 8091:8080 --address=127.0.0.1 >/tmp/pf-soar.log 2>&1 &${NC}"
-  echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/ai-analyzer 8090:8080 --address=127.0.0.1 >/tmp/pf-ai.log 2>&1 &${NC}"
   echo -e "  ${YELLOW}nohup kubectl --context ctx-aws -n plg-stack port-forward svc/grafana 3000:3000 --address=127.0.0.1 >/tmp/pf-grafana.log 2>&1 &${NC}"
   exit 0
 }
@@ -224,25 +213,10 @@ urllib.request.urlopen(req, timeout=5)
 PY
 }
 
-call_ai() {
-  local scenario="$1" message="$2"
-  python3 - "$AI_URL" "$scenario" "$message" <<'PY' 2>/dev/null
-import json, sys, urllib.request
-ai_url, scenario, message = sys.argv[1:]
-payload = {"source":f"demo-{scenario}","logs":[{"message":message,"labels":{"job":"demo-raw","scenario":scenario}}]}
-req = urllib.request.Request(f"{ai_url.rstrip('/')}/analyze",data=json.dumps(payload).encode(),headers={"Content-Type":"application/json"},method="POST")
-with urllib.request.urlopen(req, timeout=60) as r:
-    d=json.loads(r.read().decode())
-    print(f"verdict={d['verdict']} severity={d['severity']} attack={d['attack_type']} provider={d['provider_used']} confidence={d['confidence']}")
-PY
-}
-
 run_attack() {
   local scenario="$1" severity="$2" message="$3"
   attack "[$scenario]"
   push_loki_log "$scenario" "$severity" "$message" && echo "  Loki push: OK" || echo "  Loki push: SKIP (no loki tunnel)"
-  echo -n "  AI analyze: "
-  call_ai "$scenario" "$message" || echo "SKIP (no AI tunnel)"
   sleep "$SLEEP"
 }
 

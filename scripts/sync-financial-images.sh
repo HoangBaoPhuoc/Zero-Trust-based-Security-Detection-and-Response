@@ -38,7 +38,7 @@ fi
 BATCHES=()
 BATCHES+=("api-gateway payment-service fraud-detection")
 BATCHES+=("notification-service core-banking account-service")
-BATCHES+=("transaction-service ai-analyzer soar-engine")
+BATCHES+=("transaction-service soar-engine")
 BATCHES+=("web-portal security-scorer")
 
 log() {

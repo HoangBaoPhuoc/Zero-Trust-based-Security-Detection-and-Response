@@ -216,7 +216,6 @@ check_local_stack() {
 
 check_loki_data() {
   section "SIEM Log Evidence"
-  run_warn_check "Loki has AI alert stream" loki_query_has_results '{job="ai-analyzer"} |= "ai_security_alert"'
   run_warn_check "Loki has SOAR action stream" loki_query_has_results '{job="soar-engine"} |= "soar_action"'
   run_warn_check "Loki has raw demo stream" loki_query_has_results '{job="demo-raw"}'
 }
