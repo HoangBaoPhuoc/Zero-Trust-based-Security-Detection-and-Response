@@ -37,6 +37,8 @@ spec:
               value: "true"
             - name: SOAR_MIN_SEVERITY
               value: medium
+            - name: SOAR_HITL_SEVERITY
+              value: high
             - name: SOAR_MIN_CONFIDENCE
               value: "0.50"
             - name: SOAR_NAMESPACE

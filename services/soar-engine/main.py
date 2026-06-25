@@ -1,10 +1,15 @@
+import asyncio
 import hashlib
+import hmac
 import json
 import logging
 import os
 import re
+import smtplib
 import time
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Literal
 
 import httpx
@@ -33,6 +38,14 @@ SOAR_NAMESPACE = os.getenv("SOAR_NAMESPACE", "financial")
 SOAR_ALLOWED_CONTEXTS = {item.strip() for item in os.getenv("SOAR_ALLOWED_CONTEXTS", "ctx-aws,ctx-openstack").split(",") if item.strip()}
 SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "").strip()
 CASE_STORE_PATH = os.getenv("SOAR_CASE_STORE_PATH", "/data/cases.jsonl")
+SOAR_HITL_SEVERITY = os.getenv("SOAR_HITL_SEVERITY", "high").lower()
+SOAR_PUBLIC_URL = os.getenv("SOAR_PUBLIC_URL", "http://127.0.0.1:8091").rstrip("/")
+ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "").strip()
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASS = os.getenv("SMTP_PASS", "")
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
@@ -126,7 +139,7 @@ class PlaybookStep(BaseModel):
 
 class CaseRecord(BaseModel):
     case_id: str
-    status: Literal["skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
+    status: Literal["pending_approval", "skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
     alert_hash: str
     attack_type: str
     severity: str
@@ -146,6 +159,9 @@ class CaseRecord(BaseModel):
 
 
 CASES: dict[str, CaseRecord] = {}
+
+# case_id → (draft CaseRecord, playbook, target) chờ admin phê duyệt
+_HITL_QUEUE: dict[str, tuple[CaseRecord, str, dict[str, Any]]] = {}
 
 
 # ── Auth & persistence ───────────────────────────────────────────────────────
@@ -241,6 +257,90 @@ def _should_execute(alert: SecurityAlert) -> tuple[bool, str]:
     if alert.confidence < SOAR_MIN_CONFIDENCE:
         return False, f"confidence below threshold {SOAR_MIN_CONFIDENCE}"
     return True, "eligible for automated response"
+
+
+def _needs_hitl(alert: SecurityAlert) -> bool:
+    """Severity >= SOAR_HITL_SEVERITY yêu cầu admin phê duyệt trước khi thực thi."""
+    return SEVERITY_RANK.get(alert.severity, 0) >= SEVERITY_RANK.get(SOAR_HITL_SEVERITY, 3)
+
+
+def _hitl_token(case_id: str) -> str:
+    secret = (SOAR_API_TOKEN or "ztlab-soar-hitl").encode()
+    return hmac.new(secret, case_id.encode(), "sha256").hexdigest()[:20]
+
+
+def _verify_hitl_token(case_id: str, token: str) -> bool:
+    return hmac.compare_digest(_hitl_token(case_id), token)
+
+
+def _hitl_email_html(case: CaseRecord, alert_name: str, mitre: str, log_lines: list[str]) -> str:
+    approve_url = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/approve?token={_hitl_token(case.case_id)}"
+    deny_url    = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/deny?token={_hitl_token(case.case_id)}"
+    severity_color = {"low": "#4CAF50", "medium": "#FF9800", "high": "#F44336", "critical": "#9C27B0"}.get(case.severity, "#F44336")
+    logs_html = "".join(f"<li style='font-size:12px;color:#555'>{l}</li>" for l in log_lines[:10]) or "<li>Không có log evidence</li>"
+    return f"""
+<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden">
+  <div style="background:#1a1a2e;padding:20px 24px">
+    <h2 style="color:#fff;margin:0;font-size:18px">🚨 ZTLab Security Alert — Cần phê duyệt</h2>
+  </div>
+  <div style="padding:24px">
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;width:140px">Alert</td><td style="padding:6px 12px">{alert_name}</td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Severity</td><td style="padding:6px 12px"><span style="background:{severity_color};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">{case.severity.upper()}</span></td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">MITRE ATT&CK</td><td style="padding:6px 12px">{mitre}</td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Playbook</td><td style="padding:6px 12px"><code>{case.playbook}</code></td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Target</td><td style="padding:6px 12px">{case.target_context or '—'} / {case.target_workload or '—'}</td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Source IP</td><td style="padding:6px 12px">{case.source_ip or '—'}</td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Case ID</td><td style="padding:6px 12px"><code style="font-size:11px">{case.case_id}</code></td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Thời gian</td><td style="padding:6px 12px">{case.ts}</td></tr>
+    </table>
+    <h4 style="margin:0 0 8px;color:#333">Log Evidence (Loki):</h4>
+    <ul style="background:#f9f9f9;border:1px solid #e0e0e0;border-radius:4px;padding:12px 12px 12px 28px;margin:0 0 24px">{logs_html}</ul>
+    <p style="color:#555;font-size:13px;margin:0 0 20px">
+      Playbook <strong>{case.playbook}</strong> sẽ được thực thi trên <strong>{case.target_context}/{case.target_workload or case.source_ip}</strong>.
+      Vui lòng xem xét log evidence và phê duyệt hoặc từ chối.
+    </p>
+    <div style="text-align:center;margin-bottom:8px">
+      <a href="{approve_url}" style="display:inline-block;background:#4CAF50;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px;margin-right:16px">
+        ✅ PHÊ DUYỆT &amp; THỰC THI
+      </a>
+      <a href="{deny_url}" style="display:inline-block;background:#9e9e9e;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px">
+        ❌ TỪ CHỐI
+      </a>
+    </div>
+    <p style="text-align:center;font-size:11px;color:#aaa;margin-top:16px">
+      Link có hiệu lực 24h. SOAR Engine: {SOAR_PUBLIC_URL}
+    </p>
+  </div>
+</div>
+"""
+
+
+def _smtp_send(subject: str, html: str) -> None:
+    if not ADMIN_EMAIL or not SMTP_USER or not SMTP_PASS:
+        logger.warning(json.dumps({"event_type": "hitl_email_skip", "reason": "SMTP not configured"}))
+        return
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = SMTP_FROM or SMTP_USER
+    msg["To"]      = ADMIN_EMAIL
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        s.ehlo()
+        s.starttls()
+        s.login(SMTP_USER, SMTP_PASS)
+        s.sendmail(SMTP_FROM or SMTP_USER, ADMIN_EMAIL, msg.as_string())
+
+
+async def _send_hitl_email(case: CaseRecord, alert_name: str, mitre: str, log_lines: list[str]) -> None:
+    subject = f"[ZTLab SOAR — {case.severity.upper()}] {alert_name} — Cần phê duyệt phản ứng"
+    html    = _hitl_email_html(case, alert_name, mitre, log_lines)
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, _smtp_send, subject, html)
+        logger.info(json.dumps({"event_type": "hitl_email_sent", "case_id": case.case_id, "to": ADMIN_EMAIL}))
+    except Exception as exc:
+        logger.error(json.dumps({"event_type": "hitl_email_failed", "case_id": case.case_id, "error": str(exc)}))
 
 
 # ── Kubernetes API helpers ───────────────────────────────────────────────────
@@ -785,6 +885,9 @@ async def health() -> dict[str, Any]:
         "allowed_contexts": sorted(SOAR_ALLOWED_CONTEXTS),
         "case_store_path": CASE_STORE_PATH,
         "case_count": len(CASES),
+        "pending_hitl": len(_HITL_QUEUE),
+        "hitl_severity": SOAR_HITL_SEVERITY,
+        "hitl_email": ADMIN_EMAIL or "not configured",
         "auth_required": bool(SOAR_API_TOKEN),
         "playbooks": sorted(ALLOWED_PLAYBOOKS),
     }
@@ -857,7 +960,7 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
     target = _infer_target(alert, attack)
     eligible, reason = _should_execute(alert)
 
-    status: Literal["skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
+    status: Literal["pending_approval", "skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
     action = "no action"
     error: str | None = None
     steps: list[PlaybookStep] = []
@@ -1008,13 +1111,18 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
         target     = _infer_target(alert, attack)
         eligible, reason = _should_execute(alert)
 
-        status: Literal["skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
+        status: Literal["pending_approval", "skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
         action = "no action"
         error:  str | None = None
         steps:  list[PlaybookStep] = []
 
         if not eligible or playbook == "monitor_only":
             status = "skipped"
+        elif _needs_hitl(alert):
+            # Severity cao — giữ lại chờ admin phê duyệt
+            status = "pending_approval"
+            action = f"awaiting admin approval for playbook {playbook}"
+            reason = f"severity={alert.severity} >= hitl_threshold={SOAR_HITL_SEVERITY}"
         else:
             try:
                 action, steps = await _run_steps(
@@ -1052,10 +1160,113 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
             ts              = _now_iso(),
         )
         await record_case(case)
+
+        if status == "pending_approval":
+            _HITL_QUEUE[case_id] = (case, playbook, target)
+            ann = alert_data.get("annotations", {})
+            lbs = alert_data.get("labels", {})
+            await _send_hitl_email(
+                case       = case,
+                alert_name = lbs.get("alertname", attack),
+                mitre      = lbs.get("mitre", "—"),
+                log_lines  = ann.get("description", "").splitlines(),
+            )
+
         logger.warning(json.dumps({"event_type": "grafana_soar_triggered", "case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status}))
         results.append({"case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status})
 
     return {"processed": len(results), "cases": results}
+
+
+# ── HITL approve / deny endpoints ────────────────────────────────────────────
+
+@app.get("/cases/{case_id}/approve")
+async def hitl_approve(case_id: str, token: str = "") -> Any:
+    from fastapi.responses import HTMLResponse
+    if not _verify_hitl_token(case_id, token):
+        raise HTTPException(status_code=403, detail="token không hợp lệ hoặc đã hết hạn")
+
+    queued = _HITL_QUEUE.pop(case_id, None)
+    if queued is None:
+        stored = CASES.get(case_id)
+        if stored and stored.status != "pending_approval":
+            return HTMLResponse(_hitl_result_html(case_id, stored.status, already_done=True))
+        raise HTTPException(status_code=404, detail="case không tồn tại hoặc đã xử lý")
+
+    draft, playbook, target = queued
+    action = "no action"
+    error: str | None = None
+    steps: list[PlaybookStep] = []
+    try:
+        action, steps = await _run_steps(
+            playbook    = playbook,
+            context     = target.get("context"),
+            workload    = target.get("workload"),
+            source_ip   = draft.source_ip,
+            username    = draft.username,
+            attack_type = draft.attack_type,
+            dry_run     = SOAR_DRY_RUN,
+        )
+        final_status: Any = "dry_run" if SOAR_DRY_RUN else "executed"
+    except Exception as exc:
+        final_status = "failed"
+        error = str(exc)
+        action = "execution failed"
+
+    approved = draft.model_copy(update={
+        "status": final_status,
+        "action": action,
+        "reason": "admin approved via email link",
+        "error":  error,
+        "steps":  steps,
+        "ts":     _now_iso(),
+    })
+    await record_case(approved)
+    logger.warning(json.dumps({"event_type": "hitl_approved", "case_id": case_id, "status": final_status}))
+    return HTMLResponse(_hitl_result_html(case_id, final_status))
+
+
+@app.get("/cases/{case_id}/deny")
+async def hitl_deny(case_id: str, token: str = "") -> Any:
+    from fastapi.responses import HTMLResponse
+    if not _verify_hitl_token(case_id, token):
+        raise HTTPException(status_code=403, detail="token không hợp lệ hoặc đã hết hạn")
+
+    queued = _HITL_QUEUE.pop(case_id, None)
+    if queued is None:
+        stored = CASES.get(case_id)
+        if stored and stored.status != "pending_approval":
+            return HTMLResponse(_hitl_result_html(case_id, stored.status, already_done=True))
+        raise HTTPException(status_code=404, detail="case không tồn tại hoặc đã xử lý")
+
+    draft, _pb, _tgt = queued
+    denied = draft.model_copy(update={
+        "status": "skipped",
+        "action": "admin denied via email link",
+        "reason": "admin rejected HITL approval",
+        "ts":     _now_iso(),
+    })
+    await record_case(denied)
+    logger.warning(json.dumps({"event_type": "hitl_denied", "case_id": case_id}))
+    return HTMLResponse(_hitl_result_html(case_id, "skipped", denied=True))
+
+
+def _hitl_result_html(case_id: str, status: str, denied: bool = False, already_done: bool = False) -> str:
+    if already_done:
+        icon, msg, color = "ℹ️", f"Case này đã được xử lý trước đó (status: {status}).", "#2196F3"
+    elif denied:
+        icon, msg, color = "✅", "Đã từ chối. Playbook không được thực thi.", "#9e9e9e"
+    elif status in {"executed", "dry_run"}:
+        icon, msg, color = "✅", f"Playbook đã thực thi thành công (status: {status}).", "#4CAF50"
+    else:
+        icon, msg, color = "⚠️", f"Có lỗi khi thực thi (status: {status}).", "#F44336"
+    return f"""<!DOCTYPE html><html><body style="font-family:Arial;text-align:center;padding:60px">
+<div style="max-width:480px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;padding:40px">
+  <div style="font-size:48px">{icon}</div>
+  <h2 style="color:{color}">{msg}</h2>
+  <p style="color:#777;font-size:13px">Case ID: <code>{case_id}</code></p>
+  <a href="{SOAR_PUBLIC_URL}/cases" style="color:#1976D2;font-size:13px">Xem tất cả cases →</a>
+</div></body></html>"""
 
 
 # ── Blocked IPs management ───────────────────────────────────────────────────

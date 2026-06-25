@@ -56,4 +56,4 @@ chunk_store_config:
 
 table_manager:
   retention_deletes_enabled: true
-  retention_period: 720h   # 30 days
+  retention_period: 2160h  # 90 days
