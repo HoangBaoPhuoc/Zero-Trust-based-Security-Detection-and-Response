@@ -312,7 +312,8 @@ provision_grafana_configmaps() {
     --from-file=ztlab-full-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-full-logs.json" \
     --from-file=envoy-access-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/envoy-access-logs.json" \
     --from-file=opa-decision-log.json="$REPO_ROOT/plg-stack/grafana/dashboards/opa-decision-log.json" \
-    --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json"
+    --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json" \
+    --from-file=ztlab-soar-dashboard.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-soar-dashboard.json"
   kaws create configmap grafana-alerting -n plg-stack \
     --from-file=brute-force-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/brute-force-alert.yml" \
     --from-file=fraud-gate-bypass-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/fraud-gate-bypass-alert.yml" \
