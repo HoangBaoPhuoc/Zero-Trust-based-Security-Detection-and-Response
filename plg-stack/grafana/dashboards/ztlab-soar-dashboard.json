@@ -246,7 +246,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{app=\"ai-analyzer\"} |~ \"(?i)(alert|attack|malicious|detect|anomaly|verdict)\"",
+          "expr": "{app=\"soar-engine\"} |~ \"(?i)(alert|attack|block|detect|anomaly|playbook)\"",
           "legendFormat": "",
           "refId": "A"
         }

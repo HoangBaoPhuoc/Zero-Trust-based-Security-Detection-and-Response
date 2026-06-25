@@ -196,28 +196,28 @@
         "pieType": "pie",
         "tooltip": {"mode": "multi", "sort": "none"}
       },
-      "title": "AI Verdict Distribution",
+      "title": "SOAR Case Distribution",
       "type": "piechart",
       "targets": [
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"ai-analyzer\"} |= \"\\\"verdict\\\": \\\"malicious\\\"\" [$__range]))",
+          "expr": "sum(count_over_time({app=\"soar-engine\"} |= \"\\\"status\\\": \\\"executed\\\"\" [$__range]))",
           "instant": true,
-          "legendFormat": "Malicious",
+          "legendFormat": "Executed",
           "refId": "A"
         },
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"ai-analyzer\"} |= \"\\\"verdict\\\": \\\"suspicious\\\"\" [$__range]))",
+          "expr": "sum(count_over_time({app=\"soar-engine\"} |= \"\\\"status\\\": \\\"skipped\\\"\" [$__range]))",
           "instant": true,
-          "legendFormat": "Suspicious",
+          "legendFormat": "Skipped",
           "refId": "B"
         },
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"ai-analyzer\"} |= \"\\\"verdict\\\": \\\"clean\\\"\" [$__range]))",
+          "expr": "sum(count_over_time({app=\"soar-engine\"} |= \"\\\"status\\\": \\\"failed\\\"\" [$__range]))",
           "instant": true,
-          "legendFormat": "Clean",
+          "legendFormat": "Failed",
           "refId": "C"
         }
       ]

@@ -8,7 +8,6 @@
 #   Grafana     → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki        → http://localhost:13100
 #   SOAR Engine → http://localhost:8091
-#   AI Analyzer → http://localhost:8090
 #   Scorer      → http://localhost:18092
 #   Prometheus  → http://localhost:9090
 #   pgAdmin     → http://localhost:5050   (admin@ztlab.com / ztlab2026)
@@ -68,7 +67,6 @@ start_pf "Web Portal"             financial  web-portal    18081  8080
 start_pf "Grafana"                plg-stack  grafana        3000  3000
 start_pf "Loki"                   plg-stack  loki          13100  3100
 start_pf "SOAR Engine"            plg-stack  soar-engine    8091  8080
-start_pf "AI Analyzer"            plg-stack  ai-analyzer    8090  8080
 start_pf "Security Scorer"        plg-stack  security-scorer 18092 8080
 
 # Monitoring

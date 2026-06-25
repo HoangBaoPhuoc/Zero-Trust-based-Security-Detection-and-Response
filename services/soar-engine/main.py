@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 
 APP_NAME = "soar-engine"
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
-AI_ANALYZER_URL = os.getenv("AI_ANALYZER_URL", "http://ai-analyzer.plg-stack.svc.cluster.local:8080").rstrip("/")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/2")
 REDIS_BLOCKED_IPS_KEY = "ztlab:blocked_ips"
 REDIS_BLOCKED_IPS_TTL = int(os.getenv("SOAR_BLOCK_IP_TTL_SECONDS", "86400"))  # 24h default
@@ -97,7 +96,7 @@ if SOAR_MIN_SEVERITY not in SEVERITY_RANK:
 
 class SecurityAlert(BaseModel):
     event_type: str = "ai_security_alert"
-    analyzer: str = "ai-analyzer"
+    analyzer: str = "soar-engine"
     provider: str = "unknown"
     model: str = "unknown"
     source: str = "unknown"

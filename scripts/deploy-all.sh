@@ -237,16 +237,6 @@ create_ai_secret() {
   fi
 
   kaws create secret generic ai-secrets -n plg-stack \
-    --from-literal=AI_PROVIDER="${AI_PROVIDER:-gemini}" \
-    --from-literal=GEMINI_API_KEY="${GEMINI_API_KEY:-}" \
-    --from-literal=GEMINI_MODEL="${GEMINI_MODEL:-gemini-2.5-flash}" \
-    --from-literal=OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
-    --from-literal=OPENAI_MODEL="${OPENAI_MODEL:-gpt-4o-mini}" \
-    --from-literal=AI_ANALYZER_POLL_ENABLED="true" \
-    --from-literal=AI_ANALYZER_POLL_INTERVAL_SECONDS="120" \
-    --from-literal=AI_ANALYZER_LOOKBACK_SECONDS="300" \
-    --from-literal=AI_ANALYZER_MAX_LOGS_PER_BATCH="10" \
-    --from-literal=AI_ANALYZER_MIN_ALERT_SEVERITY="medium" \
     --from-literal=SOAR_DRY_RUN="${SOAR_DRY_RUN:-true}" \
     --from-literal=SOAR_AUTO_EXECUTE="${SOAR_AUTO_EXECUTE:-true}" \
     --from-literal=SOAR_MIN_SEVERITY="medium" \
@@ -265,7 +255,7 @@ create_smtp_secret() {
     return
   fi
   # SMTP_PASS may be empty in lab — secret is created anyway so pods start cleanly.
-  # ai-analyzer and soar-engine reference this secret with optional: true.
+  # soar-engine references this secret with optional: true.
   kaws create secret generic grafana-smtp-secret -n plg-stack \
     --from-literal=password="${SMTP_PASS:-}"
   ok "grafana-smtp-secret created"
@@ -328,7 +318,6 @@ provision_grafana_configmaps() {
     --from-file=fraud-gate-bypass-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/fraud-gate-bypass-alert.yml" \
     --from-file=large-response-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/large-response-alert.yml" \
     --from-file=lateral-movement-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/lateral-movement-alert.yml" \
-    --from-file=ai-analyzer-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/ai-analyzer-alert.yml" \
     --from-file=soar-engine-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/soar-engine-alert.yml" \
     --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
 }
@@ -384,7 +373,6 @@ sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/n
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/security-scorer.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack security-scorer 120s
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack ai-analyzer 180s
   wait_deployment "$AWS_CONTEXT" plg-stack soar-engine 180s
 
   kaws apply -f "$REPO_ROOT/k8s/monitoring/prometheus.yaml"
