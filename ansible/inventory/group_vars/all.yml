@@ -1,6 +1,6 @@
 trust_domain: ztlab.local
 siem_ip: 10.10.2.10
-wg_server_ip: 10.200.200.1
+wg_server_ip: 10.200.0.1
 k3s_version: v1.29.3+k3s1
 kube_ctx_aws: ctx-aws
 kube_ctx_openstack: ctx-openstack

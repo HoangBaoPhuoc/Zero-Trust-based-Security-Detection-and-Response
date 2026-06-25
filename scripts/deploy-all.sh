@@ -161,7 +161,9 @@ deploy_financial_infra() {
   wait_deployment "$OS_CONTEXT" financial postgres-accounts 180s
   wait_deployment "$OS_CONTEXT" financial postgres-txn 180s
 
-  # DB admin UIs: pgAdmin (port 80) + RedisInsight (port 5540) on AWS
+  # pgAdmin → OpenStack (cùng cluster với Postgres, svc.cluster.local resolve được)
+  # RedisInsight → AWS (cùng cluster với Redis)
+  kos apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
   kaws apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
 
   ok "Redis on AWS, Postgres on OpenStack, DB admin UIs — ready"
@@ -175,6 +177,14 @@ deploy_financial_services() {
 
   # OpenStack: OPA + Envoy configmaps must exist before os-services.yaml pods start
   kos apply -f "$REPO_ROOT/k8s/financial/os-security.yaml"
+
+  # patch-api-gateway and patch-web-portal must exist before pods are scheduled
+  kaws create configmap patch-api-gateway \
+    --from-file=main.py="$REPO_ROOT/services/api-gateway/main.py" \
+    -n financial --dry-run=client -o yaml | kaws apply -f -
+  kaws create configmap patch-web-portal \
+    --from-file=main.py="$REPO_ROOT/services/web-portal/main.py" \
+    -n financial --dry-run=client -o yaml | kaws apply -f -
 
   # AWS: ingress-facing + fraud + notification + web portal
   kaws apply -f "$REPO_ROOT/k8s/financial/aws-services.yaml"
@@ -308,9 +318,10 @@ provision_grafana_configmaps() {
     --from-file=dashboard-provider.yml="$REPO_ROOT/plg-stack/grafana/dashboards/dashboard-provider.yml"
   kaws create configmap grafana-dashboards -n plg-stack \
     --from-file=zta-security-overview.json="$REPO_ROOT/plg-stack/grafana/dashboards/zta-security-overview.json" \
+    --from-file=ztlab-security-overview.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-security-overview.json" \
+    --from-file=ztlab-full-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-full-logs.json" \
     --from-file=envoy-access-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/envoy-access-logs.json" \
     --from-file=opa-decision-log.json="$REPO_ROOT/plg-stack/grafana/dashboards/opa-decision-log.json" \
-    --from-file=ai-siem-soar.json="$REPO_ROOT/plg-stack/grafana/dashboards/ai-siem-soar.json" \
     --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json"
   kaws create configmap grafana-alerting -n plg-stack \
     --from-file=brute-force-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/brute-force-alert.yml" \
@@ -324,6 +335,11 @@ provision_grafana_configmaps() {
 
 deploy_observability_response() {
   step "Step 6: PLG, AI/SOAR, Prometheus"
+
+  # redis-auth must exist in plg-stack (soar-engine + security-scorer reference it)
+  kaws create secret generic redis-auth -n plg-stack \
+    --from-literal=password="ZTALab-Redis-2026!" \
+    --dry-run=client -o yaml | kaws apply -f -
 
   create_keycloak_admin_secret
   create_ai_secret
@@ -343,7 +359,7 @@ deploy_observability_response() {
   # Ensure socat relay is persistent on AWS worker (OpenStack Promtail → Loki cross-cluster)
   LOKI_CIP=$(kubectl --context "$AWS_CONTEXT" -n plg-stack get svc loki -o jsonpath='{.spec.clusterIP}')
   ssh -o StrictHostKeyChecking=no -i ~/.ssh/ztlab-key \
-      -J ubuntu@54.254.252.106 ubuntu@10.10.1.11 \
+      -J ubuntu@52.221.255.36 ubuntu@10.10.1.11 \
       "sudo tee /etc/systemd/system/loki-relay.service > /dev/null << 'EOF'
 [Unit]
 Description=Loki Relay (OpenStack cross-cluster)
@@ -364,6 +380,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/n
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"
+  kaws apply -f "$REPO_ROOT/k8s/rbac/web-portal-response-rbac.yaml"
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/security-scorer.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack security-scorer 120s
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"

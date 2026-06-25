@@ -119,7 +119,7 @@ spec:
         - ipBlock:
             cidr: 10.10.0.0/24
         - ipBlock:
-            cidr: 10.200.200.0/24
+            cidr: 10.200.0.0/24
       ports:
         - port: 3100
           protocol: TCP
@@ -131,6 +131,8 @@ spec:
         - port: 3100
           protocol: TCP
         - port: 3000
+          protocol: TCP
+        - port: 8080
           protocol: TCP
     - from:
         - namespaceSelector:
@@ -182,12 +184,12 @@ spec:
       ports:
         - port: 6443
           protocol: TCP
-    # Prometheus scrape OpenStack services via WireGuard
+    # Prometheus scrape OpenStack services via WireGuard (os-k3s-master 192.168.101.11)
     - to:
         - ipBlock:
-            cidr: 10.10.1.12/32
+            cidr: 192.168.101.11/32
       ports:
-        - port: 30081
+        - port: 30084
           protocol: TCP
         - port: 30082
           protocol: TCP

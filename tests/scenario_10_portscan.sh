@@ -7,7 +7,7 @@ set -euo pipefail
 GW_URL="${GW_URL:-http://localhost:18080}"
 AI_URL="${AI_URL:-http://localhost:18082}"
 AWS_MASTER="${AWS_MASTER_IP:-10.10.1.10}"
-OS_MASTER="${OS_MASTER_IP:-10.10.1.12}"
+OS_MASTER="${OS_MASTER_IP:-192.168.101.11}"
 SCAN_TIMEOUT="${SCAN_TIMEOUT:-1}"
 SCENARIO="scenario_10_portscan"
 

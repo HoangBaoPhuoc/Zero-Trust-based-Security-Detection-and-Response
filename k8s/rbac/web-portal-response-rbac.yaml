@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: web-portal-incident-response
+  namespace: financial
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: web-portal-incident-response
+  namespace: financial
+subjects:
+  - kind: ServiceAccount
+    name: web-portal
+    namespace: financial
+roleRef:
+  kind: Role
+  name: web-portal-incident-response
+  apiGroup: rbac.authorization.k8s.io

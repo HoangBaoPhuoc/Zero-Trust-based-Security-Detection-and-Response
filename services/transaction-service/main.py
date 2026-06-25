@@ -29,10 +29,18 @@ logger = ZTLabLogger(SERVICE, CLOUD)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pool
-    pool = await asyncpg.create_pool(
-        host=DB_HOST, port=DB_PORT, database=DB_NAME,
-        user=DB_USER, password=DB_PASS, min_size=2, max_size=10,
-    )
+    import asyncio
+    for attempt in range(10):
+        try:
+            pool = await asyncpg.create_pool(
+                host=DB_HOST, port=DB_PORT, database=DB_NAME,
+                user=DB_USER, password=DB_PASS, min_size=2, max_size=10,
+            )
+            break
+        except Exception:
+            if attempt == 9:
+                raise
+            await asyncio.sleep(3)
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS ledger (
             transaction_id TEXT    PRIMARY KEY,

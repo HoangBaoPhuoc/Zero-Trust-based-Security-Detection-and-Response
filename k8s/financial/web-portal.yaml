@@ -60,10 +60,8 @@ spec:
               value: "ztlab"
             - name: KEYCLOAK_CLIENT_ID
               value: "web-portal"
-            - name: ACCOUNT_SERVICE_URL
-              value: "http://account-service.financial.svc.cluster.local:8080"
-            - name: TRANSACTION_SERVICE_URL
-              value: "http://transaction-service.financial.svc.cluster.local:8080"
+            - name: SOAR_ENGINE_URL
+              value: "http://soar-engine.plg-stack.svc.cluster.local:8080"
             - name: FRAUD_DETECTION_URL
               value: "http://fraud-detection.financial.svc.cluster.local:8080"
             - name: REDIS_PASSWORD

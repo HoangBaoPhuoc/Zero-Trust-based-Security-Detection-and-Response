@@ -13,7 +13,7 @@ Usage:
 
 Environment variables:
   GW_URL    API Gateway base URL       (default: http://localhost:18080)
-  KC_URL    Keycloak base URL          (default: http://localhost:18443)
+  KC_URL    Keycloak base URL          (default: http://localhost:8180)
   AI_URL    AI Analyzer base URL       (default: http://localhost:18082)
   SOAR_URL  SOAR Engine base URL       (default: http://localhost:18091)
   LOKI_URL  Loki base URL              (default: http://localhost:13100)
@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Optional
 
 GW_URL   = os.environ.get("GW_URL",   "http://localhost:18080").rstrip("/")
-KC_URL   = os.environ.get("KC_URL",   "http://localhost:18443").rstrip("/")
+KC_URL   = os.environ.get("KC_URL",   "http://localhost:8180").rstrip("/")
 AI_URL   = os.environ.get("AI_URL",   "http://localhost:18082").rstrip("/")
 SOAR_URL = os.environ.get("SOAR_URL", "http://localhost:18091").rstrip("/")
 LOKI_URL = os.environ.get("LOKI_URL", "http://localhost:13100").rstrip("/")

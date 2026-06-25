@@ -171,6 +171,35 @@ deploy_step_2_keycloak() {
   log_info "Keycloak deployment completed"
 }
 
+provision_spire_root_ca() {
+  log_step "3.0 Provision shared SPIRE root CA"
+
+  local ca_dir="$REPO_ROOT/spire/root-ca"
+  mkdir -p "$ca_dir"
+
+  if [[ ! -f "$ca_dir/ca.key" || ! -f "$ca_dir/ca.crt" ]]; then
+    log_info "Generating shared root CA for cross-cloud mTLS trust..."
+    openssl genrsa -out "$ca_dir/ca.key" 4096 2>/dev/null
+    openssl req -new -x509 -days 3650 -key "$ca_dir/ca.key" \
+      -out "$ca_dir/ca.crt" \
+      -subj "/C=VN/O=ZT-Lab/CN=ZTLab Root CA" \
+      -extensions v3_ca 2>/dev/null
+    log_info "Root CA generated: $ca_dir/ca.crt"
+  else
+    log_info "Root CA already exists, reusing: $ca_dir/ca.crt"
+  fi
+
+  log_info "Deploying spire-upstream-ca secret to both clusters..."
+  for CTX in "$AWS_CONTEXT" "$OS_CONTEXT"; do
+    kubectl --context "$CTX" apply -f "$REPO_ROOT/spire/k8s/namespace.yaml"
+    kubectl --context "$CTX" create secret generic spire-upstream-ca -n spire \
+      --from-file=ca.key="$ca_dir/ca.key" \
+      --from-file=ca.crt="$ca_dir/ca.crt" \
+      --dry-run=client -o yaml | kubectl --context "$CTX" apply -f -
+  done
+  log_info "spire-upstream-ca secret deployed to both clusters"
+}
+
 deploy_step_3_spire_aws() {
   log_step "3.1 Deploy SPIRE on AWS"
 
@@ -271,18 +300,13 @@ deploy_step_4_opa() {
   log_info "Deploying OPA on AWS..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
 
-  log_info "Creating OPA config/policy configmaps on OpenStack..."
-  kubectl --context $OS_CONTEXT -n financial create configmap opa-config \
-    --from-file=opa-config.yaml="$REPO_ROOT/opa/config/opa-config.yaml" \
-    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
+  # OS OPA config + deployment are handled entirely by os-security.yaml in deploy_financial_services.
+  # Only deploy the rego policies ConfigMap here so it exists before os-security.yaml runs.
   kubectl --context $OS_CONTEXT -n financial create configmap opa-policies \
     --from-file="$REPO_ROOT/opa/policies" \
     --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
 
-  log_info "Deploying OPA on OpenStack..."
-  kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
-
-  log_info "OPA deployment initiated on both clusters (may take time)"
+  log_info "OPA deployed on AWS; OS OPA will be configured by os-security.yaml"
 }
 
 deploy_step_5_envoy() {
@@ -329,6 +353,7 @@ register_spire_workloads() {
   register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/payment-service" "$aws_parent" financial payment-service
   register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/fraud-detection" "$aws_parent" financial fraud-detection
   register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/notification-service" "$aws_parent" financial notification-service
+  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/web-portal" "$aws_parent" financial web-portal
 
   log_info "Registering OpenStack workload SVID entries..."
   register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/core-banking" "$os_parent" financial core-banking
@@ -401,6 +426,7 @@ main() {
   # Deploy steps
   deploy_step_1_namespaces
   deploy_step_2_keycloak
+  provision_spire_root_ca
   deploy_step_3_spire_aws
   deploy_step_3_spire_os
   register_spire_workloads

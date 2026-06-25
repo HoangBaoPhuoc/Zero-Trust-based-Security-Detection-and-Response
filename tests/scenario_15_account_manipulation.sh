@@ -5,7 +5,7 @@
 set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
-KC_URL="${KC_URL:-http://localhost:18443}"
+KC_URL="${KC_URL:-http://localhost:8180}"
 AI_URL="${AI_URL:-http://localhost:18082}"
 SCENARIO="scenario_15_account_manipulation"
 
