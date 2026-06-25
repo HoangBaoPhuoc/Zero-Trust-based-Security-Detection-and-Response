@@ -4,10 +4,10 @@
   become: true
   vars:
     wg_interface: wg0
-    wg_subnet: 10.200.200.0/24
+    wg_subnet: 10.200.0.0/24
     wg_listen_port: 51820
-    aws_gateway_ip: 10.200.200.1
-    os_gateway_ip: 10.200.200.2
+    aws_gateway_ip: 10.200.0.1
+    os_gateway_ip: 10.200.0.2
 
   pre_tasks:
     - name: Gather AWS gateway EIP

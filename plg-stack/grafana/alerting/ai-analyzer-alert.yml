@@ -9,7 +9,7 @@ groups:
 
       # Fires when anomaly score (Redis 15-minute window) exceeds 70 (high risk)
       - uid: anomaly-score-high-alert
-        title: "[ZTLab] Anomaly Score Cao — Score >= 70"
+        title: "[ZTLab] Kịch bản 5 — Anomaly Score Cao (>=70)"
         for: 2m
         condition: B
         data:
@@ -61,6 +61,7 @@ groups:
           severity: critical
           category: security
           mitre: T1071
+          attack_type: brute_force
 
       # Fires when anomaly score reaches medium level (40-70)
       - uid: anomaly-score-medium-alert
@@ -116,6 +117,7 @@ groups:
           severity: high
           category: security
           mitre: T1071
+          attack_type: access_denied
 
       # Fires when fraud gate blocks more than 3 transactions in 5 minutes
       - uid: fraud-gate-block-alert
@@ -172,3 +174,4 @@ groups:
           severity: high
           category: security
           mitre: T1078.004
+          attack_type: fraud_gate_bypass

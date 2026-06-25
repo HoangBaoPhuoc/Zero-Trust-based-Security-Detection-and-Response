@@ -16,7 +16,7 @@ metadata:
   name: transaction-service
   namespace: financial
 ---
-# core-banking: exposed via NodePort 30081 so AWS cluster can reach it cross-cloud
+# core-banking: exposed via NodePort 30080 so AWS cluster can reach it cross-cloud
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -130,7 +130,7 @@ spec:
     - name: envoy
       port: 15006
       targetPort: 15006
-      nodePort: 30081
+      nodePort: 30080
     - name: http
       port: 8080
       targetPort: 8080

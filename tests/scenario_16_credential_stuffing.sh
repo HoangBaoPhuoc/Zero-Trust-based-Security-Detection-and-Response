@@ -4,7 +4,7 @@
 # Verifies all return 401/400 and AI detects the distributed brute-force pattern.
 set -euo pipefail
 
-KC_URL="${KC_URL:-http://localhost:18443}"
+KC_URL="${KC_URL:-http://localhost:8180}"
 AI_URL="${AI_URL:-http://localhost:18082}"
 SCENARIO="scenario_16_credential_stuffing"
 ATTEMPTS="${STUFFING_ATTEMPTS:-25}"

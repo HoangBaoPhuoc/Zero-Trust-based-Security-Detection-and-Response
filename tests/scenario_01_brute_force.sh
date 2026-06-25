@@ -4,7 +4,7 @@
 # Also injects synthetic log to AI Analyzer and verifies malicious verdict.
 set -euo pipefail
 
-KC_URL="${KC_URL:-http://localhost:18443}"
+KC_URL="${KC_URL:-http://localhost:8180}"
 AI_URL="${AI_URL:-http://localhost:18082}"
 SCENARIO="scenario_01_brute_force"
 

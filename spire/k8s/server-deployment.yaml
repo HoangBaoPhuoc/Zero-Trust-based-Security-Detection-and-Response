@@ -37,6 +37,9 @@ spec:
               readOnly: true
             - name: server-data
               mountPath: /opt/spire/data/server
+            - name: upstream-ca
+              mountPath: /run/spire/upstream-ca
+              readOnly: true
       volumes:
         - name: server-config
           configMap:
@@ -48,6 +51,9 @@ spec:
           hostPath:
             path: /opt/spire/data/server
             type: DirectoryOrCreate
+        - name: upstream-ca
+          secret:
+            secretName: spire-upstream-ca
 ---
 apiVersion: v1
 kind: Service

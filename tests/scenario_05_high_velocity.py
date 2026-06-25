@@ -11,7 +11,7 @@ import urllib.request
 import urllib.error
 
 GW_URL = os.environ.get("GW_URL", "http://localhost:18080")
-KC_URL = os.environ.get("KC_URL", "http://localhost:18443")
+KC_URL = os.environ.get("KC_URL", "http://localhost:8180")
 SCENARIO = "scenario_05_high_velocity"
 REQUESTS = int(os.environ.get("VELOCITY_REQUESTS", "40"))
 

@@ -1,0 +1,519 @@
+{% extends "base.html" %}
+{% block title %}System Monitor — ZTLab{% endblock %}
+{% block page_title %}System Monitor{% endblock %}
+
+{% block head %}
+<style>
+.cloud-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.cloud-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--surface2);
+}
+.cloud-label {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text3);
+}
+.svc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(31,45,69,0.4);
+  font-size: 13px;
+  transition: background .1s;
+}
+.svc-row:last-child { border-bottom: none; }
+.svc-row:hover { background: rgba(59,130,246,.03); }
+.svc-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.svc-dot.up    { background: var(--green); box-shadow: 0 0 5px rgba(34,197,94,.5); }
+.svc-dot.down  { background: var(--red);   box-shadow: 0 0 5px rgba(239,68,68,.5); }
+.svc-dot.check { background: var(--yellow); animation: blink 1.2s ease-in-out infinite; }
+.svc-dot.info  { background: var(--text3); }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+.svc-name { font-weight: 600; flex: 1; color: var(--text); }
+.svc-sub  { font-size: 11px; color: var(--text3); min-width: 0; flex: 2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.svc-ms   { font-size: 11px; color: var(--text3); min-width: 48px; text-align: right; font-variant-numeric: tabular-nums; }
+.svc-stat { font-size: 11px; font-weight: 700; min-width: 38px; text-align: right; }
+.svc-stat.up   { color: var(--green); }
+.svc-stat.down { color: var(--red);   }
+.svc-stat.info { color: var(--text3); }
+
+/* Flow diagram */
+.flow-canvas {
+  overflow-x: auto;
+  padding: 24px 8px 8px;
+}
+.flow-layer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0;
+  min-width: 860px;
+  margin-bottom: 6px;
+}
+.f-node {
+  display: flex; flex-direction: column; align-items: center;
+  min-width: 108px;
+}
+.f-box {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+.f-sub { font-size: 10px; color: var(--text3); margin-top: 2px; text-align: center; }
+.f-box.user    { background: var(--surface2); border: 1px solid var(--border2); color: var(--text2); }
+.f-box.aws     { background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.25); color: var(--accent2); }
+.f-box.opa     { background: rgba(168,85,247,.08); border: 1px solid rgba(168,85,247,.25); color: var(--purple); }
+.f-box.os      { background: rgba(34,197,94,.06); border: 1px solid rgba(34,197,94,.25); color: var(--green); }
+.f-box.db      { background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.2); color: var(--yellow); }
+.f-arrow {
+  display: flex; align-items: center;
+  font-size: 16px; color: var(--text3);
+  padding: 0 2px;
+  margin-top: 17px;
+}
+.f-arrow.down { transform: rotate(90deg); margin: 0; padding: 2px 0; }
+.f-col { display: flex; flex-direction: column; align-items: center; }
+
+/* Layer labels */
+.layer-label {
+  font-size: 10px;
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 4px;
+  text-align: center;
+}
+
+/* Quick link buttons */
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+}
+.quick-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--surface2);
+  border: 1px solid var(--border2);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  transition: all .15s;
+}
+.quick-item:hover { border-color: var(--accent); color: var(--accent2); }
+.quick-icon { font-size: 20px; flex-shrink: 0; }
+.quick-info .quick-name { font-weight: 600; font-size: 13px; }
+.quick-info .quick-port { font-size: 11px; color: var(--text3); margin-top: 1px; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<!-- Top bar: last refresh + summary -->
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+  <div>
+    <div style="font-size:20px;font-weight:700">System Monitor</div>
+    <div style="font-size:12px;color:var(--text3);margin-top:3px">
+      Cập nhật lần cuối: <span id="last-refresh" style="font-variant-numeric:tabular-nums">—</span>
+      &nbsp;·&nbsp; Tự động làm mới mỗi 15s
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <div style="display:flex;gap:12px;font-size:12px">
+      <span><span class="svc-dot up" style="display:inline-block;vertical-align:middle;margin-right:4px"></span><span id="up-count" style="color:var(--green);font-weight:700">—</span> UP</span>
+      <span><span class="svc-dot down" style="display:inline-block;vertical-align:middle;margin-right:4px"></span><span id="down-count" style="color:var(--red);font-weight:700">—</span> DOWN</span>
+    </div>
+    <button class="btn btn-sm btn-primary" onclick="doHealthCheck()">↺ Refresh</button>
+  </div>
+</div>
+
+<!-- Service grids: 2 x 2 -->
+<div class="grid grid-2" style="margin-bottom:14px;gap:14px">
+
+  <!-- AWS Financial -->
+  <div class="cloud-box">
+    <div class="cloud-header">
+      <span class="cloud-label">☁ AWS ap-southeast-1 · namespace: financial</span>
+      <span class="badge" id="aws-badge" style="font-size:10px">...</span>
+    </div>
+    <div id="aws-services">
+      <div class="svc-row"><div class="svc-dot check"></div><span class="svc-name" style="color:var(--text3)">Đang kiểm tra...</span></div>
+    </div>
+  </div>
+
+  <!-- OpenStack -->
+  <div class="cloud-box">
+    <div class="cloud-header">
+      <span class="cloud-label">🏢 OpenStack · namespace: financial (WireGuard VPN)</span>
+      <span class="badge" id="os-badge" style="font-size:10px">...</span>
+    </div>
+    <div id="os-services">
+      <div class="svc-row"><div class="svc-dot check"></div><span class="svc-name" style="color:var(--text3)">Đang kiểm tra...</span></div>
+    </div>
+  </div>
+
+  <!-- PLG Stack -->
+  <div class="cloud-box">
+    <div class="cloud-header">
+      <span class="cloud-label">📊 PLG Stack · namespace: plg-stack / monitoring</span>
+      <span class="badge" id="plg-badge" style="font-size:10px">...</span>
+    </div>
+    <div id="plg-services">
+      <div class="svc-row"><div class="svc-dot check"></div><span class="svc-name" style="color:var(--text3)">Đang kiểm tra...</span></div>
+    </div>
+  </div>
+
+  <!-- Identity & Security -->
+  <div class="cloud-box">
+    <div class="cloud-header">
+      <span class="cloud-label">🔐 Identity & Security · namespace: identity / spire</span>
+      <span class="badge" id="id-badge" style="font-size:10px">...</span>
+    </div>
+    <div id="id-services">
+      <div class="svc-row"><div class="svc-dot check"></div><span class="svc-name" style="color:var(--text3)">Đang kiểm tra...</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Redis detail strip -->
+<div class="card" style="margin-bottom:14px;padding:14px 20px">
+  <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:8px">
+      <div class="svc-dot check" id="redis-dot"></div>
+      <span style="font-weight:600;font-size:13px">Redis DB0</span>
+      <span style="font-size:11px;color:var(--text3)">redis.financial:6379</span>
+    </div>
+    <div style="display:flex;gap:20px;font-size:12px">
+      <div>IP bị block: <strong id="redis-blocked" style="color:var(--red)">—</strong></div>
+      <div>Velocity keys: <strong id="redis-velocity" style="color:var(--yellow)">—</strong></div>
+      <div>Keys: <code style="font-size:11px">ztlab:blocked_ip:* &nbsp;|&nbsp; fraud:velocity:*</code></div>
+    </div>
+    <div style="margin-left:auto;font-size:11px;color:var(--text3)" id="redis-latency">—</div>
+  </div>
+</div>
+
+<!-- Flow diagram -->
+<div class="card" style="margin-bottom:14px">
+  <div class="card-header">
+    <div class="card-title">Luồng request end-to-end</div>
+    <div class="card-subtitle">Mỗi giao dịch phải qua ít nhất 4 lớp kiểm tra độc lập</div>
+  </div>
+  <div class="flow-canvas">
+
+    <!-- Main flow row -->
+    <div class="flow-layer">
+      <div class="f-node">
+        <div class="layer-label">Browser</div>
+        <div class="f-box user">🌐 User</div>
+      </div>
+      <div class="f-arrow">→</div>
+      <div class="f-node">
+        <div class="layer-label">Web Portal</div>
+        <div class="f-box aws">web-portal<div class="f-sub">OIDC PKCE · :18081</div></div>
+      </div>
+      <div class="f-arrow">→</div>
+      <div class="f-node">
+        <div class="layer-label">Gateway</div>
+        <div class="f-box aws">api-gateway<div class="f-sub">JWT+RateLimit+IP · :18080</div></div>
+      </div>
+      <div class="f-arrow">→</div>
+      <div class="f-node">
+        <div class="layer-label">Payment</div>
+        <div class="f-box aws">payment-svc<div class="f-sub">HMAC sign · AWS</div></div>
+      </div>
+      <div class="f-arrow">→</div>
+      <div class="f-node">
+        <div class="layer-label">Core (OpenStack)</div>
+        <div class="f-box os">core-banking<div class="f-sub">HMAC verify · OS</div></div>
+      </div>
+    </div>
+
+    <!-- Sub-flow annotations -->
+    <div class="flow-layer" style="margin-top:4px">
+      <div style="min-width:108px"></div>
+      <div style="min-width:26px"></div>
+      <div style="min-width:108px">
+        <div style="border-top:1px dashed var(--border2);padding-top:6px;font-size:10px;color:var(--text3);text-align:center;line-height:1.5">
+          Keycloak SSO<br>session cookie
+        </div>
+      </div>
+      <div style="min-width:26px"></div>
+      <div style="min-width:108px">
+        <div style="border-top:1px dashed rgba(168,85,247,.4);padding-top:6px;font-size:10px;color:var(--purple);text-align:center;line-height:1.5">
+          Envoy sidecar<br>OPA ext_authz
+        </div>
+      </div>
+      <div style="min-width:26px"></div>
+      <div style="min-width:108px">
+        <div style="border-top:1px dashed rgba(245,158,11,.4);padding-top:6px;font-size:10px;color:var(--yellow);text-align:center;line-height:1.5">
+          fraud-detection<br>Redis velocity DB0
+        </div>
+      </div>
+      <div style="min-width:26px"></div>
+      <div style="min-width:108px">
+        <div style="border-top:1px dashed rgba(34,197,94,.4);padding-top:6px;font-size:10px;color:var(--green);text-align:center;line-height:1.5">
+          account-service<br>txn-service · PostgreSQL
+        </div>
+      </div>
+    </div>
+
+    <!-- SPIRE mTLS bar -->
+    <div style="margin:14px 0 8px;padding:8px 16px;background:rgba(139,92,246,.05);border:1px solid rgba(139,92,246,.15);border-radius:8px;font-size:11px;color:var(--purple);display:flex;align-items:center;gap:8px">
+      <span>🔒</span>
+      <span><strong>SPIRE mTLS (X.509 SVID)</strong> bao phủ toàn bộ service-to-service: payment-svc → core-banking, account-svc, txn-svc · Trust domain: <code>spiffe://ztlab.local</code> · Cross-cloud qua WireGuard VPN</span>
+    </div>
+
+    <!-- PLG detection bar -->
+    <div style="padding:8px 16px;background:rgba(6,182,212,.04);border:1px solid rgba(6,182,212,.15);border-radius:8px;font-size:11px;color:var(--cyan);display:flex;align-items:center;gap:8px">
+      <span>📊</span>
+      <span><strong>Promtail → Loki → Grafana</strong> thu thập toàn bộ log · 4 alert rules (T1110, T1021, T1078, T1041) · Grafana gửi email cảnh báo đến admin khi phát hiện tấn công</span>
+    </div>
+
+    <!-- Zero Trust layer tags -->
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+      <span class="badge badge-blue">🔑 Keycloak OIDC/PKCE S256</span>
+      <span class="badge badge-blue">🔑 JWT RS256 · JWKS verify</span>
+      <span class="badge badge-purple">🛡 OPA zta_policy</span>
+      <span class="badge badge-purple">🛡 OPA fraud_gate</span>
+      <span class="badge badge-purple">🛡 OPA cross_cloud</span>
+      <span class="badge" style="background:rgba(139,92,246,.1);color:#c4b5fd;border:1px solid rgba(139,92,246,.3)">🔒 SPIRE X.509 SVID</span>
+      <span class="badge badge-yellow">⚡ Rate limit 60 req/min</span>
+      <span class="badge badge-yellow">⚡ Redis IP blocklist</span>
+      <span class="badge badge-yellow">⚡ Redis velocity check</span>
+      <span class="badge badge-red">🔐 HMAC-SHA256 fraud gate</span>
+    </div>
+  </div>
+</div>
+
+<!-- Quick access -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">Truy cập nhanh</div>
+    <div class="card-subtitle">Port-forward cần mở trước qua scripts/open-admin-uis.sh</div>
+  </div>
+  <div class="quick-grid">
+    <a href="http://grafana.ztlab.local:8080" target="_blank" class="quick-item">
+      <div class="quick-icon">📊</div>
+      <div class="quick-info">
+        <div class="quick-name">Grafana</div>
+        <div class="quick-port">:3000 · admin/ZTALab2026!</div>
+      </div>
+    </a>
+    <a href="http://grafana.ztlab.local:8080/alerting/list" target="_blank" class="quick-item">
+      <div class="quick-icon">🚨</div>
+      <div class="quick-info">
+        <div class="quick-name">Grafana Alert Rules</div>
+        <div class="quick-port">4 rules · LogQL</div>
+      </div>
+    </a>
+    <a href="http://grafana.ztlab.local:8080/explore" target="_blank" class="quick-item">
+      <div class="quick-icon">🔍</div>
+      <div class="quick-info">
+        <div class="quick-name">Loki Explore</div>
+        <div class="quick-port">{job="envoy-access"} | json</div>
+      </div>
+    </a>
+    <a href="http://keycloak.ztlab.local:8180/admin" target="_blank" class="quick-item">
+      <div class="quick-icon">🔑</div>
+      <div class="quick-info">
+        <div class="quick-name">Keycloak Admin</div>
+        <div class="quick-port">:8180 · admin/ztlab-admin-2026</div>
+      </div>
+    </a>
+    <a href="http://localhost:9090" target="_blank" class="quick-item">
+      <div class="quick-icon">📈</div>
+      <div class="quick-info">
+        <div class="quick-name">Prometheus</div>
+        <div class="quick-port">:9090 · ztlab_* metrics</div>
+      </div>
+    </a>
+    <a href="http://localhost:18080/health" target="_blank" class="quick-item">
+      <div class="quick-icon">⚙</div>
+      <div class="quick-info">
+        <div class="quick-name">API Gateway Health</div>
+        <div class="quick-port">:18080 · jwks_keys_loaded</div>
+      </div>
+    </a>
+    <a href="/admin" class="quick-item">
+      <div class="quick-icon">🛡</div>
+      <div class="quick-info">
+        <div class="quick-name">Admin Panel</div>
+        <div class="quick-port">Tài khoản · Giao dịch · Users</div>
+      </div>
+    </a>
+    <a href="/security" class="quick-item">
+      <div class="quick-icon">🔴</div>
+      <div class="quick-info">
+        <div class="quick-name">Security</div>
+        <div class="quick-port">IP block · Grafana alerts</div>
+      </div>
+    </a>
+    <a href="/scenarios" class="quick-item">
+      <div class="quick-icon">⚔</div>
+      <div class="quick-info">
+        <div class="quick-name">Demo Scenarios</div>
+        <div class="quick-port">Inject attacks · Test ZT</div>
+      </div>
+    </a>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const GROUPS = {
+  aws: {
+    services: [
+      { key:'web-portal',          name:'web-portal',          sub:'FastAPI Jinja2 · :18081' },
+      { key:'api-gateway',         name:'api-gateway',         sub:'JWT+RateLimit+IP block · :18080' },
+      { key:'payment-service',     name:'payment-service',     sub:'HMAC sign · calls fraud+core · :8080' },
+      { key:'fraud-detection',     name:'fraud-detection',     sub:'Redis velocity check · :8080' },
+      { key:'notification-service',name:'notification-service',sub:'Email confirm · best-effort · :8080', info:true },
+    ],
+    badgeEl: 'aws-badge',
+    containerEl: 'aws-services',
+  },
+  os: {
+    services: [
+      { key:'core-banking',        name:'core-banking',        sub:'HMAC verify · execute txn · OpenStack' },
+      { key:'account-service',     name:'account-service (OS)',sub:'PostgreSQL accounts · debit/credit', info:true },
+      { key:'transaction-service', name:'txn-service (OS)',    sub:'PostgreSQL ledger · immutable', info:true },
+      { key:'spire-agent-os',      name:'SPIRE Agent (OS)',    sub:'join_token NodeAttestor', info:true },
+    ],
+    badgeEl: 'os-badge',
+    containerEl: 'os-services',
+  },
+  plg: {
+    services: [
+      { key:'loki',     name:'Loki',       sub:'Log aggregation · push API · :13100' },
+      { key:'grafana',  name:'Grafana',    sub:'5 dashboards · 4 alert rules · :3000' },
+      { key:'promtail', name:'Promtail',   sub:'DaemonSet log collector · AWS+OS', info:true },
+      { key:'prometheus',name:'Prometheus',sub:'ztlab_* metrics · :9090', info:true },
+    ],
+    badgeEl: 'plg-badge',
+    containerEl: 'plg-services',
+  },
+  id: {
+    services: [
+      { key:'keycloak',        name:'Keycloak',          sub:'OIDC · Realm: ztlab · :8180' },
+      { key:'spire-server',    name:'SPIRE Server',      sub:'SVID issuer · trust domain ztlab.local', info:true },
+      { key:'spire-agent-aws', name:'SPIRE Agent (AWS)', sub:'k8s_psat NodeAttestor', info:true },
+      { key:'opa',             name:'OPA',               sub:'3 policies · gRPC ext_authz :9191', info:true },
+    ],
+    badgeEl: 'id-badge',
+    containerEl: 'id-services',
+  },
+};
+
+function esc(s){ return s==null?'':String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function renderGroup(groupKey, health) {
+  const g = GROUPS[groupKey];
+  const el = document.getElementById(g.containerEl);
+  if (!el) return;
+
+  let upCount = 0, downCount = 0;
+  el.innerHTML = g.services.map(s => {
+    const h = health[s.key];
+    let dotClass, statClass, statText, latText = '';
+    if (s.info || !h) {
+      dotClass = 'info'; statClass = 'info'; statText = '—';
+    } else if (h.status === 'up') {
+      dotClass = 'up'; statClass = 'up'; statText = 'UP';
+      if (h.latency_ms != null) latText = h.latency_ms + 'ms';
+      upCount++;
+    } else {
+      dotClass = 'down'; statClass = 'down'; statText = 'DOWN';
+      downCount++;
+    }
+    const detail = h?.detail ? Object.entries(h.detail).filter(([k])=>k!=='status').map(([k,v])=>`${k}=${esc(String(v))}`).join(' ') : '';
+    const subFull = detail ? esc(s.sub) + ' · ' + detail : esc(s.sub);
+    return `<div class="svc-row">
+      <div class="svc-dot ${dotClass}"></div>
+      <span class="svc-name">${esc(s.name)}</span>
+      <span class="svc-sub" title="${subFull}">${subFull}</span>
+      ${latText ? `<span class="svc-ms">${latText}</span>` : '<span class="svc-ms"></span>'}
+      <span class="svc-stat ${statClass}">${statText}</span>
+    </div>`;
+  }).join('');
+
+  const badge = document.getElementById(g.badgeEl);
+  if (badge) {
+    if (downCount > 0) {
+      badge.className = 'badge badge-red';
+      badge.textContent = downCount + ' DOWN';
+    } else if (upCount > 0) {
+      badge.className = 'badge badge-green';
+      badge.textContent = upCount + ' UP';
+    } else {
+      badge.className = 'badge badge-blue';
+      badge.textContent = '—';
+    }
+  }
+
+  return { up: upCount, down: downCount };
+}
+
+async function doHealthCheck() {
+  try {
+    const resp = await fetch('/api/system/health');
+    const data = await resp.json();
+    const health = data.services || {};
+
+    let totalUp = 0, totalDown = 0;
+    for (const gk of Object.keys(GROUPS)) {
+      const counts = renderGroup(gk, health);
+      if (counts) { totalUp += counts.up; totalDown += counts.down; }
+    }
+    document.getElementById('up-count').textContent = totalUp;
+    document.getElementById('down-count').textContent = totalDown;
+
+    // Redis detail
+    const redis = health['redis'] || {};
+    const rdot = document.getElementById('redis-dot');
+    if (rdot) rdot.className = 'svc-dot ' + (redis.status === 'up' ? 'up' : redis.status === 'down' ? 'down' : 'check');
+    const rb = document.getElementById('redis-blocked');
+    const rv = document.getElementById('redis-velocity');
+    const rl = document.getElementById('redis-latency');
+    if (rb) rb.textContent = redis.blocked_ips != null ? redis.blocked_ips : '—';
+    if (rv) rv.textContent = redis.velocity_keys != null ? redis.velocity_keys : '—';
+    if (rl) rl.textContent = redis.latency_ms != null ? redis.latency_ms + 'ms' : (redis.status === 'down' ? 'DOWN' : '—');
+
+    document.getElementById('last-refresh').textContent = new Date().toLocaleTimeString('vi-VN');
+  } catch(e) {
+    console.error('Health check error:', e);
+  }
+}
+
+doHealthCheck();
+setInterval(doHealthCheck, 15000);
+</script>
+{% endblock %}

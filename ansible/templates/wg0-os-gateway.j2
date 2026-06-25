@@ -16,5 +16,5 @@ PostDown = iptables -D FORWARD -i {{ wg_interface }} -j ACCEPT; iptables -D FORW
 [Peer]
 PublicKey = {{ peer_public_key }}
 Endpoint = {{ peer_endpoint }}
-AllowedIPs = 10.200.200.0/24, 10.10.1.0/24, 10.10.2.0/24, 10.10.3.0/24, 10.42.0.0/16, 10.43.0.0/16
+AllowedIPs = 10.200.0.0/24, 10.10.1.0/24, 10.10.2.0/24, 10.10.3.0/24, 10.42.0.0/16, 10.43.0.0/16
 PersistentKeepalive = 25

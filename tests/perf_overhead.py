@@ -16,7 +16,7 @@ Usage:
 
 Environment variables:
   GW_URL    API Gateway base URL   (default: http://localhost:18080)
-  KC_URL    Keycloak base URL      (default: http://localhost:18443)
+  KC_URL    Keycloak base URL      (default: http://localhost:8180)
   BENCH_N   Number of requests     (default: 50)
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ import urllib.request
 from pathlib import Path
 
 GW_URL  = os.environ.get("GW_URL",  "http://localhost:18080").rstrip("/")
-KC_URL  = os.environ.get("KC_URL",  "http://localhost:18443").rstrip("/")
+KC_URL  = os.environ.get("KC_URL",  "http://localhost:8180").rstrip("/")
 BENCH_N = int(os.environ.get("BENCH_N", "50"))
 
 OUTPUT_PATH = Path(os.environ.get("PERF_OUTPUT", "results/perf_overhead.json"))

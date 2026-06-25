@@ -27,10 +27,18 @@ logger = ZTLabLogger(SERVICE, CLOUD)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pool
-    pool = await asyncpg.create_pool(
-        host=DB_HOST, port=DB_PORT, database=DB_NAME,
-        user=DB_USER, password=DB_PASS, min_size=2, max_size=10,
-    )
+    import asyncio
+    for attempt in range(10):
+        try:
+            pool = await asyncpg.create_pool(
+                host=DB_HOST, port=DB_PORT, database=DB_NAME,
+                user=DB_USER, password=DB_PASS, min_size=2, max_size=10,
+            )
+            break
+        except Exception:
+            if attempt == 9:
+                raise
+            await asyncio.sleep(3)
     await pool.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             account_id TEXT PRIMARY KEY,
@@ -41,11 +49,11 @@ async def lifespan(app: FastAPI):
     """)
     await pool.execute("""
         INSERT INTO accounts (account_id, owner, balance, currency) VALUES
-            ('ACC-1001', 'testuser01',  48500000.0, 'VND'),
-            ('ACC-2001', 'testuser02',  31200000.0, 'VND'),
-            ('ACC-3001', 'demoadmin',  100000000.0, 'VND'),
-            ('ACC-4001', 'merchant01',  26750000.0, 'VND'),
-            ('ACC-5001', 'analyst01',   10000000.0, 'VND')
+            ('ACC-1001', 'testuser01', 1000000000.0, 'VND'),
+            ('ACC-2001', 'testuser02',  250000000.0, 'VND'),
+            ('ACC-3001', 'demoadmin',   100000000.0, 'VND'),
+            ('ACC-4001', 'merchant01',   26750000.0, 'VND'),
+            ('ACC-5001', 'analyst01',    10000000.0, 'VND')
         ON CONFLICT DO NOTHING
     """)
     SERVICE_UP.labels(service=SERVICE, cloud=CLOUD).set(1)

@@ -17,6 +17,7 @@
 set -euo pipefail
 
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
+OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 
 cleanup() {
   echo ""
@@ -33,13 +34,14 @@ start_pf() {
   local svc="$3"
   local local_port="$4"
   local remote_port="$5"
+  local ctx="${6:-$AWS_CONTEXT}"
 
   if ss -lnt | awk '{print $4}' | grep -Eq "(^|:)${local_port}$"; then
     echo "[SKIP] $label — port $local_port đã được dùng"
     return
   fi
 
-  kubectl --context "$AWS_CONTEXT" port-forward "svc/$svc" -n "$ns" \
+  kubectl --context "$ctx" port-forward "svc/$svc" -n "$ns" \
     "${local_port}:${remote_port}" --address=127.0.0.1 >/dev/null 2>&1 &
   PF_PIDS+=($!)
   sleep 1
@@ -72,16 +74,18 @@ start_pf "Security Scorer"        plg-stack  security-scorer 18092 8080
 # Monitoring
 start_pf "Prometheus"             monitoring prometheus      9090  9090
 
-# DB Admin (optional)
-start_pf "pgAdmin (PostgreSQL)"   financial  pgadmin        5050  80
-start_pf "RedisInsight (Redis)"   financial  redisinsight   5540  5540
+# DB Admin
+# pgAdmin chạy trên OpenStack (cùng cluster với Postgres)
+start_pf "pgAdmin (PostgreSQL)"   financial  pgadmin        5050  80   "$OS_CONTEXT"
+# RedisInsight chạy trên AWS (cùng cluster với Redis)
+start_pf "RedisInsight (Redis)"   financial  redisinsight   5540  5540 "$AWS_CONTEXT"
 
 echo ""
 echo "Credentials:"
 echo "  Keycloak:  admin / ztlab-admin-2026"
 echo "  Grafana:   admin / ZTALab2026!"
 echo "  pgAdmin:   admin@ztlab.com / ztlab2026"
-echo "  Redis DB0=fraud DB1=scorer DB2=soar"
+echo "  Redis DB0=fraud+blocklist+soar  DB1=scorer"
 echo ""
 echo "Nhấn Ctrl+C để thoát..."
 wait
