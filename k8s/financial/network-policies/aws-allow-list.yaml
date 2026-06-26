@@ -25,6 +25,9 @@ spec:
           protocol: TCP
         - port: 15006
           protocol: TCP
+        - port: 8181
+          protocol: TCP
+
     - from:
         - namespaceSelector:
             matchLabels:
@@ -215,4 +218,12 @@ spec:
               kubernetes.io/metadata.name: identity
       ports:
         - port: 8080
+          protocol: TCP
+    # Prometheus (Grafana → scrape)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
           protocol: TCP

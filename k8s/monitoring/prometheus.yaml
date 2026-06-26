@@ -39,8 +39,8 @@ data:
         static_configs:
           - targets:
               - 192.168.101.11:30084   # core-banking: NodePort→8080 (plain HTTP)
-              - 192.168.101.11:30082   # account-service: NodePort→8080
-              - 192.168.101.11:30083   # transaction-service: NodePort→8080
+              - 192.168.101.11:30086   # account-service: NodePort→8080 (HTTP; 30082=Envoy mTLS)
+              - 192.168.101.11:30087   # transaction-service: NodePort→8080 (HTTP; 30083=Envoy mTLS)
         metrics_path: /metrics
         relabel_configs:
           - source_labels: [__address__]
@@ -51,11 +51,11 @@ data:
             target_label: service
             replacement: core-banking
           - source_labels: [__tmp_port]
-            regex: '30082'
+            regex: '30086'
             target_label: service
             replacement: account-service
           - source_labels: [__tmp_port]
-            regex: '30083'
+            regex: '30087'
             target_label: service
             replacement: transaction-service
           - target_label: cloud
