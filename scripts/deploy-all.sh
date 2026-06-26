@@ -375,6 +375,8 @@ sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/n
   kaws apply -f "$REPO_ROOT/k8s/rbac/web-portal-response-rbac.yaml"
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/security-scorer.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack security-scorer 120s
+  kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-analyzer.yaml"
+  wait_deployment "$AWS_CONTEXT" plg-stack ai-analyzer 120s
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack soar-engine 180s
 
