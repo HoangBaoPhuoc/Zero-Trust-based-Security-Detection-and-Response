@@ -87,7 +87,7 @@ gen_token() {
   curl -s --max-time 10 -X POST \
     "$KC_URL/realms/$KC_REALM/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=password&client_id=api-gateway&client_secret=$_KC_CLIENT_SECRET&username=$user&password=Test1234!" \
+    -d "grant_type=password&client_id=api-gateway&client_secret=$_KC_CLIENT_SECRET&username=$user&password=Test%40123%21" \
     | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null
 }
 
