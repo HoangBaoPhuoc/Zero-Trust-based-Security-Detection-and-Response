@@ -91,7 +91,7 @@ data:
           mitre: T1110.001
           severity: high
         noDataState: OK
-        title: Kịch bản 1 — Brute Force Login Detected
+        title: Brute Force Login (T1110.001)
         uid: brute-force-login
   fraud-gate-bypass-alert.yml: |
     apiVersion: 1
@@ -141,7 +141,7 @@ data:
           mitre: T1078.004
           severity: critical
         noDataState: OK
-        title: Kịch bản 3 — Fraud Gate Bypass (Gap 2)
+        title: Fraud Gate Bypass (T1078.004)
         uid: fraud-gate-bypass
   large-response-alert.yml: |
     apiVersion: 1
@@ -192,7 +192,7 @@ data:
           mitre: T1041
           severity: high
         noDataState: OK
-        title: Kịch bản 4 — Data Exfiltration Suspect (Gap 1)
+        title: Data Exfiltration — Large Response (T1041)
         uid: gap1-large-response
   lateral-movement-alert.yml: |
     apiVersion: 1
@@ -241,7 +241,7 @@ data:
           mitre: T1021.007
           severity: critical
         noDataState: OK
-        title: 'Kịch bản 2 — Lateral Movement: Invalid SVID'
+        title: 'Lateral Movement — Invalid SVID (T1021.007)'
         uid: lateral-movement-svid
   notification-policy.yml: |
     apiVersion: 1
