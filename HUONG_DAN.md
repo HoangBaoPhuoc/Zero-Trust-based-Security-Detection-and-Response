@@ -39,6 +39,7 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 │   api-gateway     spiffe://ztlab.local/aws/api-gateway                  │
 │   payment-service spiffe://ztlab.local/aws/payment-service              │
 │   fraud-detection spiffe://ztlab.local/aws/fraud-detection              │
+│   notification-service spiffe://ztlab.local/aws/notification-service   │
 │   OPA             ext_authz gRPC port 9191                              │
 │   Redis · PostgreSQL accounts · PostgreSQL transactions                 │
 │                                                                          │
@@ -48,9 +49,9 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 │   Security Scorer   (anomaly window 15 phút · Redis)                   │
 │                                                                          │
 │ namespace: monitoring                                                    │
-│   Prometheus  (10 targets: AWS + OpenStack)                             │
+│   Prometheus  (scrape AWS + OpenStack targets)                          │
 └─────────────────────────┬───────────────────────────────────────────────┘
-                          │  WireGuard VPN  10.200.0.1 ↔ 10.200.0.2
+                          │  WireGuard VPN  10.200.200.1 ↔ 10.200.200.2
                           │  Envoy mTLS · SPIFFE SVID
                           ▼
 ┌──────────── OpenStack K3s  (ctx-openstack) ─────────────────────────────┐
@@ -79,6 +80,7 @@ Browser
   → core-banking [OpenStack] (SPIFFE mTLS + OPA: yêu cầu x-fraud-gate)
   → account-service [OpenStack] (debit/credit số dư)
   → transaction-service [OpenStack] (ghi ledger)
+  → notification-service [AWS] (fire-and-forget)
 ```
 
 ### Luồng phát hiện & phản ứng tự động
@@ -90,7 +92,7 @@ Log event (Envoy/OPA/app) → Promtail → Loki
   → SOAR parse attack_type từ label alert
   → severity ≥ medium + auto_execute=true
   → chạy playbook ngay (isolate / block / restrict / revoke)
-  → ghi case vào Redis + SOAR log
+  → ghi case vào file /data/cases.jsonl
 ```
 
 ---
@@ -100,16 +102,16 @@ Log event (Envoy/OPA/app) → Promtail → Loki
 | Node | IP Private | IP Public | Vai trò |
 |------|-----------|-----------|---------|
 | aws_bastion | — | 52.221.255.36 | SSH jump host |
-| aws_gateway | 10.10.0.x · WG 10.200.0.1 | 13.213.245.227 | NAT + WireGuard |
+| aws_gateway | 10.10.0.10 · WG 10.200.200.1 | 13.213.245.227 | NAT + WireGuard |
 | aws_k3s_master | 10.10.1.10 | — | K8s control plane AWS |
 | aws_k3s_worker_1 | 10.10.1.11 | — | K8s worker AWS |
-| os_gateway | — · WG 10.200.0.2 | 10.10.10.188 | WireGuard client |
+| os_gateway | 192.168.100.10 · WG 10.200.200.2 | 10.10.10.188 (floating) | WireGuard client |
 | os_k3s_master | 192.168.101.11 | — | K8s master OpenStack |
 | deployer (máy này) | 10.10.10.1 (br-exnat) | — | Bastion + Loki proxy |
 
 **K8s contexts:**
-- `ctx-aws` → `127.0.0.1:6444` (SSH tunnel qua bastion)
-- `ctx-openstack` → `127.0.0.1:6445` (SSH tunnel qua os_gateway)
+- `ctx-aws` → `127.0.0.1:6444` (SSH tunnel qua 52.221.255.36 → 10.10.1.10:6443)
+- `ctx-openstack` → `127.0.0.1:6445` (SSH tunnel qua 10.10.10.188 → 192.168.101.11:6443)
 
 **SSH key:** `~/.ssh/ztlab-key`
 
@@ -130,6 +132,7 @@ Nếu có VM nào `SHUTOFF`:
 ```bash
 openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
 # Đợi ~30 giây để VMs boot
+sleep 30
 ```
 
 ### Bước 2 — Mở K8s tunnels
@@ -166,26 +169,21 @@ bash scripts/open-admin-uis.sh
 Chạy daemon tự-restart, không cần giữ terminal.  
 Kiểm tra: `bash scripts/open-admin-uis.sh status`
 
-### Bước 5 — Kiểm tra payment-service chưa bị SOAR isolate
+### Bước 5 — Restore về trạng thái sạch
 
 ```bash
-kubectl --context ctx-aws get svc payment-service -n financial \
-  -o jsonpath='{.spec.selector}' && echo
-# Kết quả đúng: {"app":"payment-service"}
+bash scripts/run-demo.sh --restore
 ```
 
-Nếu có `soar.ztlab.io/isolated`:
-```bash
-kubectl --context ctx-aws patch svc payment-service -n financial \
-  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
-```
+Lệnh này restore payment-service (nếu bị SOAR isolate), api-gateway (nếu bị scale=0) và core-banking trên OpenStack (nếu bị scale=0).
 
 ### Checklist nhanh (copy-paste toàn bộ)
 
 ```bash
 # 1. OpenStack VMs
 source /etc/kolla/admin-openrc.sh && openstack server list
-# Nếu SHUTOFF: openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
+# Nếu SHUTOFF:
+openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2 && sleep 30
 
 # 2. K8s tunnels
 bash scripts/k8s-tunnel.sh up all
@@ -196,14 +194,11 @@ kubectl --context ctx-aws get nodes && kubectl --context ctx-openstack get nodes
 # 4. Port-forwards
 bash scripts/open-admin-uis.sh
 
-# 5. Kiểm tra payment-service không bị isolate
-kubectl --context ctx-aws get svc payment-service -n financial -o jsonpath='{.spec.selector}'
-# Kết quả đúng: {"app":"payment-service"}
-# Nếu sai: kubectl --context ctx-aws patch svc payment-service -n financial \
-#   --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
+# 5. Restore về trạng thái sạch
+bash scripts/run-demo.sh --restore
 ```
 
-> **Sau reboot AWS VM:** pods tự restart theo K3s/systemd, chỉ làm lại bước 2 + 4.  
+> **Sau reboot AWS VM:** pods tự restart theo K3s/systemd, chỉ làm lại bước 2 + 4 + 5.  
 > **Sau reboot OpenStack VM:** VMs tắt — phải bật lại (bước 1) trước khi mở tunnel.
 
 ---
@@ -309,20 +304,12 @@ bash scripts/open-admin-uis.sh   # khởi động tất cả daemon
 
 ```bash
 # Tất cả services
-curl -s http://localhost:18081/health   # web-portal
+curl -s http://localhost:18081/health   # web-portal: {"status":"ok"}
 curl -s http://localhost:18080/health   # api-gateway: jwks_keys_loaded≥1
 curl -s http://localhost:8091/health    # soar-engine: dry_run=false, auto_execute=true
 curl -s http://localhost:3000/api/health  # grafana: database=ok
 curl -s http://localhost:13100/ready    # loki: ready
-curl -s http://localhost:9090/-/healthy # prometheus
-```
-
-```bash
-# Prometheus targets (phải 10/10 UP)
-curl -s http://localhost:9090/api/v1/targets | python3 -c "
-import sys,json; d=json.load(sys.stdin)
-t=d['data']['activeTargets']
-print('Targets UP:', sum(1 for x in t if x['health']=='up'), '/', len(t))"
+curl -s http://localhost:9090/-/healthy # prometheus: Prometheus Server is Healthy.
 ```
 
 ```bash
@@ -335,7 +322,7 @@ TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-conne
 curl -s -X POST http://localhost:18080/payments \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1000,"currency":"VND","description":"health-check"}' \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":50000,"currency":"VND"}' \
   | python3 -c "import sys,json; d=json.load(sys.stdin); print('status:', d.get('status'), '| gate:', d.get('fraud',{}).get('gate'))"
 # Kỳ vọng: status: completed | gate: passed
 ```
@@ -347,29 +334,26 @@ curl -s -X POST http://localhost:18080/payments \
 ### Chuẩn bị trước mỗi lần demo
 
 ```bash
-# 1. Reset số dư về baseline
+# 1. Restore tất cả services về trạng thái bình thường
+bash scripts/run-demo.sh --restore
+
+# 2. Reset số dư về baseline
 python3 tests/seed_db.py
 # ACC-1001 testuser01 = 1,000,000,000 VND
 # ACC-2001 testuser02 = 250,000,000 VND
 
-# 2. Restore payment-service nếu đang bị SOAR isolate
-kubectl --context ctx-aws patch svc payment-service -n financial \
-  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
-
-# 3. Restore api-gateway nếu bị scale xuống 0
-kubectl --context ctx-aws scale deployment api-gateway -n financial --replicas=1
-
-# 4. Kiểm tra tất cả pods đang Running
+# 3. Kiểm tra tất cả pods đang Running
 kubectl --context ctx-aws get pods -n financial | grep -v "Running\|Completed"
+kubectl --context ctx-openstack get pods -n financial | grep -v "Running\|Completed"
 # (không có output = tốt)
 ```
 
-Mở sẵn 4 tab trình duyệt:
+Mở sẵn các tab trình duyệt:
 
 | Tab | URL | Mục đích |
 |-----|-----|---------|
 | 1 | http://localhost:18081 | Web Portal — đăng nhập testuser01 |
-| 2 | http://localhost:3000/d/siem-soar-ztlab | Grafana SIEM SOAR dashboard |
+| 2 | http://localhost:3000/d/ztlab-ai-siem-soar | Grafana SIEM SOAR dashboard |
 | 3 | http://localhost:3000/alerting/list | Grafana Alert Rules (theo dõi FIRING) |
 | 4 | http://localhost:18081/security | SOAR Cases — đăng nhập analyst01 |
 
@@ -377,22 +361,26 @@ Mở sẵn 4 tab trình duyệt:
 
 ### Cách chạy demo
 
-Có 2 cách:
-
 **Cách 1 — Script tự động (khuyến nghị)**
 
 ```bash
-# Chạy toàn bộ: normal traffic + tất cả attack scenarios
+# Chạy toàn bộ: normal traffic + tất cả 4 kịch bản tấn công
 bash scripts/run-demo.sh
 
 # Chỉ normal traffic (4 payment hợp lệ)
 bash scripts/run-demo.sh --traffic-only
 
-# Chỉ attack scenarios (5 kịch bản + SOAR)
+# Chỉ tất cả 4 kịch bản tấn công (không gửi normal traffic)
 bash scripts/run-demo.sh --attack-only
 
-# Thêm brute force (10 request JWT sai)
-bash scripts/run-demo.sh --brute-force
+# Chạy từng kịch bản riêng lẻ
+bash scripts/run-demo.sh --kb1   # KB1: Brute Force
+bash scripts/run-demo.sh --kb2   # KB2: Lateral Movement
+bash scripts/run-demo.sh --kb3   # KB3: Fraud Gate Bypass
+bash scripts/run-demo.sh --kb4   # KB4: Data Exfiltration
+
+# Restore tất cả services sau demo
+bash scripts/run-demo.sh --restore
 
 # Loop liên tục (Ctrl+C để dừng)
 bash scripts/run-demo.sh --continuous
@@ -404,26 +392,37 @@ bash scripts/run-demo.sh --continuous
 
 ### 8.1 — Kịch bản 1: Brute Force Login (T1110.001)
 
-**Mô tả:** Kẻ tấn công thử đăng nhập sai nhiều lần → Keycloak 401 → Grafana detect → SOAR revoke session.
+**Mô tả:** Kẻ tấn công gửi nhiều request JWT sai → Envoy log 401 → Grafana detect → SOAR revoke sessions.
+
+**Grafana query:** `{job="envoy-access"} | json | response_code=401 [1m]`
 
 ```bash
-# Gửi 10 request JWT sai liên tiếp
-for i in $(seq 1 10); do
-  curl -s -X POST http://localhost:18080/payments \
-    -H "Authorization: Bearer invalid.jwt.token.$i" \
-    -H "Content-Type: application/json" \
-    -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1}' > /dev/null
-  echo -n "."
-done
-echo " done"
-# Hoặc dùng script: bash scripts/run-demo.sh --brute-force --attack-only
+# Push 20 log 401 vào Loki (response_code là stream label)
+python3 - <<'PY'
+import json, urllib.request, time
+loki_url = "http://127.0.0.1:13100"
+now = time.time_ns()
+values = [[str(now + i * 1_000_000), json.dumps({
+    "response_code": 401, "source_ip": "10.10.0.99",
+    "method": "POST", "path": "/payments",
+    "message": f"JWT invalid — brute force attempt #{i+1}"
+})] for i in range(20)]
+payload = {"streams": [{"stream": {
+    "job": "envoy-access", "service": "api-gateway",
+    "namespace": "financial", "response_code": "401", "source_ip": "10.10.0.99"
+}, "values": values}]}
+req = urllib.request.Request(f"{loki_url}/loki/api/v1/push",
+    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+urllib.request.urlopen(req, timeout=5)
+print("OK — 20 logs pushed, đợi Grafana alert ~60s")
+PY
 ```
 
 **Chuỗi sự kiện:**
-1. api-gateway Envoy trả 401 → access log → Promtail → Loki
-2. Grafana alert "Kịch bản 1 — Brute Force Login" → FIRING (count 401 [1m] > ngưỡng)
-3. SOAR: `attack_type=brute_force` → playbook `revoke_user_sessions`
-4. Keycloak Admin API xóa tất cả active session của testuser01
+1. 20 log `response_code=401` push vào Loki với label `job=envoy-access`
+2. Grafana alert "Kịch bản 1 — Brute Force Login" → FIRING (count 401 [1m] ≥ ngưỡng)
+3. SOAR webhook: `attack_type=brute_force` → playbook `revoke_user_sessions`
+4. SOAR gọi Keycloak Admin API xóa tất cả active session
 
 **Verify kết quả:**
 ```bash
@@ -440,31 +439,37 @@ for c in cases[-3:]:
 
 ### 8.2 — Kịch bản 2: Lateral Movement (T1021.007)
 
-**Mô tả:** Service bên ngoài trust domain cố gắng gọi vào core-banking → Envoy từ chối SVID không hợp lệ → SOAR isolate payment-service.
+**Mô tả:** Service bên ngoài trust domain dùng SVID không hợp lệ → OPA từ chối → SOAR isolate payment-service.
+
+**Grafana query:** `{job="opa-decisions", opa_result="false"} [5m]`
 
 ```bash
-# Push log lateral movement vào Loki
-python3 - <<'EOF'
+# Push 5 log OPA deny vào Loki (opa_result=false là stream label)
+python3 - <<'PY'
 import json, urllib.request, time
-payload = {"streams":[{"stream":{
-    "job":"envoy-access","service":"payment-service","namespace":"financial","attack_type":"lateral_movement"
-  },"values":[[str(time.time_ns()), json.dumps({
-    "event_type":"lateral_movement_attempt",
-    "source_ip":"10.10.1.99",
-    "svid":"spiffe://external.attacker/malicious-service",
-    "destination":"core-banking",
-    "response_code":403,
-    "message":"SVID outside trust domain ztlab.local — denied by Envoy"
-  })]]}]}
-req = urllib.request.Request("http://localhost:13100/loki/api/v1/push",
-    data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"}, method="POST")
+loki_url = "http://127.0.0.1:13100"
+now = time.time_ns()
+values = [[str(now + i * 1_000_000), json.dumps({
+    "event_type": "lateral_movement_attempt",
+    "opa_result": "false",
+    "svid": "spiffe://external.attacker/malicious-service",
+    "destination": "core-banking",
+    "source_ip": "10.10.1.99",
+    "message": f"SVID outside trust domain ztlab.local — OPA deny #{i+1}"
+})] for i in range(5)]
+payload = {"streams": [{"stream": {
+    "job": "opa-decisions", "opa_result": "false",
+    "service": "payment-service", "namespace": "financial"
+}, "values": values}]}
+req = urllib.request.Request(f"{loki_url}/loki/api/v1/push",
+    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
 urllib.request.urlopen(req, timeout=5)
-print("Loki push OK — chờ Grafana alert ~1 phút")
-EOF
+print("OK — 5 logs pushed, đợi Grafana alert ~60s")
+PY
 ```
 
 **Chuỗi sự kiện:**
-1. Log với `attack_type=lateral_movement` vào Loki
+1. 5 log với stream label `opa_result=false` push vào Loki
 2. Grafana alert "Kịch bản 2 — Lateral Movement" → FIRING
 3. SOAR: `attack_type=lateral_movement` → playbook `isolate_workload`
 4. K8s Service selector của payment-service bị patch → pod không nhận traffic → payment trả 503
@@ -478,14 +483,8 @@ kubectl --context ctx-aws get svc payment-service -n financial \
 
 **Restore sau demo:**
 ```bash
-# Cách 1 — rollback qua SOAR API
-CASE_ID=$(curl -s http://localhost:8091/cases | python3 -c "
-import sys,json
-cases=[c for c in json.load(sys.stdin) if c.get('attack_type')=='lateral_movement']
-print(cases[-1]['case_id']) if cases else print('')")
-curl -s -X POST http://localhost:8091/cases/${CASE_ID}/rollback
-
-# Cách 2 — patch trực tiếp
+bash scripts/run-demo.sh --restore
+# Hoặc patch trực tiếp:
 kubectl --context ctx-aws patch svc payment-service -n financial \
   --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
 ```
@@ -494,90 +493,108 @@ kubectl --context ctx-aws patch svc payment-service -n financial \
 
 ### 8.3 — Kịch bản 3: Fraud Gate Bypass (T1078.004)
 
-**Mô tả:** Kẻ tấn công cố gọi thẳng `/transactions/execute` trên core-banking mà không có header `x-fraud-gate: passed` → OPA từ chối → SOAR phản ứng.
+**Mô tả:** Kẻ tấn công cố gọi `/transactions/execute` mà không có header `x-fraud-gate: passed` → OPA từ chối → SOAR isolate payment-service.
+
+**Grafana query:** `{job="opa-decisions", opa_result="false", request_path="/transactions/execute"} [5m]`
 
 ```bash
-# Gọi trực tiếp core-banking không qua fraud gate
-TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test%40123%21" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
-
-# Thử bypass fraud gate — sẽ bị OPA deny
-curl -s -X POST http://localhost:18080/transactions/execute \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":50000000}' \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d)"
-# Kỳ vọng: 403 Forbidden từ OPA
+# Push 5 log OPA deny với request_path là stream label
+python3 - <<'PY'
+import json, urllib.request, time
+loki_url = "http://127.0.0.1:13100"
+now = time.time_ns()
+values = [[str(now + i * 1_000_000), json.dumps({
+    "event_type": "opa_deny",
+    "opa_result": "false",
+    "request_path": "/transactions/execute",
+    "source_ip": "10.10.1.77",
+    "reason": "fraud_gate header missing or tampered",
+    "message": f"OPA DENY fraud_gate_bypass path=/transactions/execute #{i+1}"
+})] for i in range(5)]
+payload = {"streams": [{"stream": {
+    "job": "opa-decisions", "opa_result": "false",
+    "request_path": "/transactions/execute",
+    "service": "payment-service", "namespace": "financial"
+}, "values": values}]}
+req = urllib.request.Request(f"{loki_url}/loki/api/v1/push",
+    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
+urllib.request.urlopen(req, timeout=5)
+print("OK — 5 logs pushed, đợi Grafana alert ~60s")
+PY
 ```
 
-**OPA fraud gate logic (Gap 2):**
+**OPA fraud gate logic (kiểm soát request đến core-banking):**
 
 | Request đến core-banking | Kết quả |
 |--------------------------|---------|
 | POST /transactions/execute, không có `x-fraud-gate` | **DENY 403** |
-| POST /transactions/execute, `x-fraud-gate=passed`, score=5 | ALLOW |
-| POST /transactions/execute, `x-fraud-gate=passed`, score=80 | **DENY** (score ≥ 75) |
-| POST /transactions/* (không phải /execute) | ALLOW |
+| POST /transactions/execute, `x-fraud-gate=passed`, score < 75 | ALLOW |
+| POST /transactions/execute, `x-fraud-gate=passed`, score ≥ 75 | **DENY** |
+| GET /transactions/* (không phải /execute) | ALLOW |
 
 **Chuỗi sự kiện:**
-1. OPA: `fraud_gate_valid=false` → DENY → ghi decision log
-2. Promtail: `opa_result=false`, `request_path=/transactions/execute` → Loki
-3. Grafana alert "Kịch bản 3 — Fraud Gate Bypass" → FIRING
-4. SOAR: `attack_type=fraud_gate_bypass` → playbook `isolate_workload` trên payment-service
+1. 5 log với stream labels `opa_result=false` + `request_path=/transactions/execute` push vào Loki
+2. Grafana alert "Kịch bản 3 — Fraud Gate Bypass" → FIRING
+3. SOAR: `attack_type=fraud_gate_bypass` → playbook `isolate_workload` (severity=critical)
+4. K8s Service selector của payment-service bị patch → 503
 
 **Restore sau demo:**
 ```bash
-kubectl --context ctx-aws patch svc payment-service -n financial \
-  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
+bash scripts/run-demo.sh --restore
 ```
 
 ---
 
 ### 8.4 — Kịch bản 4: Data Exfiltration (T1041)
 
-**Mô tả:** Response có kích thước bất thường (>1 MB) từ core-banking → Envoy log → Grafana detect → SOAR scale api-gateway xuống 0.
+**Mô tả:** Response có kích thước bất thường (>1 MB) từ core-banking bị Envoy ghi log → Grafana detect → SOAR scale core-banking (OpenStack) xuống 0 replica.
+
+**Grafana query:** `{job="envoy-access"} | json | bytes_sent > 1048576 [5m]`
 
 ```bash
-# Push log data exfiltration vào Loki
-python3 - <<'EOF'
+# Push 5 log envoy-access với bytes_sent lớn vào Loki
+# bytes_sent nằm trong JSON body (parsed bởi | json), KHÔNG phải stream label
+python3 - <<'PY'
 import json, urllib.request, time
-payload = {"streams":[{"stream":{
-    "job":"envoy-access","service":"core-banking","namespace":"financial","attack_type":"large_response"
-  },"values":[[str(time.time_ns()), json.dumps({
-    "event_type":"large_response_detected",
-    "source_ip":"10.10.4.22",
-    "path":"/accounts/export",
-    "response_code":200,
-    "bytes_sent":2500000,
-    "message":"Abnormal response size 2.5MB — possible data exfiltration"
-  })]]}]}
-req = urllib.request.Request("http://localhost:13100/loki/api/v1/push",
-    data=json.dumps(payload).encode(), headers={"Content-Type":"application/json"}, method="POST")
+loki_url = "http://127.0.0.1:13100"
+now = time.time_ns()
+values = [[str(now + i * 1_000_000), json.dumps({
+    "bytes_sent": 3100000,
+    "response_code": 200,
+    "path": "/accounts/export",
+    "source_ip": "10.10.4.88",
+    "message": f"Abnormal response size 3.1MB — possible data exfiltration #{i+1}"
+})] for i in range(5)]
+payload = {"streams": [{"stream": {
+    "job": "envoy-access",
+    "service": "core-banking", "namespace": "financial"
+}, "values": values}]}
+req = urllib.request.Request(f"{loki_url}/loki/api/v1/push",
+    data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}, method="POST")
 urllib.request.urlopen(req, timeout=5)
-print("Loki push OK — chờ Grafana alert ~1 phút")
-EOF
+print("OK — 5 logs pushed (bytes_sent=3100000), đợi Grafana alert ~60s")
+PY
 ```
 
 **Chuỗi sự kiện:**
-1. Log với `bytes_sent=2500000` vào Loki
+1. 5 log với `bytes_sent=3100000` (trong JSON body) push vào Loki
 2. Grafana alert "Kịch bản 4 — Data Exfiltration Suspect" → FIRING
 3. SOAR: `attack_type=large_response` → playbook `restrict_egress`
-4. Deployment `api-gateway` scale xuống 0 replica → toàn bộ API ngừng hoạt động
+4. SOAR scale Deployment `core-banking` trên **ctx-openstack** xuống **0 replica** — dịch vụ ngân hàng cốt lõi ngừng hoạt động
 
 **Verify:**
 ```bash
-kubectl --context ctx-aws get deployment api-gateway -n financial \
+kubectl --context ctx-openstack get deployment core-banking -n financial \
   -o jsonpath='{.spec.replicas}' && echo
-# Kết quả sau restrict: 0
+# Kết quả sau restrict_egress: 0
 ```
 
 **Restore sau demo:**
 ```bash
-kubectl --context ctx-aws scale deployment api-gateway -n financial --replicas=1
-# Đợi pod ready
-kubectl --context ctx-aws rollout status deployment api-gateway -n financial
+bash scripts/run-demo.sh --restore
+# Hoặc scale trực tiếp:
+kubectl --context ctx-openstack scale deployment core-banking -n financial --replicas=1
+kubectl --context ctx-openstack rollout status deployment core-banking -n financial
 ```
 
 ---
@@ -585,62 +602,61 @@ kubectl --context ctx-aws rollout status deployment api-gateway -n financial
 ### Restore toàn bộ sau demo
 
 ```bash
-# Restore payment-service nếu bị isolate
+# Cách nhanh nhất — restore tất cả bằng script
+bash scripts/run-demo.sh --restore
+
+# Hoặc thủ công từng bước:
+
+# Restore payment-service (KB2, KB3)
 kubectl --context ctx-aws patch svc payment-service -n financial \
   --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
 
-# Restore api-gateway nếu bị scale=0
+# Restore api-gateway (nếu bị scale=0)
 kubectl --context ctx-aws scale deployment api-gateway -n financial --replicas=1
+
+# Restore core-banking trên OpenStack (KB4)
+kubectl --context ctx-openstack scale deployment core-banking -n financial --replicas=1
 
 # Reset số dư
 python3 tests/seed_db.py
-
-# Xóa blocked IPs nếu có
-curl -s http://localhost:8091/blocked-ips | python3 -c "
-import sys,json
-for ip in json.load(sys.stdin).get('blocked_ips',[]):
-    print('blocked:', ip)
-    # curl -X DELETE http://localhost:8091/blocked-ips/' + ip"
 ```
 
 ---
 
 ### Lưu ý quan trọng khi demo
 
-> **SOAR auto-isolate payment-service định kỳ** — Nếu hệ thống đang có logs `lateral_movement` cũ trong Loki từ các session trước, Grafana alert có thể fire liên tục và SOAR sẽ tự isolate payment-service. Đây là hành vi đúng của hệ thống.
->
-> Dấu hiệu: `GET /payments` → 503, và `kubectl get svc payment-service` thấy selector có `soar.ztlab.io/isolated`.
->
-> Trước khi demo payment, luôn chạy lệnh restore ở trên.
+> **SOAR auto-isolate payment-service:** Nếu hệ thống đang có logs cũ trong Loki từ session trước, Grafana alert có thể fire và SOAR sẽ tự isolate payment-service. Dấu hiệu: `GET /payments` → 503, và `kubectl get svc payment-service` thấy selector có `soar.ztlab.io/isolated`. Trước khi demo, luôn chạy `bash scripts/run-demo.sh --restore`.
+
+> **Grafana eval interval:** Alert rules eval mỗi 1 phút — sau khi push log vào Loki, chờ tối đa 60-90 giây để alert fire và SOAR tạo case.
 
 ---
 
 ## 9. SOAR Engine
 
 **URL:** http://localhost:8091  
-**Config hiện tại:** `auto_execute=true` · `min_severity=medium` · `dry_run=false` · `hitl_severity=high`
+**Config hiện tại:** `auto_execute=true` · `min_severity=medium` · `dry_run=false`
 
-### 5 Playbooks
+### Playbooks & Attack type mapping
 
-| Playbook | Trigger (attack_type) | Hành động K8s |
-|----------|----------------------|--------------|
-| `isolate_workload` | lateral_movement, fraud_gate_bypass | Patch Service selector → pod không nhận traffic |
-| `restrict_egress` | large_response | Scale Deployment → 0 replica |
-| `quarantine_workload` | cryptomining | Scale Deployment → 0 replica |
-| `block_source_ip` | port_scan, exploit_probe, access_denied | Tạo NetworkPolicy + Redis DB0 blocklist 24h |
-| `revoke_user_sessions` | brute_force, jwt_replay, credential_stuffing | Keycloak Admin API xóa session |
+| attack_type | Playbook | Target | Context |
+|-------------|---------|--------|---------|
+| `brute_force` | `revoke_user_sessions` | api-gateway | ctx-aws |
+| `lateral_movement` | `isolate_workload` | payment-service | ctx-aws |
+| `fraud_gate_bypass` | `isolate_workload` | payment-service | ctx-aws |
+| `large_response` | `restrict_egress` | core-banking | ctx-openstack |
+| `access_denied` | `block_source_ip` | api-gateway | ctx-aws |
+| `port_scan` | `block_source_ip` | api-gateway | ctx-aws |
+| `cryptomining` | `quarantine_workload` | transaction-service | ctx-openstack |
 
-### Attack type → Playbook mapping
+### Mô tả playbook
 
-| attack_type | Playbook | Target workload |
-|-------------|---------|----------------|
-| fraud_gate_bypass | isolate_workload | payment-service |
-| lateral_movement | isolate_workload | payment-service |
-| large_response | restrict_egress | api-gateway |
-| cryptomining | quarantine_workload | transaction-service |
-| brute_force | revoke_user_sessions | api-gateway |
-| access_denied | block_source_ip | api-gateway |
-| port_scan | block_source_ip | api-gateway |
+| Playbook | Hành động K8s |
+|----------|--------------|
+| `isolate_workload` | Patch Service selector → pod không nhận traffic (Service vẫn tồn tại, pod vẫn chạy) |
+| `restrict_egress` | Scale Deployment → 0 replica (toàn bộ pod dừng) |
+| `quarantine_workload` | Scale Deployment → 0 replica |
+| `block_source_ip` | Tạo NetworkPolicy + Redis DB0 blocklist 24h |
+| `revoke_user_sessions` | Gọi Keycloak Admin API xóa session của user |
 
 ### API endpoints
 
@@ -671,9 +687,9 @@ for c in cases[-10:]:
 ### Lưu ý
 
 - Grafana `repeat_interval=1h` — cùng 1 alert không gửi lại SOAR trong 1 giờ
-- Sau `isolate_workload`: payment-service trả 503 cho đến khi restore
-- Sau `restrict_egress`: api-gateway scale=0, toàn bộ API ngừng
-- SOAR lưu cases vào Redis — không mất khi pod restart
+- Sau `isolate_workload` (payment-service): trả 503 đến khi restore
+- Sau `restrict_egress` (core-banking OpenStack): payment flow lỗi ở bước ghi sổ cái
+- SOAR lưu cases vào file `/data/cases.jsonl` trong pod — không mất khi pod restart nếu có PersistentVolume
 
 ---
 
@@ -682,7 +698,7 @@ for c in cases[-10:]:
 **URL:** http://localhost:3000 · Login: admin / ZTALab2026!  
 **Log retention:** 90 ngày (Loki)
 
-### 6 Dashboards (folder: ZTLab)
+### Dashboards (folder: ZTLab)
 
 | Dashboard | Mô tả |
 |-----------|-------|
@@ -691,20 +707,20 @@ for c in cases[-10:]:
 | ZTLab Full Logs | Envoy access logs toàn bộ hệ thống |
 | Envoy Access Logs | HTTP matrix, latency P50/P95/P99 |
 | OPA Decision Log | Allow/deny rate, top denied paths |
-| SIEM SOAR | Cases, playbooks, IPs blocked, live log stream |
+| ZTLab AI SIEM SOAR | Cases, playbooks, IPs blocked, live log stream |
 
-### 6 Alert Rules (folder: ZTLab)
+### Alert Rules (folder: ZTLab)
 
-| Alert | Severity | attack_type | Playbook |
-|-------|----------|-------------|---------|
-| Kịch bản 1 — Brute Force Login | high | brute_force | revoke_user_sessions |
-| Kịch bản 2 — Lateral Movement | critical | lateral_movement | isolate_workload |
-| Kịch bản 3 — Fraud Gate Bypass | critical | fraud_gate_bypass | isolate_workload |
-| Kịch bản 4 — Data Exfiltration | high | large_response | restrict_egress |
-| Access Denied Spike | high | access_denied | block_source_ip |
-| SOAR Engine Health | warning | — | monitor only |
+| Alert | Severity | attack_type → Playbook |
+|-------|----------|------------------------|
+| Kịch bản 1 — Brute Force Login | high | brute_force → revoke_user_sessions |
+| Kịch bản 2 — Lateral Movement | critical | lateral_movement → isolate_workload |
+| Kịch bản 3 — Fraud Gate Bypass | critical | fraud_gate_bypass → isolate_workload |
+| Kịch bản 4 — Data Exfiltration | high | large_response → restrict_egress |
+| Access Denied Spike | high | access_denied → block_source_ip |
+| SOAR Engine Health | warning | — (monitor only) |
 
-Tất cả alert `category=security` → webhook SOAR `POST /grafana-webhook`.
+Tất cả alert `category=security` → webhook `POST soar-engine/grafana-webhook`.
 
 ### Reload Grafana alerts (sau khi sửa ConfigMap)
 
@@ -759,17 +775,26 @@ kubectl --context ctx-aws get svc payment-service -n financial \
   -o jsonpath='{.spec.selector}' && echo
 # Nếu có "soar.ztlab.io/isolated":"true":
 
-# Cách 1 — rollback qua SOAR API
-CASE_ID=$(curl -s http://localhost:8091/cases | python3 -c "
-import sys,json
-cases=[c for c in json.load(sys.stdin)
-       if 'payment' in c.get('target_workload','') and c['status']=='executed']
-print(cases[-1]['case_id']) if cases else print('')")
-[ -n "$CASE_ID" ] && curl -X POST http://localhost:8091/cases/${CASE_ID}/rollback
+# Restore nhanh
+bash scripts/run-demo.sh --restore
 
-# Cách 2 — patch trực tiếp (nhanh hơn)
+# Hoặc patch trực tiếp
 kubectl --context ctx-aws patch svc payment-service -n financial \
   --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
+```
+
+### Payment trả lỗi — core-banking trên OpenStack bị scale=0 (sau KB4)
+
+```bash
+# Kiểm tra
+kubectl --context ctx-openstack get deployment core-banking -n financial \
+  -o jsonpath='{.spec.replicas}' && echo
+# Nếu 0:
+
+bash scripts/run-demo.sh --restore
+# Hoặc:
+kubectl --context ctx-openstack scale deployment core-banking -n financial --replicas=1
+kubectl --context ctx-openstack rollout status deployment core-banking -n financial
 ```
 
 ### Payment trả 503 — cross-cloud không hoạt động
@@ -787,13 +812,10 @@ for port, name in [(30080,'core-banking'),(30082,'account-svc'),(30083,'txn-svc'
     try: s.connect(('192.168.101.11',port)); print('OK', name)
     except Exception as e: print('FAIL', name, str(e)[:40])
     finally: s.close()"
-# Phải OK cả 3
+# Phải OK cả 3 — nếu FAIL: kiểm tra OpenStack VMs đã ACTIVE và WireGuard đang chạy
 
-# 3. Kiểm tra WireGuard
-kubectl --context ctx-aws exec -n financial deployment/payment-service \
-  -c payment-service -- python3 -c "
-import socket; s=socket.socket(socket.AF_INET, socket.SOCK_ICMP if hasattr(socket,'ICMP') else socket.SOCK_STREAM)
-# Ping thay thế bằng TCP test ở trên"
+# 3. Kiểm tra WireGuard trên os-gateway
+ssh -i ~/.ssh/ztlab-key ubuntu@10.10.10.188 'sudo wg show wg0'
 ```
 
 ### JWT invalid token — 401 từ api-gateway
@@ -806,7 +828,7 @@ TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-conne
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token','ERR'))")
 echo "${TOKEN:0:30}..."
 
-# Kiểm tra issuer trong token (phải là http://keycloak.ztlab.local:8180/realms/ztlab)
+# Kiểm tra issuer trong token
 echo $TOKEN | cut -d. -f2 | python3 -c "
 import sys,base64,json
 p=sys.stdin.read().strip()
@@ -855,7 +877,7 @@ ss -lnt | grep 13099
 bash scripts/open-admin-uis.sh stop && bash scripts/open-admin-uis.sh
 ```
 
-### Grafana alert firing liên tục (false positive)
+### Grafana alert firing liên tục (false positive từ logs cũ)
 
 ```bash
 # Xem alert nào đang firing
@@ -897,8 +919,8 @@ TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-conne
 
 # Dùng token
 curl -s -H "Authorization: Bearer $TOKEN" http://localhost:18080/accounts/ACC-1001
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:18080/accounts?owner=testuser01
-curl -s -H "Authorization: Bearer $TOKEN" http://localhost:18080/transactions?account_id=ACC-1001&limit=5
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:18080/transactions?account_id=ACC-1001&limit=5"
 ```
 
 ---
