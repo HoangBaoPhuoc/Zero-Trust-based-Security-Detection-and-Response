@@ -92,7 +92,7 @@ spec:
             - name: ADMIN_EMAIL
               value: "voha2005@gmail.com"
             # URL công khai của SOAR engine — admin click từ email sẽ mở URL này
-            # Phải trỏ tới port-forward: kubectl port-forward svc/soar-engine -n plg-stack 8081:8080
+            # port-forward: bash scripts/open-admin-uis.sh → 8091:8080
             - name: SOAR_PUBLIC_URL
               value: "http://127.0.0.1:8091"
           volumeMounts:
