@@ -293,10 +293,15 @@ bash scripts/open-admin-uis.sh   # khởi động tất cả daemon
 | `/dashboard` | Số dư, lịch sử giao dịch | Đăng nhập |
 | `/transfer` | Chuyển tiền | financial-write |
 | `/scenarios` | Trigger kịch bản attack từ UI | Đăng nhập |
-| `/security` | SOAR cases, blocked IPs | security-analyst |
+| `/security` | SOAR cases + blocked IPs (xem + quản lý) | security-analyst (xem), security-admin (thêm) |
 | `/monitor` | System health | security-analyst |
 
 **Login flow:** `/login` → click "Đăng nhập với Keycloak SSO" → Keycloak (proxied qua `/kc/`) → callback → `/dashboard`.
+
+> **Phân quyền trang `/security`:**
+> - **analyst01** (`security-analyst`): xem SOAR Cases (attack_type, playbook, status, steps), xem danh sách IP bị chặn — **chỉ đọc**.
+> - **security-admin**: thêm/xóa blocked IP thủ công, rollback SOAR case.
+> - SOAR Engine tự động chạy playbook (`auto_execute=true`) — analyst không cần thao tác gì để kích hoạt phản ứng.
 
 ---
 
