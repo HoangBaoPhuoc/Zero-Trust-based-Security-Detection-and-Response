@@ -40,7 +40,7 @@ spec:
         app: core-banking
         cloud: aws
       annotations:
-        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/core-banking"
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
     spec:
       serviceAccountName: core-banking
       volumes:
@@ -102,7 +102,7 @@ spec:
             - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
           env:
             - name: SPIFFE_ID
-              value: "spiffe://ztlab.local/aws/core-banking"
+              value: "spiffe://ztlab.local/openstack/core-banking"
           ports:
             - containerPort: 15006
               name: envoy-inbound
@@ -163,7 +163,7 @@ spec:
         app: account-service
         cloud: aws
       annotations:
-        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/account-service"
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
     spec:
       serviceAccountName: account-service
       volumes:
@@ -228,7 +228,7 @@ spec:
             - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
           env:
             - name: SPIFFE_ID
-              value: "spiffe://ztlab.local/aws/account-service"
+              value: "spiffe://ztlab.local/openstack/account-service"
           ports:
             - containerPort: 15006
               name: envoy-inbound
@@ -289,7 +289,7 @@ spec:
         app: transaction-service
         cloud: aws
       annotations:
-        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/transaction-service"
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
     spec:
       serviceAccountName: transaction-service
       volumes:
@@ -350,7 +350,7 @@ spec:
             - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
           env:
             - name: SPIFFE_ID
-              value: "spiffe://ztlab.local/aws/transaction-service"
+              value: "spiffe://ztlab.local/openstack/transaction-service"
           ports:
             - containerPort: 15006
               name: envoy-inbound

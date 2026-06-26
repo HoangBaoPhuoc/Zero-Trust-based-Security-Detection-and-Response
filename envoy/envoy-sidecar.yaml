@@ -314,37 +314,7 @@ static_resources:
       connect_timeout: 8s
       type: STATIC
       wait_for_warm_on_init: false
-      transport_socket:
-        name: envoy.transport_sockets.tls
-        typed_config:
-          "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-          common_tls_context:
-            tls_certificate_sds_secret_configs:
-              - name: __SPIFFE_ID__
-                sds_config:
-                  initial_fetch_timeout: 10s
-                  api_config_source:
-                    api_type: GRPC
-                    transport_api_version: V3
-                    grpc_services:
-                      - envoy_grpc:
-                          cluster_name: spire_agent
-            combined_validation_context:
-              default_validation_context:
-                match_subject_alt_names:
-                  - safe_regex:
-                      google_re2: {}
-                      regex: "spiffe://ztlab\\.local/.*"
-              validation_context_sds_secret_config:
-                name: ROOTCA
-                sds_config:
-                  initial_fetch_timeout: 10s
-                  api_config_source:
-                    api_type: GRPC
-                    transport_api_version: V3
-                    grpc_services:
-                      - envoy_grpc:
-                          cluster_name: spire_agent
+      transport_socket: *upstream_mtls
       load_assignment:
         cluster_name: core_banking
         endpoints:
@@ -356,8 +326,8 @@ static_resources:
                       port_value: 30080         # NodePort → Envoy mTLS inbound (15006)
 
     - name: account_service
-      connect_timeout: 2s
-      type: STRICT_DNS
+      connect_timeout: 8s
+      type: STATIC
       wait_for_warm_on_init: false
       transport_socket: *upstream_mtls
       load_assignment:
@@ -367,12 +337,12 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: account-service.financial.svc.cluster.local
-                      port_value: 15006  # account-service Envoy inbound mTLS
+                      address: 192.168.101.11  # OpenStack account-service via WireGuard
+                      port_value: 30082         # NodePort → Envoy mTLS inbound (15006)
 
     - name: transaction_service
-      connect_timeout: 2s
-      type: STRICT_DNS
+      connect_timeout: 8s
+      type: STATIC
       wait_for_warm_on_init: false
       transport_socket: *upstream_mtls
       load_assignment:
@@ -382,5 +352,5 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: transaction-service.financial.svc.cluster.local
-                      port_value: 15006  # transaction-service Envoy inbound mTLS
+                      address: 192.168.101.11  # OpenStack transaction-service via WireGuard
+                      port_value: 30083         # NodePort → Envoy mTLS inbound (15006)
