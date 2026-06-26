@@ -99,7 +99,7 @@ gen_token() {
   curl -s --max-time 10 -X POST \
     "$KC_URL/realms/$KC_REALM/protocol/openid-connect/token" \
     -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=password&client_id=api-gateway&client_secret=$_KC_CLIENT_SECRET&username=$user&password=Test%40123%21" \
+    -d "grant_type=password&client_id=api-gateway&client_secret=$_KC_CLIENT_SECRET&username=$user&password=Test1234%21" \
     | python3 -c "import json,sys; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null
 }
 
@@ -140,21 +140,27 @@ wait_soar_case() {
     local result
     result=$(curl -s "$SOAR_URL/cases" 2>/dev/null | python3 -c "
 import sys, json
-from datetime import datetime
 start_ts = '$start_ts'
 attack_type = '$attack_type'
 cases = json.load(sys.stdin)
-# Tìm case mới nhất của attack_type với ts > start_ts
+# Tìm case mới nhất của attack_type với ts > start_ts (kể cả pending_approval)
 matched = [c for c in cases
            if c.get('attack_type') == attack_type
-           and c.get('status') in ('executed', 'dry_run', 'failed')
+           and c.get('status') in ('executed', 'dry_run', 'failed', 'pending_approval')
            and c.get('ts', '') >= start_ts]
 if matched:
     c = matched[-1]
-    print('FOUND')
+    status = c.get('status')
+    if status == 'pending_approval':
+        print('FOUND_HITL')
+    else:
+        print('FOUND')
     print('  case_id  :', c.get('case_id'))
-    print('  playbook :', c.get('playbook'), '| status:', c.get('status'))
+    print('  status   :', status)
+    print('  playbook :', c.get('playbook'), '| severity:', c.get('severity'))
     print('  context  :', c.get('target_context'), '| workload:', c.get('target_workload'))
+    if status == 'pending_approval':
+        print('  >>> Admin phải chọn hành động tại: http://localhost:18081/security')
     for s in c.get('steps', []):
         icon = chr(10003) if s.get('status') == 'completed' else (chr(10007) if s.get('status') == 'failed' else '-')
         print(f'  {icon} {s.get(\"phase\",\"?\"):12} {s.get(\"status\",\"?\"):10} | {s.get(\"action\",\"\")[:70]}')
@@ -292,7 +298,8 @@ PY
   step "Đợi Grafana alert fire + SOAR xử lý (${SOAR_WAIT}s max)..."
   step "Grafana eval mỗi 1 phút — có thể chờ tới 60s trước khi alert fire"
   if wait_soar_case "brute_force" "revoke_user_sessions"; then
-    ok "KB1 PASS — SOAR tạo case brute_force + revoke_user_sessions"
+    ok "KB1 PASS — SOAR tạo case brute_force | playbook đề xuất: revoke_user_sessions"
+    info "Admin duyệt tại: http://localhost:18081/security (đăng nhập analyst01 hoặc security-admin)"
   else
     warn "KB1: Grafana alert chưa fire. Kiểm tra http://127.0.0.1:3000 → Alerting → Alert rules → Kịch bản 1"
   fi
@@ -334,18 +341,18 @@ PY
 
   echo ""
   step "Đợi Grafana alert fire + SOAR xử lý (${SOAR_WAIT}s max)..."
-  step "SOAR sẽ chạy isolate_workload → patch payment-service selector"
+  step "SOAR đề xuất isolate_workload — admin phải duyệt tại web portal"
   if wait_soar_case "lateral_movement" "isolate_workload"; then
     local sel; sel=$(kubectl --context "$AWS_CONTEXT" get svc payment-service -n financial \
       -o jsonpath='{.spec.selector}' 2>/dev/null)
     if echo "$sel" | grep -q "isolated"; then
       ok "KB2 PASS — payment-service đã bị isolate: $sel"
+      step "Restore payment-service..."
+      restore_all
     else
-      ok "KB2 PASS — SOAR case created (selector: $sel)"
+      ok "KB2 PASS — SOAR case tạo thành công | Chờ admin chọn hành động tại web portal"
+      info "Admin duyệt tại: http://localhost:18081/security → chọn 'Cô lập dịch vụ' hoặc 'Chặn IP'"
     fi
-    echo ""
-    step "Restore payment-service..."
-    restore_all
   else
     warn "KB2: Grafana alert chưa fire. Kiểm tra http://127.0.0.1:3000 → Alerting → Alert rules → Kịch bản 2"
   fi
@@ -388,18 +395,18 @@ PY
 
   echo ""
   step "Đợi Grafana alert fire + SOAR xử lý (${SOAR_WAIT}s max)..."
-  step "SOAR sẽ chạy isolate_workload (severity=critical) → patch payment-service selector"
+  step "SOAR đề xuất isolate_workload (severity=critical) — admin phải duyệt tại web portal"
   if wait_soar_case "fraud_gate_bypass" "isolate_workload"; then
     local sel; sel=$(kubectl --context "$AWS_CONTEXT" get svc payment-service -n financial \
       -o jsonpath='{.spec.selector}' 2>/dev/null)
     if echo "$sel" | grep -q "isolated"; then
       ok "KB3 PASS — payment-service đã bị isolate: $sel"
+      step "Restore payment-service..."
+      restore_all
     else
-      ok "KB3 PASS — SOAR case created"
+      ok "KB3 PASS — SOAR case tạo thành công | Chờ admin chọn hành động tại web portal"
+      info "Admin duyệt tại: http://localhost:18081/security → chọn 'Cô lập dịch vụ' hoặc 'Chặn IP'"
     fi
-    echo ""
-    step "Restore payment-service..."
-    restore_all
   else
     warn "KB3: Grafana alert chưa fire. Kiểm tra http://127.0.0.1:3000 → Alerting → Alert rules → Kịch bản 3"
   fi
@@ -439,7 +446,7 @@ PY
 
   echo ""
   step "Đợi Grafana alert fire + SOAR xử lý (${SOAR_WAIT}s max)..."
-  step "SOAR sẽ chạy restrict_egress → scale core-banking (OpenStack) về 0 replicas"
+  step "SOAR đề xuất restrict_egress — admin phải duyệt tại web portal"
   local before_replicas
   before_replicas=$(kubectl --context "$OS_CONTEXT" get deploy core-banking -n financial \
     -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "?")
@@ -451,12 +458,12 @@ PY
       -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "?")
     if [[ "$after_replicas" == "0" ]]; then
       ok "KB4 PASS — core-banking scaled xuống 0 replicas trên OpenStack"
+      step "Restore core-banking..."
+      restore_all
     else
-      ok "KB4 PASS — SOAR case created (core-banking: ${after_replicas} replicas)"
+      ok "KB4 PASS — SOAR case tạo thành công | Chờ admin chọn hành động tại web portal"
+      info "Admin duyệt tại: http://localhost:18081/security → chọn 'Hạn chế lưu lượng ra'"
     fi
-    echo ""
-    step "Restore core-banking..."
-    restore_all
   else
     warn "KB4: Grafana alert chưa fire. Kiểm tra http://127.0.0.1:3000 → Alerting → Alert rules → Kịch bản 4"
   fi
@@ -487,8 +494,9 @@ try:
     cases = json.loads(r.read().decode())
     print(f"  Tổng: {len(cases)} cases")
     for c in cases[-6:]:
-        icon = "✓" if c.get("status") in ("executed","dry_run") else ("✗" if c.get("status") == "failed" else "-")
-        print(f"  {icon} [{c.get('status','?'):10}] {c.get('attack_type','?'):25} sev={c.get('severity','?'):8} → {c.get('playbook','?')}")
+        s = c.get("status","?")
+        icon = "✓" if s in ("executed","dry_run") else ("⏳" if s == "pending_approval" else ("✗" if s == "failed" else "-"))
+        print(f"  {icon} [{s:17}] {c.get('attack_type','?'):25} sev={c.get('severity','?'):8} → {c.get('playbook','?')}")
 except Exception as e:
     print(f"  (Không thể kết nối SOAR: {e})")
 PY

@@ -1282,6 +1282,55 @@ async def api_soar_rollback(case_id: str, request: Request):
             return JSONResponse({"error": str(exc)}, status_code=503)
 
 
+@app.post("/api/soar/cases/{case_id}/approve")
+async def api_soar_approve(case_id: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if "security-admin" not in session.get("roles", []):
+        return JSONResponse({"error": "security-admin required"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.post(f"{SOAR_ENGINE_URL}/cases/{case_id}/approve-admin", headers=_soar_headers())
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.post("/api/soar/cases/{case_id}/deny")
+async def api_soar_deny(case_id: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if "security-admin" not in session.get("roles", []):
+        return JSONResponse({"error": "security-admin required"}, status_code=403)
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.post(f"{SOAR_ENGINE_URL}/cases/{case_id}/deny-admin", headers=_soar_headers())
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+@app.post("/api/soar/cases/{case_id}/execute-playbook")
+async def api_soar_execute_playbook(case_id: str, request: Request):
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if "security-admin" not in session.get("roles", []):
+        return JSONResponse({"error": "security-admin required"}, status_code=403)
+    body = await request.json()
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            r = await client.post(
+                f"{SOAR_ENGINE_URL}/cases/{case_id}/execute-playbook",
+                json=body, headers=_soar_headers(),
+            )
+            return JSONResponse(r.json(), status_code=r.status_code)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=503)
+
+
 @app.get("/monitor", response_class=HTMLResponse)
 async def monitor_page(request: Request):
     session = _get_session(request)
