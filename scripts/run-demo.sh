@@ -299,16 +299,16 @@ PY
 }
 
 # ─── KB2: Lateral Movement ───────────────────────────────────────────────────
-# Grafana query: sum(count_over_time({job="opa-decisions",opa_result="false"}[5m]))
-# opa_result="false" là stream label filter — cần push đúng như vậy
+# Grafana query: sum(count_over_time({job="opa-decisions",opa_result="false",attack_scenario="lateral_movement"}[5m]))
+# attack_scenario="lateral_movement" phân biệt KB2 với KB3 và OPA deny từ KB1
 run_kb2() {
   echo ""
   attack "═══ KB2: Lateral Movement — Invalid SVID (ATT&CK T1021.007) ═══"
   step "Restore services trước khi test..."
   restore_all
   echo ""
-  step "Push 5 log vào Loki (job=opa-decisions, opa_result=false — stream labels)..."
-  step "Grafana query: {job=opa-decisions, opa_result=false}[5m]"
+  step "Push 5 log vào Loki (job=opa-decisions, opa_result=false, attack_scenario=lateral_movement)..."
+  step "Grafana query: {job=opa-decisions, opa_result=false, attack_scenario=lateral_movement}[5m]"
   python3 - "$LOKI_URL" <<'PY'
 import json, urllib.request, time, sys
 loki_url = sys.argv[1]
@@ -323,6 +323,7 @@ values = [[str(now + i * 1_000_000), json.dumps({
 })] for i in range(5)]
 payload = {"streams": [{"stream": {
     "job": "opa-decisions", "opa_result": "false",
+    "attack_scenario": "lateral_movement",
     "service": "payment-service", "namespace": "financial"
 }, "values": values}]}
 req = urllib.request.Request(f"{loki_url.rstrip('/')}/loki/api/v1/push",
@@ -351,15 +352,16 @@ PY
 }
 
 # ─── KB3: Fraud Gate Bypass ──────────────────────────────────────────────────
-# Grafana query: sum(count_over_time({job="opa-decisions",opa_result="false",request_path="/transactions/execute"}[5m]))
+# Grafana query: sum(count_over_time({job="opa-decisions",opa_result="false",attack_scenario="fraud_gate_bypass"}[5m]))
+# attack_scenario="fraud_gate_bypass" phân biệt KB3 với KB2
 run_kb3() {
   echo ""
   attack "═══ KB3: Fraud Gate Bypass (ATT&CK T1078.004) ═══"
   step "Restore services trước khi test..."
   restore_all
   echo ""
-  step "Push 5 log vào Loki (job=opa-decisions, opa_result=false, request_path=/transactions/execute)..."
-  step "Grafana query: {job=opa-decisions, opa_result=false, request_path=/transactions/execute}[5m]"
+  step "Push 5 log vào Loki (job=opa-decisions, opa_result=false, attack_scenario=fraud_gate_bypass)..."
+  step "Grafana query: {job=opa-decisions, opa_result=false, attack_scenario=fraud_gate_bypass}[5m]"
   python3 - "$LOKI_URL" <<'PY'
 import json, urllib.request, time, sys
 loki_url = sys.argv[1]
@@ -374,6 +376,7 @@ values = [[str(now + i * 1_000_000), json.dumps({
 })] for i in range(5)]
 payload = {"streams": [{"stream": {
     "job": "opa-decisions", "opa_result": "false",
+    "attack_scenario": "fraud_gate_bypass",
     "request_path": "/transactions/execute",
     "service": "payment-service", "namespace": "financial"
 }, "values": values}]}
