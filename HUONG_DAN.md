@@ -361,6 +361,11 @@ Mở sẵn các tab trình duyệt:
 
 ### Cách chạy demo
 
+> **Về "tấn công thực" vs "inject log":**
+> - **KB1** có thể tấn công thực bằng cách craft JWT giả → api-gateway xác thực signature thất bại → trả 401 → Envoy ghi log thật → Grafana alert fire.
+> - **KB2, KB3, KB4** không thể tấn công thực từ bên ngoài (cần giả mạo SPIFFE SVID hoặc gọi trực tiếp internal service) → dùng inject log vào Loki để trigger Grafana alert.
+> - Script `run-demo.sh` dùng inject log cho tất cả 4 kịch bản để đảm bảo tính đồng nhất và đáng tin cậy khi demo.
+
 **Cách 1 — Script tự động (khuyến nghị)**
 
 ```bash
@@ -392,9 +397,48 @@ bash scripts/run-demo.sh --continuous
 
 ### 8.1 — Kịch bản 1: Brute Force Login (T1110.001)
 
-**Mô tả:** Kẻ tấn công gửi nhiều request JWT sai → Envoy log 401 → Grafana detect → SOAR revoke sessions.
+**Mô tả:** Kẻ tấn công gửi nhiều request JWT giả → OPA cho qua (chỉ decode payload, không verify signature) → api-gateway xác thực signature thất bại → trả 401 → Envoy ghi log thật → Grafana detect → SOAR revoke sessions.
 
 **Grafana query:** `{job="envoy-access"} | json | response_code=401 [1m]`
+
+#### Cách A — Tấn công thực (real traffic, tạo log thật trong Envoy)
+
+```bash
+# Craft JWT: payload hợp lệ nhưng signature giả
+# OPA chỉ io.jwt.decode() không verify signature → cho qua
+# App kiểm tra signature thật → trả 401 → Envoy log response_code=401
+FUTURE_EXP=$(($(date +%s) + 3600))
+
+HEADER=$(python3 -c "
+import base64,json
+h=json.dumps({'alg':'RS256','typ':'JWT'}).encode()
+print(base64.urlsafe_b64encode(h).rstrip(b'=').decode())")
+
+PAYLOAD=$(python3 -c "
+import base64,json
+exp=$FUTURE_EXP
+p={'sub':'attacker-uid','iss':'http://keycloak.ztlab.local:8180/realms/ztlab',
+   'exp':exp,'realm_access':{'roles':['financial-write','financial-read']}}
+d=json.dumps(p).encode()
+print(base64.urlsafe_b64encode(d).rstrip(b'=').decode())")
+
+FAKE_JWT="\${HEADER}.\${PAYLOAD}.FAKESIGNATUREFAKESIGNATUREFAKESIG"
+
+echo "Gửi 20 request brute force với JWT giả signature..."
+for i in \$(seq 1 20); do
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://localhost:18080/payments \
+    -H "Authorization: Bearer \$FAKE_JWT" \
+    -H "Content-Type: application/json" \
+    -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1}'
+done
+echo ""
+echo "Xong — 20 × 401 được ghi vào Envoy access log, Promtail sẽ đẩy vào Loki"
+echo "Chờ Grafana eval interval ~60s để alert fire..."
+```
+
+> **Lưu ý:** Envoy ghi log với `"response_code":401` trong JSON body. Promtail scrape log này và đẩy vào Loki. Grafana alert query lọc `| json | response_code=401` sẽ detect sau tối đa 60s.
+
+#### Cách B — Inject log vào Loki (đáng tin cậy hơn cho demo, không cần chờ Promtail)
 
 ```bash
 # Push 20 log 401 vào Loki (response_code là stream label)
@@ -419,7 +463,7 @@ PY
 ```
 
 **Chuỗi sự kiện:**
-1. 20 log `response_code=401` push vào Loki với label `job=envoy-access`
+1. 20 log `response_code=401` vào Loki (từ Envoy thật hoặc inject trực tiếp)
 2. Grafana alert "Kịch bản 1 — Brute Force Login" → FIRING (count 401 [1m] ≥ ngưỡng)
 3. SOAR webhook: `attack_type=brute_force` → playbook `revoke_user_sessions`
 4. SOAR gọi Keycloak Admin API xóa tất cả active session
@@ -442,6 +486,8 @@ for c in cases[-3:]:
 **Mô tả:** Service bên ngoài trust domain dùng SVID không hợp lệ → OPA từ chối → SOAR isolate payment-service.
 
 **Grafana query:** `{job="opa-decisions", opa_result="false"} [5m]`
+
+> **Tại sao không thể tấn công thực từ bên ngoài:** Để trigger KB2 thật sự, kẻ tấn công cần có một service đang chạy với SPIFFE SVID từ trust domain ngoài (`spiffe://external.attacker/...`). Điều này đòi hỏi kiểm soát SPIRE agent nội bộ — không thể làm từ client bên ngoài. Thay vào đó, inject log mô phỏng hành vi này vào Loki để trigger alert.
 
 ```bash
 # Push 5 log OPA deny vào Loki (opa_result=false là stream label)
@@ -497,6 +543,8 @@ kubectl --context ctx-aws patch svc payment-service -n financial \
 
 **Grafana query:** `{job="opa-decisions", opa_result="false", request_path="/transactions/execute"} [5m]`
 
+> **Tại sao không thể tấn công thực từ bên ngoài:** Endpoint `/transactions/execute` nằm trên core-banking (OpenStack), không được expose qua api-gateway (chỉ có `/payments`, `/accounts`, `/transactions`). Kẻ tấn công từ ngoài không có đường gọi trực tiếp vào core-banking. Thực tế, fraud gate bypass xảy ra khi service nội bộ bị compromise và cố bypass payment-service. Dùng inject log để mô phỏng.
+
 ```bash
 # Push 5 log OPA deny với request_path là stream label
 python3 - <<'PY'
@@ -550,6 +598,8 @@ bash scripts/run-demo.sh --restore
 **Mô tả:** Response có kích thước bất thường (>1 MB) từ core-banking bị Envoy ghi log → Grafana detect → SOAR scale core-banking (OpenStack) xuống 0 replica.
 
 **Grafana query:** `{job="envoy-access"} | json | bytes_sent > 1048576 [5m]`
+
+> **Tại sao không thể tấn công thực:** Để trigger KB4 thật, cần có endpoint trả response ≥ 1MB (core-banking `/accounts/export` trả toàn bộ dữ liệu). Trong môi trường demo với dữ liệu seed nhỏ, response thực tế chỉ vài KB — không đủ để trigger alert. Dùng inject log để mô phỏng scenario thực tế khi có lượng dữ liệu lớn.
 
 ```bash
 # Push 5 log envoy-access với bytes_sent lớn vào Loki
