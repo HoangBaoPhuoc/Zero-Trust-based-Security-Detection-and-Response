@@ -635,7 +635,7 @@ PY
 1. 20 log `response_code=401` vào Loki
 2. Grafana alert "Kịch bản 1 — Brute Force Login" → FIRING
 3. SOAR webhook: `attack_type=brute_force, severity=high` → case `pending_approval`
-4. Email gửi admin (voha2005@gmail.com) với nút: `Thu hồi phiên`, `Chặn IP`, `Chỉ theo dõi`
+4. Email gửi admin với tên alert **"Brute Force Login (T1110.001)"** và 4 nút: `Thu hồi phiên`, `Chặn IP nguồn`, `Cô lập dịch vụ`, `Chỉ theo dõi`
 5. Admin chọn hành động tại email hoặc web portal `/security`
 
 **Verify kết quả:**
@@ -688,7 +688,7 @@ PY
 1. 5 log `opa_result=false, attack_scenario=lateral_movement` push vào Loki
 2. Grafana alert "Kịch bản 2" → FIRING (phân biệt với KB3 nhờ stream label)
 3. SOAR: `attack_type=lateral_movement, severity=critical` → case `pending_approval`
-4. Email admin với nút: `Cô lập dịch vụ`, `Chặn IP`, `Chỉ theo dõi`
+4. Email admin với tên alert **"Lateral Movement — Invalid SVID (T1021.007)"** và 5 nút: `Cô lập dịch vụ`, `Hạn chế lưu lượng ra`, `Chặn IP nguồn`, `Thu hồi phiên`, `Chỉ theo dõi`
 5. Admin chọn → nếu `Cô lập dịch vụ`: payment-service selector bị patch → 503
 
 **Verify sau khi admin chọn isolate:**
@@ -736,6 +736,13 @@ urllib.request.urlopen(req, timeout=5)
 print("OK — 5 logs pushed, đợi Grafana alert ~60s")
 PY
 ```
+
+**Chuỗi sự kiện:**
+1. 5 log `opa_result=false, attack_scenario=fraud_gate_bypass` push vào Loki
+2. Grafana alert "Kịch bản 3" → FIRING (phân biệt với KB2 nhờ stream label `attack_scenario`)
+3. SOAR: `attack_type=fraud_gate_bypass, severity=critical` → case `pending_approval`
+4. Email admin với tên alert **"Fraud Gate Bypass (T1078.004)"** và 5 nút: `Cô lập dịch vụ`, `Hạn chế lưu lượng ra`, `Chặn IP nguồn`, `Thu hồi phiên`, `Chỉ theo dõi`
+5. Admin chọn → nếu `Cô lập dịch vụ`: payment-service selector bị patch → 503
 
 **OPA fraud gate logic:**
 
@@ -786,7 +793,7 @@ PY
 1. 5 log `bytes_sent=3100000` (JSON body) push vào Loki
 2. Grafana alert "Kịch bản 4" → FIRING
 3. SOAR: `attack_type=large_response, severity=high` → case `pending_approval`
-4. Email admin với nút: `Hạn chế lưu lượng ra`, `Chặn IP`, `Chỉ theo dõi`
+4. Email admin với tên alert **"Data Exfiltration — Large Response (T1041)"** và 5 nút: `Hạn chế lưu lượng ra`, `Cách ly workload`, `Cô lập dịch vụ`, `Chặn IP nguồn`, `Chỉ theo dõi`
 5. Admin chọn `Hạn chế lưu lượng ra` → core-banking (OpenStack) scale xuống 0 replicas
 
 **Verify sau khi admin duyệt:**
@@ -849,8 +856,9 @@ python3 tests/seed_db.py
 ### HITL Email & Web Portal
 
 Khi SOAR tạo case `pending_approval`, admin nhận email tại voha2005@gmail.com với:
+- Tên alert rõ ràng (VD: "Brute Force Login (T1110.001)") — không hiển thị "Kịch bản N" hay "Heuristic:"
 - Thông tin case (attack_type, severity, source_ip, log evidence)
-- Nhiều nút hành động tương ứng với loại tấn công (màu khác nhau theo mức độ nguy hiểm)
+- Các nút hành động tùy theo loại tấn công (4-5 nút, màu khác nhau theo mức độ nguy hiểm) — admin tự chọn
 - Click nút → link xác thực HMAC → SOAR thực thi playbook đã chọn
 
 Admin cũng có thể duyệt qua **web portal**:
@@ -860,17 +868,18 @@ Admin cũng có thể duyệt qua **web portal**:
 
 ### Playbooks & Attack type mapping
 
-| attack_type | Playbook đề xuất | Target | Context |
-|-------------|-----------------|--------|---------|
-| `brute_force` | revoke_user_sessions, block_source_ip | api-gateway | ctx-aws |
-| `lateral_movement` | isolate_workload, block_source_ip | payment-service | ctx-aws |
-| `fraud_gate_bypass` | isolate_workload, block_source_ip | payment-service | ctx-aws |
-| `large_response` | restrict_egress, block_source_ip | core-banking | ctx-openstack |
-| `access_denied` | block_source_ip | api-gateway | ctx-aws |
-| `port_scan` | block_source_ip | api-gateway | ctx-aws |
-| `cryptomining` | quarantine_workload, block_source_ip | transaction-service | ctx-openstack |
-| `jwt_replay` | revoke_user_sessions, block_source_ip | api-gateway | ctx-aws |
-| `exploit_probe` | block_source_ip, isolate_workload | api-gateway | ctx-aws |
+| attack_type | Tên alert hiển thị | Playbooks cho admin chọn | Target | Context |
+|-------------|-------------------|--------------------------|--------|---------|
+| `brute_force` | Brute Force Login (T1110.001) | revoke_user_sessions, block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
+| `credential_stuffing` | Credential Stuffing (T1110.004) | revoke_user_sessions, block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
+| `jwt_replay` | JWT Token Replay (T1539) | revoke_user_sessions, block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
+| `fraud_gate_bypass` | Fraud Gate Bypass (T1078.004) | isolate_workload, restrict_egress, block_source_ip, revoke_user_sessions, monitor_only | payment-service | ctx-aws |
+| `lateral_movement` | Lateral Movement — Invalid SVID (T1021.007) | isolate_workload, restrict_egress, block_source_ip, revoke_user_sessions, monitor_only | payment-service | ctx-aws |
+| `cryptomining` | Cryptomining Detected (T1496) | quarantine_workload, isolate_workload, block_source_ip, monitor_only | transaction-service | ctx-openstack |
+| `port_scan` | Port Scan Detected (T1046) | block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
+| `exploit_probe` | Exploit Probe / Injection (T1203) | block_source_ip, isolate_workload, restrict_egress, monitor_only | api-gateway | ctx-aws |
+| `large_response` | Data Exfiltration — Large Response (T1041) | restrict_egress, quarantine_workload, isolate_workload, block_source_ip, monitor_only | core-banking | ctx-openstack |
+| `access_denied` | Access Denied Spike (T1078) | block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
 
 ### Mô tả playbook
 
