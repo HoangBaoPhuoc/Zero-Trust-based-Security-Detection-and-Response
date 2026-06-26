@@ -98,6 +98,12 @@ spec:
           volumeMounts:
             - name: soar-data
               mountPath: /data
+            - name: soar-main-patch
+              mountPath: /app/main.py
+              subPath: main.py
+            - name: openstack-kubeconfig
+              mountPath: /etc/soar/openstack-kubeconfig
+              readOnly: true
           readinessProbe:
             httpGet:
               path: /health
@@ -121,6 +127,12 @@ spec:
         - name: soar-data
           persistentVolumeClaim:
             claimName: soar-data-pvc
+        - name: soar-main-patch
+          configMap:
+            name: soar-main-patch
+        - name: openstack-kubeconfig
+          secret:
+            secretName: soar-openstack-kubeconfig
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

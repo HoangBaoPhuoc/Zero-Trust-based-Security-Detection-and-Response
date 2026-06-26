@@ -226,10 +226,15 @@ def _first_known_attack(alert: SecurityAlert) -> str:
     return tokens[0]
 
 
+_OPENSTACK_WORKLOADS = {"core-banking", "account-service", "transaction-service"}
+
+
 def _infer_target(alert: SecurityAlert, attack: str) -> dict[str, str | None]:
     target = dict(TARGETS_BY_ATTACK.get(attack, {}))
     if alert.affected_service:
         target["workload"] = alert.affected_service
+        if alert.affected_service in _OPENSTACK_WORKLOADS:
+            target["context"] = "ctx-openstack"
     if not target.get("context"):
         text = " ".join(alert.evidence + [alert.summary, alert.recommended_action]).lower()
         target["context"] = "ctx-openstack" if "openstack" in text or "/os/" in text else "ctx-aws"
@@ -345,7 +350,13 @@ async def _send_hitl_email(case: CaseRecord, alert_name: str, mitre: str, log_li
 
 # ── Kubernetes API helpers ───────────────────────────────────────────────────
 
+_OPENSTACK_KUBECONFIG = "/etc/soar/openstack-kubeconfig/kubeconfig"
+
+
 def _load_k8s(context: str | None) -> None:
+    if context == "ctx-openstack" and os.path.exists(_OPENSTACK_KUBECONFIG):
+        config.load_kube_config(config_file=_OPENSTACK_KUBECONFIG, context=context)
+        return
     try:
         config.load_incluster_config()
     except config.ConfigException:
