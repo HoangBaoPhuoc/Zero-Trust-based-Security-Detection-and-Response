@@ -9,24 +9,12 @@ spec:
     - Ingress
     - Egress
   ingress:
-    # Intra-cluster: OS services talk to each other (plain HTTP port 8080)
-    # port 9191 = OPA ext_authz gRPC (Envoy sidecar → OPA)
+    # Intra-cluster: OS services talk to each other
+    # 15006=Envoy mTLS, 8080=app HTTP, 9191=OPA gRPC, 5432=postgres, 6379=redis
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: financial
-      ports:
-        - port: 8080
-          protocol: TCP
-        - port: 5432
-          protocol: TCP
-        - port: 9191
-          protocol: TCP
-    # Cross-cloud: AWS K3s nodes (10.10.1.0/24) can reach core-banking via NodePort
-    # port 15006 = Envoy mTLS inbound, port 8080 = fallback direct app
-    - from:
-        - ipBlock:
-            cidr: 10.10.1.0/24
       ports:
         - port: 15006
           protocol: TCP
@@ -34,13 +22,35 @@ spec:
           protocol: TCP
         - port: 9191
           protocol: TCP
-    # Prometheus scraping from plg-stack namespace
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    # Cross-cloud: AWS K3s nodes and pod subnets (via MASQUERADE on workers)
+    # 15006=Envoy mTLS inbound, 8080=plain HTTP (metrics, health checks)
+    - from:
+        - ipBlock:
+            cidr: 10.10.1.0/24
+        - ipBlock:
+            cidr: 10.10.0.0/24
+        - ipBlock:
+            cidr: 10.200.200.0/24
+        - ipBlock:
+            cidr: 192.168.101.0/24
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+    # Prometheus (monitoring namespace) scraping /metrics on port 8080
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
       ports:
         - port: 8080
+          protocol: TCP
+        - port: 15006
           protocol: TCP
   egress:
     # DNS
@@ -53,8 +63,7 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # Intra-cluster: OS services talk to each other + postgres
-    # port 9191 = OPA ext_authz gRPC (Envoy sidecar → OPA)
+    # Intra-cluster: OS services talk to each other
     - to:
         - namespaceSelector:
             matchLabels:
@@ -66,14 +75,14 @@ spec:
           protocol: TCP
         - port: 9191
           protocol: TCP
-    # Push logs to Loki on AWS via socat proxy (31100 on worker-1 10.10.1.11)
+        - port: 6379
+          protocol: TCP
+    # Loki push: deployer bridge (10.10.10.1:13099 → socat → kubectl pf → Loki on AWS)
     - to:
         - ipBlock:
-            cidr: 10.10.1.0/24
+            cidr: 10.10.10.1/32
       ports:
-        - port: 31100
-          protocol: TCP
-        - port: 31000
+        - port: 13099
           protocol: TCP
     # SPIRE server on AWS (NodePort 30900 on master)
     - to:
