@@ -52,7 +52,7 @@ SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 TARGETS_BY_ATTACK = {
     "fraud_gate_bypass":    {"context": "ctx-aws",        "workload": "payment-service"},
     "lateral_movement":     {"context": "ctx-aws",        "workload": "payment-service"},
-    "large_response":       {"context": "ctx-aws",        "workload": "api-gateway"},
+    "large_response":       {"context": "ctx-openstack",   "workload": "core-banking"},
     "cryptomining":         {"context": "ctx-aws",        "workload": "api-gateway"},
     "port_scan":            {"context": "ctx-aws",        "workload": "api-gateway"},
     "exploit_probe":        {"context": "ctx-aws",        "workload": "api-gateway"},
