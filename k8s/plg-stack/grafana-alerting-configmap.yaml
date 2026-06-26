@@ -250,35 +250,6 @@ data:
       - orgId: 1
         name: ztlab-security-admin
         receivers:
-          - uid: ztlab-admin-email
-            type: email
-            settings:
-              addresses: "voha2005@gmail.com"
-              subject: >-
-                [ZTLab SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.severity | toUpper }}
-              message: |
-                CẢNH BÁO BẢO MẬT — ZTLab Zero Trust
-                ══════════════════════════════════════════
-
-                Alert:    {{ .CommonLabels.alertname }}
-                Severity: {{ .CommonLabels.severity | toUpper }}
-                MITRE:    {{ .CommonLabels.mitre }}
-                Time:     {{ now | date "2006-01-02 15:04:05 UTC" }}
-
-                ──────────────────────────────────────────
-                {{ range .Alerts.Firing -}}
-                SỰ KIỆN: {{ .Annotations.summary }}
-
-                MÔ TẢ: {{ .Annotations.description }}
-                {{ end }}
-                ──────────────────────────────────────────
-                HƯỚNG DẪN XỬ LÝ CHO ADMIN:
-                {{ .CommonAnnotations.admin_action }}
-                ──────────────────────────────────────────
-
-                Web Portal: http://127.0.0.1:18081/security
-                Grafana:    http://127.0.0.1:3000/alerting/list
-            disableResolveMessage: false
           - uid: ztlab-soar-webhook
             type: webhook
             settings:
