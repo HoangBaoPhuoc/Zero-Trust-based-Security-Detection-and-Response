@@ -9,305 +9,223 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 ## Mục lục
 
 1. [Tổng quan kiến trúc](#1-tổng-quan-kiến-trúc)
-2. [Hạ tầng & IP](#2-hạ-tầng--ip)
-3. [Kết nối vào hệ thống](#3-kết-nối-vào-hệ-thống)
-4. [**Khởi động lại sau restart máy**](#4-khởi-động-lại-sau-restart-máy)
-5. [Deploy lần đầu](#5-deploy-lần-đầu)
-6. [Mở port-forwards (mỗi lần demo)](#6-mở-port-forwards-mỗi-lần-demo)
-7. [Health check](#7-health-check)
-8. [Tài khoản & credentials](#8-tài-khoản--credentials)
-9. [Web Portal](#9-web-portal)
-10. [Grafana — Dashboards & Alert Rules](#10-grafana--dashboards--alert-rules)
-11. [SOAR Engine & HITL](#11-soar-engine--hitl)
-12. [Grafana → SOAR tự động](#12-grafana--soar-tự-động)
-13. [Chạy demo & quay video](#13-chạy-demo--quay-video)
-14. [Kịch bản tấn công chi tiết](#14-kịch-bản-tấn-công-chi-tiết)
-15. [Database Admin UIs](#15-database-admin-uis)
-16. [Hạn chế đã biết](#16-hạn-chế-đã-biết)
-17. [Xử lý lỗi thường gặp](#17-xử-lý-lỗi-thường-gặp)
+2. [Hạ tầng & địa chỉ IP](#2-hạ-tầng--địa-chỉ-ip)
+3. [Khởi động hệ thống (mỗi lần bật máy)](#3-khởi-động-hệ-thống-mỗi-lần-bật-máy)
+4. [Deploy lần đầu](#4-deploy-lần-đầu)
+5. [Tài khoản & credentials](#5-tài-khoản--credentials)
+6. [Truy cập các UI](#6-truy-cập-các-ui)
+7. [Health check nhanh](#7-health-check-nhanh)
+8. [Kịch bản demo & tấn công](#8-kịch-bản-demo--tấn-công)
+9. [SOAR Engine](#9-soar-engine)
+10. [Grafana — Dashboards & Alerts](#10-grafana--dashboards--alerts)
+11. [OPA — Chính sách bảo mật](#11-opa--chính-sách-bảo-mật)
+12. [Xử lý sự cố thường gặp](#12-xử-lý-sự-cố-thường-gặp)
 
 ---
 
 ## 1. Tổng quan kiến trúc
 
 ```
-Internet  (HTTPS / PKCE OIDC)
-    │
-    ▼
-┌─────────────────────── AWS K3s (ctx-aws) ──────────────────────────────┐
+                        Internet / Browser
+                               │
+                               ▼
+┌──────────────────── AWS K3s (ctx-aws) ─────────────────────────────────┐
+│                                                                         │
 │  namespace: identity                                                    │
-│    Keycloak  (realm=ztlab · port 8080)                                 │
-│    SPIRE Server (trust domain=ztlab.local · SVID TTL=1h · CA=168h)    │
+│    Keycloak (realm=ztlab, port 8080)                                   │
+│    SPIRE Server (trust domain=ztlab.local, SVID TTL=1h)               │
 │                                                                         │
 │  namespace: financial                                                   │
-│    api-gateway       SVID: spiffe://ztlab.local/aws/api-gateway        │
-│    payment-service   SVID: spiffe://ztlab.local/aws/payment-service    │
-│    fraud-detection   SVID: spiffe://ztlab.local/aws/fraud-detection    │
-│    notification-svc  SVID: spiffe://ztlab.local/aws/notification-svc   │
-│    web-portal        ──PKCE──► Keycloak                                │
+│    api-gateway       spiffe://ztlab.local/aws/api-gateway              │
+│    payment-service   spiffe://ztlab.local/aws/payment-service          │
+│    fraud-detection   spiffe://ztlab.local/aws/fraud-detection          │
+│    notification-svc  spiffe://ztlab.local/aws/notification-service     │
+│    web-portal, OPA, Redis, PostgreSQL                                  │
 │                                                                         │
 │  namespace: plg-stack                                                   │
-│    Promtail (DaemonSet) → Loki (retention 90 ngày) → Grafana           │
-│    SOAR Engine  (Grafana webhook trigger · K8s SDK · Keycloak API)     │
-│    Security Scorer  (anomaly score 15min window)                       │
+│    Promtail → Loki (90 ngày) → Grafana                                 │
+│    SOAR Engine  (Grafana webhook → K8s playbook)                       │
+│    Security Scorer                                                      │
 │                                                                         │
 │  namespace: monitoring                                                  │
-│    Prometheus                                                           │
-└───────────────────────┬─────────────────────────────────────────────────┘
-                        │  WireGuard mTLS (Envoy SPIFFE SVID)
-                        │  payment-service Envoy → 192.168.101.11:30080
-                        ▼
-┌────────────── OpenStack K3s (ctx-openstack) ────────────────────────────┐
-│  namespace: financial                                                    │
-│    core-banking      SVID: spiffe://ztlab.local/openstack/core-banking  │
-│      NodePort 30080 (mTLS·Envoy) · 30084 (HTTP)                        │
-│    account-service   SVID: spiffe://ztlab.local/openstack/account-svc   │
-│      NodePort 30082 (mTLS·Envoy) · 30086 (HTTP)                        │
-│    transaction-svc   SVID: spiffe://ztlab.local/openstack/txn-svc       │
-│      NodePort 30083 (mTLS·Envoy) · 30087 (HTTP)                        │
-│    PostgreSQL accounts + txn · Redis · pgAdmin · RedisInsight            │
-│    OPA Server (authz policy cho inbound mTLS)                           │
-└─────────────────────────────────────────────────────────────────────────┘
+│    Prometheus (10 targets)                                              │
+│                                                                         │
+└────────────────────────┬───────────────────────────────────────────────┘
+                         │  WireGuard (10.200.0.1 ↔ 10.200.0.2)
+                         │  Envoy mTLS SPIFFE SVID
+                         ▼
+┌───────────── OpenStack K3s (ctx-openstack) ────────────────────────────┐
+│  namespace: financial                                                   │
+│    core-banking     spiffe://ztlab.local/openstack/core-banking        │
+│      NodePort 30080 (Envoy mTLS) · 30084 (HTTP /metrics)              │
+│    account-service  spiffe://ztlab.local/openstack/account-service     │
+│      NodePort 30082 (Envoy mTLS) · 30086 (HTTP /metrics)              │
+│    transaction-svc  spiffe://ztlab.local/openstack/transaction-service │
+│      NodePort 30083 (Envoy mTLS) · 30087 (HTTP /metrics)              │
+│    OPA, Redis, PostgreSQL, pgAdmin, RedisInsight                       │
+│                                                                         │
+│  namespace: plg-stack                                                   │
+│    Promtail → socat proxy (deployer:13099) → Loki (AWS)                │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
-> **Kiến trúc cross-cloud thực tế:** AWS K3s và OpenStack K3s kết nối qua WireGuard (`10.200.0.1 ↔ 10.200.0.2`). AWS pods tới OpenStack NodePorts qua MASQUERADE rule. 3 services core banking deploy trên **OpenStack** theo đúng Bảng 4.2 NT114.
+### Luồng payment chính (Gap 2 — cross-cloud)
 
-**Luồng payment chính:**
 ```
-web-portal → api-gateway (JWT verify + OPA) → payment-service (HMAC sign)
-  → fraud-detection (Redis velocity check 15 phút)
-  → core-banking (SPIRE mTLS) → account-service (debit/credit)
-  → transaction-service (ledger)
+Browser → web-portal (JWT PKCE)
+  → api-gateway (verify JWT + OPA authz)
+  → payment-service (HMAC sign + fraud score)
+  → fraud-detection (Redis velocity, score=5 → gate=passed)
+  → core-banking [OpenStack] (mTLS SPIFFE, OPA: x-fraud-gate + x-fraud-score)
+  → account-service [OpenStack] (debit/credit)
+  → transaction-service [OpenStack] (ledger)
 ```
 
-**Luồng phát hiện & phản ứng:**
+### Luồng phát hiện & phản ứng tự động
+
 ```
-Grafana alert rule (Loki query) fires
+Grafana alert rule fire (Loki count_over_time query)
   → POST soar-engine/grafana-webhook
-  → severity low/medium  → execute playbook ngay
-  → severity high/critical → pending_approval → email admin
-       └─ Admin click [PHÊ DUYỆT] → playbook thực thi
-       └─ Admin click [TỪ CHỐI]   → case skipped
+  → SOAR parse attack_type từ label Grafana
+  → severity >= medium AND auto_execute=true
+  → chạy playbook ngay: isolate_workload / block_source_ip / revoke_user_sessions / restrict_egress
+  → ghi case vào Redis + file
 ```
 
 ---
 
-## 2. Hạ tầng & IP
+## 2. Hạ tầng & địa chỉ IP
 
-| Node | Private IP | Public IP | Vai trò |
+| Node | IP Private | IP Public | Vai trò |
 |------|-----------|-----------|---------|
 | aws_bastion | — | 52.221.255.36 | SSH jump host |
-| aws_gateway | 10.10.0.x / WG 10.200.0.1 | 13.213.245.227 | NAT + WireGuard server |
-| aws_k3s_master | 10.10.1.10 | — | K8s control plane (AWS) · Traefik |
-| aws_k3s_worker_1 | 10.10.1.11 | — | K8s worker (AWS) · Loki relay |
-| os_gateway | — | 10.10.10.188 | WireGuard client (OpenStack) |
-| os_k3s_master | 192.168.101.11 | — | K8s standalone (OpenStack) |
-
-**WireGuard:**
-- aws_gateway: `10.200.0.1` · os_gateway: `10.200.0.2`
-- Subnet tunnel: `10.200.0.0/24` · Port: UDP 51820
-- MASQUERADE rule trên aws nodes: `10.42.0.0/16 → 192.168.101.0/24`
-
-**Cross-cloud Envoy upstream (đang active):**
-- payment-service Envoy → `192.168.101.11:30080` → core-banking (OpenStack mTLS)
-- api-gateway Envoy → `192.168.101.11:30082` → account-service (OpenStack mTLS)
-- api-gateway Envoy → `192.168.101.11:30083` → transaction-service (OpenStack mTLS)
-- core-banking app → `account-service.financial.svc.cluster.local:8080` (internal HTTP trên OS cluster)
+| aws_gateway | 10.10.0.x / WG 10.200.0.1 | 13.213.245.227 | NAT + WireGuard |
+| aws_k3s_master | 10.10.1.10 | — | K8s control plane AWS |
+| aws_k3s_worker_1 | 10.10.1.11 | — | K8s worker AWS |
+| os_gateway | — / WG 10.200.0.2 | 10.10.10.188 | WireGuard client OpenStack |
+| os_k3s_master | 192.168.101.11 | — | K8s master OpenStack |
+| deployer (máy này) | 10.10.10.1 (br-exnat) | — | SSH bastion + Loki proxy |
 
 **K8s contexts:**
-- `ctx-aws` → API server `127.0.0.1:6444` (qua SSH tunnel)
-- `ctx-openstack` → API server `127.0.0.1:6445` (qua SSH tunnel)
+- `ctx-aws` → API server `127.0.0.1:6444` (SSH tunnel qua bastion)
+- `ctx-openstack` → API server `127.0.0.1:6445` (SSH tunnel qua os_gateway)
 
-**SSH key:** `~/.ssh/ztlab-key`
+**WireGuard tunnel:**
+- aws_gateway `10.200.0.1` ↔ os_gateway `10.200.0.2`
+- MASQUERADE trên AWS K3s nodes: `10.42.0.0/16 → 192.168.101.0/24`
+
+**Cross-cloud Envoy upstreams (đang active):**
+- payment-service → `192.168.101.11:30080` (core-banking mTLS)
+- api-gateway → `192.168.101.11:30082` (account-service mTLS)
+- api-gateway → `192.168.101.11:30083` (transaction-service mTLS)
+
+**Loki log pipeline OpenStack:**
+- OpenStack promtail → `10.10.10.1:13099` (socat trên deployer)
+- socat → `localhost:13100` (kubectl port-forward → Loki AWS)
 
 ---
 
-## 3. Kết nối vào hệ thống
+## 3. Khởi động hệ thống (mỗi lần bật máy)
 
-### Bước 0 — Bật WireGuard VPN (nếu chưa chạy)
+> Làm đúng thứ tự sau mỗi khi reboot máy deployer hoặc mở session mới.
+
+### Bước 1 — Bật OpenStack VMs
 
 ```bash
-# Cấu hình lần đầu
-ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/wireguard.yml
-
-# Kiểm tra tunnel
-ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml -m shell -a "wg show wg0"
-
-# Restart nếu cần
-ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml \
-  -m shell -a "systemctl restart wg-quick@wg0"
+source /etc/kolla/admin-openrc.sh
+openstack server list
+# Nếu SHUTOFF → bật lại
+openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
 ```
 
-### Bước 1 — Mở K8s API tunnel
+Đợi ~30 giây để VMs boot xong.
+
+### Bước 2 — Mở K8s API tunnels
 
 ```bash
 bash scripts/k8s-tunnel.sh up all
 ```
-
-Tunnel forward (qua SSH bastion):
-- `127.0.0.1:6444` → `aws_k3s_master:6443` qua bastion 52.221.255.36
-- `127.0.0.1:6445` → `os_k3s_master:6443` qua os_gateway 10.10.10.188
 
 Kiểm tra:
 ```bash
 kubectl --context ctx-aws get nodes
+# ip-10-10-1-10 Ready, ip-10-10-1-11 Ready
+
 kubectl --context ctx-openstack get nodes
+# os-k3s-master Ready, os-k3s-worker-1 Ready, os-k3s-worker-2 Ready
 ```
 
-Dừng tunnel:
-```bash
-bash scripts/k8s-tunnel.sh down all
-```
-
----
-
-## 4. Khởi động lại sau restart máy
-
-> Làm theo thứ tự này mỗi khi reboot máy deployer hoặc mở lại session mới.
-
-### Bước 1 — Kiểm tra OpenStack containers (nếu dùng OpenStack local)
+### Bước 3 — Kiểm tra pods
 
 ```bash
-docker ps --format "table {{.Names}}\t{{.Status}}" | grep -E "horizon|keystone|nova|neutron"
+# AWS
+kubectl --context ctx-aws get pods -A | grep -v "Running\|Completed"
+# OpenStack
+kubectl --context ctx-openstack get pods -A | grep -v "Running\|Completed"
 ```
 
-Nếu containers chưa chạy:
+Nếu pod nào không Running:
 ```bash
-cd /etc/kolla && docker compose up -d    # hoặc: kolla-ansible deploy
+kubectl --context ctx-aws rollout restart deployment/<tên> -n <namespace>
+kubectl --context ctx-openstack rollout restart deployment/<tên> -n financial
 ```
 
-### Bước 2 — Kiểm tra K8s tunnel hiện tại
-
-```bash
-bash scripts/k8s-tunnel.sh status
-```
-
-Nếu không thấy port nào đang listen → mở tunnel:
-
-```bash
-# Chỉ cần AWS (thường dùng nhất):
-bash scripts/k8s-tunnel.sh up aws
-
-# Cả hai cloud (nếu OpenStack VM đang bật):
-bash scripts/k8s-tunnel.sh up all
-```
-
-Xác nhận đã kết nối:
-```bash
-kubectl --context ctx-aws get nodes
-# Kỳ vọng: ip-10-10-1-10 Ready, ip-10-10-1-11 Ready
-```
-
-### Bước 3 — Kiểm tra OpenStack VMs (bắt buộc cho cross-cloud)
-
-```bash
-source /etc/kolla/admin-openrc.sh
-openstack server list
-# Tất cả phải ở trạng thái ACTIVE
-```
-
-Nếu VMs bị SHUTOFF:
-```bash
-openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
-# Đợi 30 giây rồi mở tunnel
-bash scripts/k8s-tunnel.sh up all
-```
-
-### Bước 4 — Kiểm tra pods quan trọng
-
-```bash
-# AWS: 4 financial services + PLG + identity
-kubectl --context ctx-aws get pods -n financial
-kubectl --context ctx-aws get pods -n plg-stack
-kubectl --context ctx-aws get pods -n identity
-
-# OpenStack: 3 core banking services
-kubectl --context ctx-openstack get pods -n financial
-```
-
-Pod nào không `Running` — restart:
-```bash
-kubectl --context ctx-aws rollout restart deployment/<tên-pod> -n <namespace>
-kubectl --context ctx-openstack rollout restart deployment/<tên-pod> -n financial
-```
-
-Nếu hầu hết pods đều crash → re-deploy toàn bộ:
-```bash
-export KEYCLOAK_ADMIN_PASSWORD=ztlab-admin-2026
-bash scripts/deploy-all.sh
-```
-
-### Bước 5 — Mở port-forwards
+### Bước 4 — Mở port-forwards & Loki proxy
 
 ```bash
 bash scripts/open-admin-uis.sh
 ```
 
-Script thoát ngay (không cần giữ terminal), mỗi port-forward chạy nền tự restart. Tất cả 10 UI sẽ hiện `[ OK ]`. Kiểm tra lại bất cứ lúc nào: `bash scripts/open-admin-uis.sh status`. Nếu có `[FAIL]` → xem mục [Xử lý lỗi](#17-xử-lý-lỗi-thường-gặp).
+Script khởi động toàn bộ dưới dạng daemon tự-restart (không cần giữ terminal). Bao gồm:
+- 10 port-forwards cho các UI
+- socat proxy `10.10.10.1:13099 → localhost:13100` (Loki pipeline OpenStack)
 
-### Bước 6 — Quick health check
+Kiểm tra: `bash scripts/open-admin-uis.sh status`  
+Dừng: `bash scripts/open-admin-uis.sh stop`
+
+### Bước 5 — Kiểm tra SOAR không isolate service từ demo trước
 
 ```bash
-curl -s http://localhost:18081/health | python3 -m json.tool   # web-portal
-curl -s http://localhost:18080/health | python3 -m json.tool   # api-gateway
-curl -s http://localhost:8091/health  | python3 -m json.tool   # soar-engine
-curl -s http://localhost:3000/api/health                        # grafana
+kubectl --context ctx-aws get svc payment-service -n financial \
+  -o jsonpath='{.spec.selector}'
+# Phải là: {"app":"payment-service"}
+# Nếu có "soar.ztlab.io/isolated":"true" → restore:
+kubectl --context ctx-aws patch svc payment-service -n financial \
+  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
 ```
 
-Kiểm tra thêm SOAR cases (phòng SOAR isolate service từ demo trước):
-```bash
-# Xem services có bị SOAR isolate không
-kubectl --context ctx-aws get svc -n financial \
-  -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.selector}{"\n"}{end}' | \
-  python3 -c "import sys; [print('⚠ ISOLATED:', l) for l in sys.stdin if 'isolated' in l]"
-
-# Nếu có service bị isolate → rollback
-curl http://localhost:8091/cases | python3 -c "
-import sys,json
-[print(c['case_id'], c['target_workload'], c['status'])
- for c in json.load(sys.stdin) if c['playbook']=='isolate_workload']"
-# curl -X POST http://localhost:8091/cases/{case_id}/rollback
-```
-
-### Checklist tóm tắt (copy & paste)
+### Checklist nhanh
 
 ```bash
-# 1. Kiểm tra/bật OpenStack VMs
-source /etc/kolla/admin-openrc.sh
-openstack server list
+# 1. OpenStack VMs
+source /etc/kolla/admin-openrc.sh && openstack server list
 # Nếu SHUTOFF: openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
 
-# 2. Tunnel (cả 2 cloud)
+# 2. Tunnels
 bash scripts/k8s-tunnel.sh up all
 
-# 3. Xác nhận nodes OK
-kubectl --context ctx-aws get nodes
-kubectl --context ctx-openstack get nodes
+# 3. Nodes
+kubectl --context ctx-aws get nodes && kubectl --context ctx-openstack get nodes
 
-# 4. Xác nhận pods OK
-kubectl --context ctx-aws get pods -n financial
-kubectl --context ctx-openstack get pods -n financial
-kubectl --context ctx-aws get pods -n plg-stack
-kubectl --context ctx-aws get pods -n identity
+# 4. Pods (chỉ show cái không Running)
+kubectl --context ctx-aws get pods -A | grep -v "Running\|Completed"
+kubectl --context ctx-openstack get pods -A | grep -v "Running\|Completed"
 
 # 5. Port-forwards
 bash scripts/open-admin-uis.sh
 
-# 6. Kiểm tra SOAR không isolate service
-kubectl --context ctx-aws get svc payment-service -n financial \
-  -o jsonpath='{.spec.selector}'
-# Phải là: {"app":"payment-service"} — không có "soar.ztlab.io/isolated"
+# 6. Kiểm tra payment-service không bị isolate
+kubectl --context ctx-aws get svc payment-service -n financial -o jsonpath='{.spec.selector}'
 ```
 
-> **Sau khi reboot AWS VM**: pods tự restart (K3s systemd). Chỉ cần làm lại bước 2 và 5 ở trên.
-
-> **Sau khi reboot OpenStack VM**: VMs tắt — phải `openstack server start` lại (bước 1 ở trên). WireGuard trên os-gateway tự khởi cùng systemd.
+> **Sau reboot AWS VM:** pods tự restart theo K3s systemd, chỉ cần bước 2 + 4.  
+> **Sau reboot OpenStack VM:** VMs tắt — phải bật lại (bước 1) trước khi mở tunnel.
 
 ---
 
-## 5. Deploy lần đầu
+## 4. Deploy lần đầu
 
-Chỉ làm một lần khi hệ thống chưa có gì. Tunnel phải đang chạy.
+Chỉ làm một lần khi cluster chưa có gì. K8s tunnel phải đang chạy.
 
 ### Bước 1 — Build & sync images
 
@@ -317,8 +235,6 @@ IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh
 
 Build 10 service images và copy vào containerd trên tất cả K3s nodes.
 
-Services: `api-gateway`, `payment-service`, `fraud-detection`, `notification-service`, `core-banking`, `account-service`, `transaction-service`, `soar-engine`, `web-portal`, `security-scorer`
-
 ### Bước 2 — Deploy toàn bộ
 
 ```bash
@@ -326,107 +242,60 @@ export KEYCLOAK_ADMIN_PASSWORD=ztlab-admin-2026
 bash scripts/deploy-all.sh
 ```
 
-8 steps theo thứ tự: Namespaces → Images → Security stack (SPIRE/SPIFFE · OPA · Keycloak realm `ztlab`) → Financial infra → Financial workloads → PLG + SOAR → Network policies + Ingress → Status check.
+Deploy theo thứ tự: Namespaces → Security stack (SPIRE/SPIFFE, OPA, Keycloak realm `ztlab`) → Financial infra → Financial workloads → PLG + SOAR → NetworkPolicies → Status check.
 
-> Nếu muốn chạy riêng security stack: `KEYCLOAK_ADMIN_PASSWORD=ztlab-admin-2026 bash scripts/deploy-security-stack.sh`
-
-### Bước 3 — Seed database (chạy sau deploy)
+### Bước 3 — Seed database
 
 ```bash
 python3 tests/seed_db.py
 ```
 
-Reset balances về baseline NT114: ACC-1001 = 1,000,000,000 VND · ACC-2001 = 250,000,000 VND.
+Reset số dư: ACC-1001 = 1,000,000,000 VND · ACC-2001 = 250,000,000 VND.
 
----
-
-## 6. Mở port-forwards (mỗi lần demo)
-
-Script chạy mỗi port-forward như một **daemon tự restart** — không cần giữ terminal mở, không bị kill khi đóng cửa sổ.
+### Bước 4 — Mở port-forwards
 
 ```bash
-bash scripts/open-admin-uis.sh          # bật tất cả
-bash scripts/open-admin-uis.sh status   # kiểm tra daemon còn chạy không
-bash scripts/open-admin-uis.sh stop     # dừng tất cả
-```
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Keycloak | http://localhost:8180 | admin / ztlab-admin-2026 |
-| API Gateway | http://localhost:18080 | — |
-| Web Portal | http://localhost:18081 | testuser01 / Test1234! |
-| Grafana | http://localhost:3000 | admin / ZTALab2026! |
-| Loki | http://localhost:13100 | — |
-| SOAR Engine | http://localhost:8091 | — |
-| Security Scorer | http://localhost:18092 | — |
-| Prometheus | http://localhost:9090 | — |
-| pgAdmin | http://localhost:5050 | admin@ztlab.com / ztlab2026 |
-| RedisInsight | http://localhost:5540 | — |
-
-> Tất cả port-forward đều từ cluster **AWS**. Nếu một port-forward chết (mất kết nối K8s thoáng qua), daemon tự restart sau 3 giây.
-
----
-
-## 7. Health check
-
-```bash
-bash scripts/health-check.sh
-```
-
-Kiểm tra nhanh từng service:
-
-```bash
-curl http://localhost:18080/health    # api-gateway: {"jwks_keys_loaded": 2}
-curl http://localhost:8091/health     # soar-engine: {"dry_run": false, "hitl_severity": "high", ...}
-curl http://localhost:13100/ready     # loki: ready
-curl http://localhost:3000/api/health # grafana: {"database": "ok"}
+bash scripts/open-admin-uis.sh
 ```
 
 ---
 
-## 8. Tài khoản & credentials
+## 5. Tài khoản & credentials
 
-### Keycloak — realm: ztlab
+### Keycloak (realm: ztlab)
 
-| Username | Password | Roles | Tài khoản ngân hàng |
-|----------|----------|-------|---------------------|
-| admin *(Keycloak)* | ztlab-admin-2026 | Keycloak superadmin | — |
-| testuser01 | Test1234! | financial-read, financial-write | ACC-1001 (1,000,000,000 VND) |
-| testuser02 | Test1234! | financial-read, financial-write | ACC-2001 (250,000,000 VND) |
-| merchant01 | Test1234! | financial-read | ACC-4001 (26,750,000 VND) |
-| analyst01  | Test1234! | security-analyst | ACC-5001 (10,000,000 VND) |
+| Username | Password | Role | Tài khoản ngân hàng |
+|----------|----------|------|---------------------|
+| admin | ztlab-admin-2026 | Keycloak superadmin | — |
+| testuser01 | Test1234! | financial-read, financial-write | ACC-1001 |
+| testuser02 | Test1234! | financial-read, financial-write | ACC-2001 |
+| merchant01 | Test1234! | financial-read | ACC-4001 |
+| analyst01 | Test1234! | security-analyst | ACC-5001 |
 
-> **merchant01** chỉ có `financial-read` → POST /payments → HTTP 403 (dùng để demo RBAC).  
-> **analyst01** có `security-analyst` → xem được `/security` và `/monitor` nhưng không chuyển tiền được.
+> **merchant01**: chỉ `financial-read` → POST /payments → HTTP 403 (demo RBAC).  
+> **analyst01**: xem `/security`, `/monitor` nhưng không chuyển tiền được.
 
-**Roles:**
+### Roles OPA
 
-| Role | Quyền |
-|------|-------|
-| `financial-read` | GET /accounts, GET /transactions |
-| `financial-write` | + POST /payments |
-| `security-analyst` | Xem SOAR cases, security monitor |
-| `security-admin` | + Block IP, rollback playbook, approve HITL |
-
-### Reset DB trước mỗi bộ test
-
-```bash
-python3 tests/seed_db.py
-```
-
-Reset balances về baseline (ACC-1001=1B, ACC-2001=250M) và xóa ledger transactions.
+| Role | Phương thức được phép |
+|------|----------------------|
+| `financial-read` | GET, OPTIONS |
+| `financial-write` | GET, OPTIONS, POST, PUT |
+| `security-analyst` | GET, OPTIONS |
+| `security-admin` | GET, OPTIONS, POST, PUT, DELETE |
 
 ### Grafana
 
-- **Login:** admin / ZTALab2026!
+- Login: `admin` / `ZTALab2026!`
 
 ### Database
 
-| DB | Internal host | DB name | User | Password |
-|----|--------------|---------|------|---------|
-| PostgreSQL accounts | postgres-accounts.financial:5432 | accounts_db | accounts_user | accounts_pass |
-| PostgreSQL transactions | postgres-txn.financial:5432 | transactions_db | txn_user | txn_pass |
-| Redis | redis.financial:6379 | DB0/DB1 | — | ZTALab-Redis-2026! |
+| Thành phần | Host nội bộ | DB | User | Password |
+|-----------|------------|-----|------|---------|
+| PostgreSQL accounts (AWS) | postgres-accounts.financial:5432 | accounts_db | accounts_user | accounts_pass |
+| PostgreSQL transactions (AWS) | postgres-txn.financial:5432 | transactions_db | txn_user | txn_pass |
+| Redis (AWS) | redis.financial:6379 | DB0/DB1 | — | ZTALab-Redis-2026! |
+| pgAdmin | http://localhost:5050 | — | admin@ztlab.com | ztlab2026 |
 
 **Redis DB mapping:**
 - **DB0** — fraud velocity keys + IP blocklist + SOAR IP blocking
@@ -434,396 +303,513 @@ Reset balances về baseline (ACC-1001=1B, ACC-2001=250M) và xóa ledger transa
 
 ### SPIRE
 
-- Trust domain: `ztlab.local`
-- SVID TTL: 1h · CA TTL: 168h
-- SPIFFE IDs: `spiffe://ztlab.local/aws/{service}` · `spiffe://ztlab.local/openstack/{service}`
+- Trust domain: `ztlab.local` · SVID TTL: 1h · CA TTL: 168h
+- AWS: `spiffe://ztlab.local/aws/{api-gateway,payment-service,fraud-detection,notification-service}`
+- OpenStack: `spiffe://ztlab.local/openstack/{core-banking,account-service,transaction-service}`
 
 ---
 
-## 9. Web Portal
+## 6. Truy cập các UI
 
-**URL:** http://localhost:18081
+```bash
+bash scripts/open-admin-uis.sh   # khởi động tất cả
+```
 
-### Trang & quyền
+| Service | URL | Thông tin đăng nhập |
+|---------|-----|---------------------|
+| Web Portal | http://localhost:18081 | testuser01 / Test1234! |
+| API Gateway | http://localhost:18080 | — (cần JWT) |
+| Keycloak | http://localhost:8180 | admin / ztlab-admin-2026 |
+| Grafana | http://localhost:3000 | admin / ZTALab2026! |
+| Prometheus | http://localhost:9090 | — |
+| SOAR Engine | http://localhost:8091 | — |
+| Security Scorer | http://localhost:18092 | — |
+| Loki | http://localhost:13100 | — |
+| pgAdmin | http://localhost:5050 | admin@ztlab.com / ztlab2026 |
+| RedisInsight | http://localhost:5540 | — |
 
-| Đường dẫn | Mô tả | Role yêu cầu |
-|-----------|-------|-------------|
-| `/login` | Đăng nhập OIDC/PKCE | Không |
-| `/register` | Tạo tài khoản mới | Không |
+### Web Portal — các trang chính
+
+| Đường dẫn | Mô tả | Role |
+|-----------|-------|------|
+| `/login` | Đăng nhập OIDC/PKCE qua Keycloak | — |
 | `/dashboard` | Số dư, lịch sử giao dịch | Đăng nhập |
 | `/transfer` | Chuyển tiền | financial-write |
-| `/profile` | Thông tin tài khoản | Đăng nhập |
-| `/scenarios` | Chạy kịch bản attack demo | Đăng nhập |
-| `/security` | SOAR cases, blocked IPs | security-analyst / security-admin |
-| `/monitor` | System health tất cả services | security-analyst / security-admin |
+| `/scenarios` | Trigger kịch bản attack từ UI | Đăng nhập |
+| `/security` | SOAR cases, blocked IPs | security-analyst |
+| `/monitor` | System health | security-analyst |
 | `/admin` | Quản lý users & accounts | security-admin |
 
-### Login flow PKCE
-
-1. `/login` → click "Đăng nhập với Keycloak" → redirect Keycloak
-2. Keycloak xác thực → authorization code → web-portal exchange code → JWT
-3. Session lưu trong HMAC-signed cookie (TTL 1h)
-
-### Scenarios page
-
-Trang `/scenarios` cho phép trigger các kịch bản demo trực tiếp từ UI (không cần terminal):
-- No JWT · JWT Forgery · Lateral Movement · Fraud Gate Bypass
-- High Velocity · Rate Limit · Inject events (brute force, port scan, exfiltration...)
-
 ---
 
-## 10. Grafana — Dashboards & Alert Rules
-
-**URL:** http://localhost:3000 · **Login:** admin / ZTALab2026!
-
-**Log retention: 90 ngày** (2160h) — đủ cho yêu cầu audit bảo mật.
-
-### 6 Dashboards (folder: ZTLab)
-
-| Dashboard | UID | Mô tả |
-|-----------|-----|-------|
-| ZTLab — Zero Trust Security Overview | `ztlab-security-v2` | Tổng quan OPA, JWT failures, fraud blocks |
-| ZTLab Security Overview | `ztlab-security-overview` | Panels tóm tắt nhanh |
-| ZTLab Full Logs | `ztlab-full-logs` | Toàn bộ Envoy access logs |
-| Envoy Access Logs | `ztlab-envoy-access-logs` | HTTP matrix, latency P50/P95/P99 |
-| OPA Decision Log | `ztlab-opa-decision-log` | Allow/deny rate, top denied paths |
-| SIEM SOAR — Security Incidents & Response | `siem-soar-ztlab` | Cases, HITL pending, playbooks executed, IPs blocked, log stream |
-
-### 6 Alert Rules (folder: ZTLab)
-
-| Alert | Severity | Trigger | SOAR playbook |
-|-------|----------|---------|---------------|
-| Kịch bản 1 — Brute Force Login Detected | high | 401 count by IP [1m] | revoke_user_sessions |
-| Kịch bản 2 — Lateral Movement: Invalid SVID | critical | OPA deny invalid svid [5m] | isolate_workload |
-| Kịch bản 3 — Fraud Gate Bypass | critical | OPA deny path=/transactions/execute | isolate_workload |
-| Kịch bản 4 — Data Exfiltration Suspect | high | bytes_sent > 1MB từ Envoy access log | restrict_egress |
-| SOAR Engine Health | warning | soar-engine pod down > 2m | — (notify only) |
-| Access Denied Spike | high | OPA deny rate tăng đột biến | block_source_ip |
-
-> Tất cả alert `category=security` → webhook **SOAR Engine** (`/grafana-webhook`) qua contact point `ztlab-soar-webhook`.  
-> Alert `severity=high` hoặc `critical` → SOAR giữ lại → **gửi email admin** chờ phê duyệt.  
-> Alert `severity=low/medium` → SOAR thực thi tự động ngay (không cần approve).
-
-> **Lưu ý:** Sau khi SOAR chạy playbook `isolate_workload`, service đó sẽ tạm ngưng nhận traffic. Restore bằng: `curl -X POST http://localhost:8091/cases/{case_id}/rollback`
-
----
-
-## 11. SOAR Engine & HITL
-
-**URL:** http://localhost:8091
-
-### 5 Playbooks (`SOAR_DRY_RUN=false` — thực thi thật)
-
-| Playbook | Trigger | Hành động |
-|----------|---------|-----------|
-| `isolate_workload` | lateral_movement, fraud_gate_bypass | Patch Service selector → traffic dừng |
-| `restrict_egress` | large_response | Scale Deployment → 0 replica |
-| `quarantine_workload` | cryptomining | Scale Deployment → 0 replica |
-| `block_source_ip` | port_scan, exploit_probe, access_denied | Tạo NetworkPolicy chặn IP/32 + Redis DB0 blocklist 24h |
-| `revoke_user_sessions` | brute_force, jwt_replay, credential_stuffing | Keycloak Admin API xóa session user |
-
-### HITL — Human In The Loop
-
-Khi Grafana gửi alert severity **high** hoặc **critical**, SOAR **không thực thi ngay** mà:
-
-1. Lưu case với status `pending_approval`
-2. Gửi email HTML đến admin (`voha2005@gmail.com`) với:
-   - Chi tiết alert, severity, MITRE ATT&CK
-   - Tên playbook sẽ thực thi, target workload
-   - Log evidence từ Grafana
-   - Hai nút bấm: **PHÊ DUYỆT & THỰC THI** / **TỪ CHỐI**
-3. Admin click nút trong email → SOAR thực thi hoặc bỏ qua
-
-```
-Grafana alert (high/critical)
-  → SOAR pending_approval
-  → Email → admin click [✅ PHÊ DUYỆT] → http://localhost:8091/cases/{id}/approve?token=...
-                                        → playbook execute
-                        [❌ TỪ CHỐI]  → http://localhost:8091/cases/{id}/deny?token=...
-                                        → case skipped
-```
-
-> Alert severity **low/medium** vẫn thực thi tự động không cần approve.
-
-**Cấu hình SMTP** (Secret `grafana-smtp-secret`):
-```bash
-# Tạo/update secret
-kubectl --context ctx-aws create secret generic grafana-smtp-secret \
-  -n plg-stack --from-literal=password="<gmail-app-password>" \
-  --dry-run=client -o yaml | kubectl --context ctx-aws apply -f -
-kubectl --context ctx-aws rollout restart deployment/soar-engine -n plg-stack
-```
-
-### Endpoints
+## 7. Health check nhanh
 
 ```bash
-curl http://localhost:8091/health                          # status, pending_hitl count
-curl http://localhost:8091/cases                           # tất cả cases
-curl http://localhost:8091/cases/{case_id}                # chi tiết
-curl -X POST http://localhost:8091/cases/{id}/rollback    # restore workload
-curl http://localhost:8091/blocked-ips                    # IPs bị block
-curl -X POST http://localhost:8091/blocked-ips/1.2.3.4   # block thủ công
-curl -X DELETE http://localhost:8091/blocked-ips/1.2.3.4 # unblock
-curl http://localhost:8091/playbooks                      # danh sách playbooks
+# API Gateway
+curl http://localhost:18080/health
+# → {"status":"ok","jwks_keys_loaded":2,...}
+
+# SOAR Engine
+curl http://localhost:8091/health
+# → {"status":"ok","auto_execute":true,"dry_run":false,"min_severity":"medium","case_count":N}
+
+# Loki
+curl http://localhost:13100/ready
+# → ready
+
+# Grafana
+curl http://localhost:3000/api/health
+# → {"database":"ok"}
+
+# Prometheus targets
+curl -s http://localhost:9090/api/v1/targets | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+t=d['data']['activeTargets']
+up=sum(1 for x in t if x['health']=='up')
+print(f'UP: {up}/{len(t)}')
+"
+# → UP: 10/10
+
+# OPA policy (test fraud gate)
+kubectl --context ctx-aws exec -n financial deploy/opa-server -- \
+  curl -s -X POST localhost:8181/v1/data/zta/authz/allow \
+  -d '{"input":{"attributes":{"request":{"http":{"method":"POST","path":"/transactions/execute","headers":{}}},"source":{"principal":"spiffe://ztlab.local/aws/payment-service"}}}}' \
+  -H "Content-Type: application/json"
+# → {"result":false}  ← ĐÚNG: không có fraud gate thì bị deny
+
+# E2E payment test
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!&scope=openid" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+curl -s -X POST http://localhost:18080/payments \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1}'
+# → {"status":"completed","fraud":{"score":5,"gate":"passed"},...}
 ```
 
 ---
 
-## 12. Grafana → SOAR tự động
+## 8. Kịch bản demo & tấn công
 
-```
-Grafana alert rule fire (Loki query, eval interval 1m)
-  │
-  ├─► POST soar-engine.plg-stack:8080/grafana-webhook
-  │      │
-  │      ├── severity low/medium → _run_steps() ngay → status: executed
-  │      │
-  │      └── severity high/critical → pending_approval → email admin
-  │                                          │
-  │                                    Admin click approve
-  │                                          │
-  │                                    GET /cases/{id}/approve?token=...
-  │                                          │
-  │                                    _run_steps() → status: executed
-  │
-  └─► Email thông báo (voha2005@gmail.com) — dù low/medium hay HITL
-```
-
-**IP blocking enforcement:**
-Khi SOAR thực thi `block_source_ip`, key `ztlab:blocked_ip:{ip}` được ghi vào **Redis DB0**.  
-api-gateway đọc cùng key này để từ chối request 403 ngay tại cổng vào.
-
----
-
-## 13. Chạy demo & quay video
-
-### Chuẩn bị
+### Chuẩn bị trước demo
 
 ```bash
-# Terminal 1 — giữ mở
-bash scripts/k8s-tunnel.sh up all
-
-# Terminal 2 — giữ mở
-bash scripts/open-admin-uis.sh
-
-# Reset DB về baseline NT114
+# Reset số dư
 python3 tests/seed_db.py
+
+# Kiểm tra payment-service không bị isolate
+kubectl --context ctx-aws get svc payment-service -n financial -o jsonpath='{.spec.selector}'
+# Phải là: {"app":"payment-service"}
 ```
 
-Mở sẵn 5 tab trình duyệt:
+Mở 4 tab trình duyệt:
 
-| Tab | URL | Mục đích |
-|-----|-----|---------|
-| 1 | http://localhost:18081 | Web Portal (đăng nhập testuser01 / Test1234!) |
-| 2 | http://localhost:3000/d/ztlab-security-v2 | Grafana Zero Trust Security Overview |
-| 3 | http://localhost:3000/alerting/list | Grafana Alert Rules |
-| 4 | http://localhost:18081/security | SOAR cases + blocked IPs (analyst01 / Test1234!) |
-| 5 | http://localhost:18081/monitor | System health |
-
-### Chạy demo
-
-```bash
-# Full demo: normal traffic + tất cả attack scenarios
-bash scripts/run-demo.sh
-
-# Chỉ tấn công
-bash scripts/run-demo.sh --attack-only
-
-# Chỉ brute force (thấy Grafana alert → SOAR live)
-bash scripts/run-demo.sh --brute-force --attack-only
-
-# Loop liên tục (traffic chạy trong khi quay)
-bash scripts/run-demo.sh --continuous
-```
-
-### Kịch bản quay video đề xuất
-
-| Thời điểm | Màn hình | Nội dung |
-|-----------|----------|---------|
-| 0:00 | Web Portal /dashboard | testuser01 xem số dư ACC-1001 = 1,000,000,000 VND |
-| 0:30 | Web Portal /transfer | Chuyển 100,000 VND sang ACC-2001 → completed, score=5 |
-| 1:00 | Grafana Full Logs | Envoy access logs xuất hiện real-time |
-| 1:30 | Terminal | Chạy `bash tests/scenario_01_brute_force.sh` |
-| 2:00 | Grafana Alerting | Alert "Brute Force" chuyển → Firing |
-| 2:30 | Email admin | SOAR gửi email HITL — admin click PHÊ DUYỆT |
-| 3:00 | Web Portal /security (analyst01) | Cases list → status: executed |
-| 3:30 | Grafana SIEM SOAR dashboard | Panels: Cases, Pending HITL, IPs Blocked, log stream |
-| 4:00 | Terminal | `python3 tests/scenario_04_fraud_gate_bypass.py` |
-
-### Sau demo — restore
-
-```bash
-# Xem cases
-curl http://localhost:8091/cases | python3 -m json.tool
-
-# Rollback workload bị isolate (thay {case_id} bằng case thực tế)
-curl -X POST http://localhost:8091/cases/{case_id}/rollback
-
-# Unblock IPs bị SOAR block
-curl -X DELETE http://localhost:8091/blocked-ips/{ip_address}
-
-# Restart toàn bộ financial services (single-cloud mode)
-kubectl --context ctx-aws -n financial rollout restart deployment
-
-# Reset DB
-python3 tests/seed_db.py
-```
+| Tab | URL |
+|-----|-----|
+| 1 | http://localhost:18081 — Web Portal (testuser01) |
+| 2 | http://localhost:3000/d/siem-soar-ztlab — Grafana SIEM SOAR |
+| 3 | http://localhost:3000/alerting/list — Grafana Alerts |
+| 4 | http://localhost:18081/security — SOAR cases (analyst01) |
 
 ---
-
-## 14. Kịch bản tấn công chi tiết
 
 ### Kịch bản 1 — Brute Force (T1110.001)
 
+**Mô tả:** Nhiều lần đăng nhập sai → OPA deny rate tăng → Grafana alert → SOAR revoke sessions.
+
 ```bash
-KC_URL=http://localhost:8180 bash tests/scenario_01_brute_force.sh
+bash tests/scenario_01_brute_force.sh
+# Hoặc từ Web Portal: /scenarios → "Brute Force"
 ```
 
-20 lần login sai → Grafana alert (severity=high) → SOAR HITL email → admin approve → `revoke_user_sessions`
+**Chuỗi sự kiện:**
+1. 20 lần login sai với testuser01 → Keycloak trả 401
+2. Promtail đọc Envoy access log → Loki stream `job=envoy-access`
+3. Grafana alert "Kịch bản 1 — Brute Force" fire (count_over_time của 401 [1m] > ngưỡng)
+4. SOAR nhận webhook → attack_type=`brute_force` → playbook `revoke_user_sessions`
+5. Keycloak Admin API xóa tất cả session của user vi phạm
+6. Xem case tại http://localhost:18081/security hoặc `curl http://localhost:8091/cases`
 
-### Kịch bản 2 — JWT Forgery (T1606)
+---
+
+### Kịch bản 2 — Lateral Movement (T1021.007)
+
+**Mô tả:** Service dùng SPIFFE ID ngoài allowlist → OPA deny → SOAR isolate workload.
 
 ```bash
-KC_URL=http://localhost:8180 GW_URL=http://localhost:18080 python3 tests/scenario_02_jwt_forgery.py
+bash tests/scenario_03_lateral_movement.sh
+# Hoặc từ Web Portal: /scenarios → "Lateral Movement"
 ```
 
-JWT tự ký với algorithm=none → API Gateway từ chối (issuer sai)
+**Chuỗi sự kiện:**
+1. Request đến Envoy với source.principal không thuộc `spiffe://ztlab.local/`
+2. OPA: `valid_svid = false` → `internal_service_request = false` → `allow = false`
+3. OPA decision log: `result=false` → Promtail → Loki label `opa_result=false`
+4. Grafana alert "Kịch bản 2 — Lateral Movement" fire
+5. SOAR: attack_type=`lateral_movement` → playbook `isolate_workload` → patch Service selector
+6. payment-service tạm ngưng nhận traffic
 
-### Kịch bản 3 — Lateral Movement (T1021.007)
-
+**Restore sau demo:**
 ```bash
-GW_URL=http://localhost:18080 bash tests/scenario_03_lateral_movement.sh
-```
-
-Service dùng SPIFFE ID ngoài trust domain `ztlab.local` → Envoy/OPA deny → SOAR HITL → `isolate_workload`
-
-### Kịch bản 4 — Fraud Gate Bypass (T1078)
-
-```bash
-KC_URL=http://localhost:8180 GW_URL=http://localhost:18080 python3 tests/scenario_04_fraud_gate_bypass.py
-```
-
-Gọi core-banking với `X-Fraud-Gate: passed` giả mạo → OPA deny → SOAR HITL → `isolate_workload`
-
-### Kịch bản 5 — High Velocity (T1190)
-
-```bash
-KC_URL=http://localhost:8180 GW_URL=http://localhost:18080 python3 tests/scenario_05_high_velocity.py
-```
-
-50 payment liên tiếp trong 15 phút → fraud score tăng theo velocity (Redis DB0) → `review` → `block`
-
-### Kịch bản 6 — Data Exfiltration (T1041)
-
-```bash
-KC_URL=http://localhost:8180 GW_URL=http://localhost:18080 python3 tests/scenario_06_exfiltration.py
-```
-
-Response bytes_sent lớn bất thường → Grafana alert `large_response` → SOAR → `restrict_egress`
-
-### Chạy toàn bộ test suite
-
-```bash
-KC_URL=http://localhost:8180 GW_URL=http://localhost:18080 python3 tests/scenario_00_full_suite.py
+kubectl --context ctx-aws patch svc payment-service -n financial \
+  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
 ```
 
 ---
 
-## 15. Database Admin UIs
+### Kịch bản 3 — Fraud Gate Bypass (T1078.004) — Gap 2
 
-### pgAdmin (http://localhost:5050)
+**Mô tả:** Bỏ qua fraud-detection, gọi trực tiếp core-banking không có fraud gate header → OPA deny → SOAR isolate.
 
-> pgAdmin chạy trên cluster **AWS** — port-forward qua ctx-aws. Để xem dữ liệu OpenStack postgres, port-forward thêm: `kubectl --context ctx-openstack port-forward -n financial svc/pgadmin 5051:80`
-
-Login: `admin@ztlab.com` / `ztlab2026`
-
-Hai server pre-configured:
-- **ZTLab Accounts** → postgres-accounts.financial:5432 · DB: accounts_db · accounts_user/accounts_pass
-- **ZTLab Transactions** → postgres-txn.financial:5432 · DB: transactions_db · txn_user/txn_pass
-
-### RedisInsight (http://localhost:5540)
-
-> RedisInsight chạy trên cluster **AWS** — cùng cluster với Redis.
-
-Thêm connection lần đầu:
-1. Click **Add Redis Database**
-2. Host: `redis.financial.svc.cluster.local` · Port: `6379`
-3. Password: `ZTALab-Redis-2026!`
-
-Hoặc mở port-forward Redis rồi dùng `127.0.0.1:6379`:
 ```bash
-kubectl --context ctx-aws port-forward -n financial svc/redis 6379:6379 --address=127.0.0.1 &
+python3 tests/scenario_04_fraud_gate_bypass.py
+# Hoặc từ Web Portal: /scenarios → "Fraud Gate Bypass"
 ```
 
-### Token nhanh để test API
+**Chuỗi sự kiện:**
+1. POST `/transactions/execute` đến core-banking (OpenStack) không có header `x-fraud-gate: passed`
+2. OPA (OpenStack): path = `/transactions/execute` → yêu cầu `core_transaction_with_fraud_gate` → `fraud_gate_valid = false` → deny
+3. OPA log: `result=false` với `":path":"/transactions/execute"` → Promtail extract `request_path=/transactions/execute`
+4. Loki stream: `{job="opa-decisions", opa_result="false", request_path="/transactions/execute"}`
+5. Grafana alert "Kịch bản 3 — Fraud Gate Bypass" fire
+6. SOAR: attack_type=`fraud_gate_bypass` → playbook `isolate_workload`
 
+**OPA policy kiểm tra (Gap 2):**
+
+| Request | Kết quả |
+|---------|---------|
+| POST /transactions/execute, không có fraud gate | **DENY** ← cơ chế bảo vệ |
+| POST /transactions/execute, x-fraud-gate=passed, x-fraud-score=5 | ALLOW |
+| POST /transactions/execute, x-fraud-gate=passed, x-fraud-score=80 | **DENY** (score ≥ 75) |
+| POST /transactions (không phải /execute), có SVID | ALLOW |
+
+**Restore:**
 ```bash
-bash scripts/gen-dev-token.sh testuser01    # financial-write
-bash scripts/gen-dev-token.sh analyst01     # security-analyst
+kubectl --context ctx-aws patch svc payment-service -n financial \
+  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
 ```
 
 ---
 
-## 16. Hạn chế đã biết
+### Kịch bản 4 — Data Exfiltration (T1041) — Gap 1
 
-### OpenStack VMs tắt khi reboot máy deployer
-
-KVM VMs (os-gateway, os-k3s-master, os-k3s-worker-1, os-k3s-worker-2) không tự bật khi máy host khởi động lại. Cần bật thủ công:
+**Mô tả:** Response từ core-banking vượt 1MB → Grafana alert → SOAR restrict egress.
 
 ```bash
-source /etc/kolla/admin-openrc.sh
-openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
-sleep 30
-bash scripts/k8s-tunnel.sh up all
-kubectl --context ctx-openstack get pods -n financial
+python3 tests/scenario_06_exfiltration.py
+# Hoặc từ Web Portal: /scenarios → "Data Exfiltration"
 ```
 
-### Phân chia services giữa 2 cluster
+**Chuỗi sự kiện:**
+1. Request tải lượng dữ liệu lớn → Envoy access log `bytes_sent > 1048576`
+2. Loki stream `job=envoy-access`, label `gap=gap1`
+3. Grafana alert "Kịch bản 4 — Data Exfiltration Suspect" fire
+4. SOAR: attack_type=`large_response` → playbook `restrict_egress` → scale api-gateway xuống 0
 
-| Cluster | Services | Kết nối từ AWS |
-|---------|----------|----------------|
-| AWS K3s | api-gateway, payment-service, fraud-detection, notification-service, web-portal | — |
-| OpenStack K3s | core-banking, account-service, transaction-service | WireGuard + Envoy mTLS NodePorts 30080/30082/30083 |
-
-> `k8s/financial/aws-backend-services.yaml` là file dự phòng cho chế độ single-cloud (NOT apply lên production cluster).
-
-### SPIRE Agent trên OpenStack dùng join_token
-
-Khi migrate lên OpenStack, cần tạo join token:
-
+**Restore:**
 ```bash
-kubectl --context ctx-aws exec -n spire deploy/spire-server -- \
-  /opt/spire/bin/spire-server token generate \
-  -spiffeID spiffe://ztlab.local/openstack-agent
+kubectl --context ctx-aws scale deployment api-gateway -n financial --replicas=1
 ```
 
-### HITL email chỉ hoạt động khi cấu hình SMTP
+---
 
-Nếu `SMTP_PASS` chưa được set trong secret `grafana-smtp-secret`, email sẽ bị skip (log `hitl_email_skip`). SOAR case vẫn lưu với status `pending_approval`, có thể approve thủ công qua API:
+### Kịch bản 5 — JWT Forgery (T1606)
+
+**Mô tả:** JWT tự ký với key giả, algorithm=none → API Gateway từ chối.
 
 ```bash
-# Lấy case_id đang pending
+python3 tests/scenario_02_jwt_forgery.py
+```
+
+**Kết quả mong đợi:** HTTP 401/403, không vào được API Gateway. OPA `valid_jwt = false`.
+
+---
+
+### Kịch bản 6 — High Velocity (T1190)
+
+**Mô tả:** 50 payment liên tiếp → fraud score tăng theo velocity (Redis DB0) → gate block.
+
+```bash
+python3 tests/scenario_05_high_velocity.py
+```
+
+---
+
+### Restore toàn bộ sau demo
+
+```bash
+# Restore payment-service nếu bị isolate
+kubectl --context ctx-aws patch svc payment-service -n financial \
+  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
+
+# Restore api-gateway nếu bị restrict_egress (scale=0)
+kubectl --context ctx-aws scale deployment api-gateway -n financial --replicas=1
+
+# Unblock IPs
+for ip in $(curl -s http://localhost:8091/blocked-ips | python3 -c \
+  "import sys,json; [print(x.get('ip','')) for x in json.load(sys.stdin)]"); do
+  curl -s -X DELETE "http://localhost:8091/blocked-ips/$ip"
+done
+
+# Reset số dư
+python3 tests/seed_db.py
+```
+
+---
+
+## 9. SOAR Engine
+
+**URL:** http://localhost:8091  
+**Cấu hình hiện tại:** `auto_execute=true`, `min_severity=medium`, `dry_run=false`
+
+SOAR nhận webhook từ Grafana → phân tích alert → chạy playbook tự động nếu `severity >= medium`.
+
+### Playbooks
+
+| Playbook | Trigger | Hành động K8s |
+|----------|---------|--------------|
+| `isolate_workload` | lateral_movement, fraud_gate_bypass | Patch Service selector → pod không nhận traffic (vẫn còn để forensics) |
+| `restrict_egress` | large_response | Scale Deployment → 0 replica |
+| `quarantine_workload` | cryptomining | Scale Deployment → 0 replica |
+| `block_source_ip` | port_scan, exploit_probe, access_denied | Tạo NetworkPolicy chặn source IP/32 + ghi Redis DB0 (24h) |
+| `revoke_user_sessions` | brute_force, jwt_replay, credential_stuffing | Keycloak Admin API xóa session user |
+
+### Attack type routing
+
+| attack_type (Grafana label) | Playbook | Target |
+|-----------------------------|---------|--------|
+| fraud_gate_bypass | isolate_workload | payment-service |
+| lateral_movement | isolate_workload | payment-service |
+| large_response | restrict_egress | api-gateway |
+| brute_force | revoke_user_sessions | api-gateway |
+| access_denied | block_source_ip | api-gateway |
+| port_scan | block_source_ip | api-gateway |
+| jwt_replay | revoke_user_sessions | api-gateway |
+
+### API endpoints
+
+```bash
+# Trạng thái SOAR
+curl http://localhost:8091/health
+
+# Tất cả cases
+curl http://localhost:8091/cases | python3 -m json.tool
+
+# Chi tiết case
+curl http://localhost:8091/cases/{case_id}
+
+# Rollback case (restore workload bị isolate)
+curl -X POST http://localhost:8091/cases/{case_id}/rollback
+
+# IPs đang bị block
+curl http://localhost:8091/blocked-ips
+
+# Block IP thủ công
+curl -X POST http://localhost:8091/blocked-ips/1.2.3.4
+
+# Unblock IP
+curl -X DELETE http://localhost:8091/blocked-ips/1.2.3.4
+
+# Danh sách playbooks
+curl http://localhost:8091/playbooks
+```
+
+### Lưu ý về repeat_interval
+
+Grafana notification policy có `repeat_interval=1h` — cùng một alert sẽ không gửi lại SOAR trong 1 giờ. Nếu cần test lại cùng kịch bản trước 1 giờ, xóa silence/silence expire rồi chờ alert re-evaluate.
+
+---
+
+## 10. Grafana — Dashboards & Alerts
+
+**URL:** http://localhost:3000 · Login: admin / ZTALab2026!  
+**Log retention: 90 ngày**
+
+### 6 Dashboards (folder: ZTLab)
+
+| Dashboard | Mô tả |
+|-----------|-------|
+| ZTLab — Zero Trust Security Overview | Tổng quan OPA allow/deny, JWT failures, fraud |
+| ZTLab Security Overview | Panels tóm tắt nhanh |
+| ZTLab Full Logs | Toàn bộ Envoy access logs |
+| Envoy Access Logs | HTTP matrix, latency P50/P95/P99 |
+| OPA Decision Log | Allow/deny rate, top denied paths |
+| SIEM SOAR — Security Incidents & Response | Cases, playbooks, IPs blocked, log stream |
+
+### 6 Alert Rules (folder: ZTLab)
+
+| Alert | Severity | Query Loki | attack_type | SOAR Playbook |
+|-------|----------|-----------|-------------|---------------|
+| Kịch bản 1 — Brute Force Login | high | count_over_time 401 [1m] | brute_force | revoke_user_sessions |
+| Kịch bản 2 — Lateral Movement | critical | count_over_time opa_result=false [5m] | lateral_movement | isolate_workload |
+| Kịch bản 3 — Fraud Gate Bypass | critical | count_over_time opa_result=false, request_path=/transactions/execute [5m] | fraud_gate_bypass | isolate_workload |
+| Kịch bản 4 — Data Exfiltration | high | count_over_time bytes_sent > 1MB [5m] | large_response | restrict_egress |
+| Access Denied Spike | high | count_over_time OPA deny [1m] | access_denied | block_source_ip |
+| SOAR Engine Health | warning | count SOAR logs [5m] < 1 | — | — (monitor only) |
+
+> **Tất cả** alert `category=security` → webhook SOAR Engine (`/grafana-webhook`).  
+> Alert SOAR Engine Health chỉ fire khi SOAR pod DOWN (không có log > 5 phút).
+
+### Contact points
+
+- `ztlab-security-admin` (webhook): `http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook`
+
+### Notification policy
+
+- `category="security"` → `ztlab-security-admin`
+- `group_wait=10s` · `group_interval=5m` · `repeat_interval=1h`
+
+---
+
+## 11. OPA — Chính sách bảo mật
+
+**File:** `opa/policies/zta_policy.rego`  
+**ConfigMap:** `opa-policies` (namespace: financial, cả AWS lẫn OpenStack)
+
+### Các rule chính
+
+```
+allow = true khi:
+  public_path           → GET /health, /ready, /metrics*
+  external_api_request  → JWT hợp lệ + role_permits_action + không có SVID
+  internal_service_request → SVID hợp lệ + method/path phù hợp
+  core_transaction_with_fraud_gate → SVID + POST /transactions/execute + fraud gate đã xác nhận
+```
+
+### Fraud gate enforcement (Gap 2)
+
+```rego
+# POST /transactions/execute YÊU CẦU fraud gate — không thể bypass qua internal_service_request
+internal_service_request if {
+  valid_svid
+  method == "POST"
+  startswith(path, "/transactions")
+  not startswith(path, "/transactions/execute")   ← exclusion bảo vệ
+}
+
+core_transaction_with_fraud_gate if {
+  valid_svid
+  method == "POST"
+  startswith(path, "/transactions/execute")
+  fraud_gate_valid                                 ← x-fraud-gate=passed + x-fraud-score<75
+}
+```
+
+### Cập nhật OPA policy
+
+```bash
+# Sửa file opa/policies/zta_policy.rego, sau đó:
+kubectl --context ctx-aws create configmap opa-policies \
+  -n financial \
+  --from-file=zta_policy.rego=opa/policies/zta_policy.rego \
+  --from-file=fraud_gate.rego=opa/policies/fraud_gate.rego \
+  --from-file=cross_cloud.rego=opa/policies/cross_cloud.rego \
+  --dry-run=client -o yaml | kubectl --context ctx-aws apply -f -
+
+kubectl --context ctx-aws rollout restart deployment/opa-server -n financial
+
+# Tương tự cho OpenStack nếu cần
+kubectl --context ctx-openstack create configmap opa-policies \
+  -n financial \
+  --from-file=zta_policy.rego=opa/policies/zta_policy.rego \
+  --from-file=fraud_gate.rego=opa/policies/fraud_gate.rego \
+  --from-file=cross_cloud.rego=opa/policies/cross_cloud.rego \
+  --dry-run=client -o yaml | kubectl --context ctx-openstack apply -f -
+
+kubectl --context ctx-openstack rollout restart deployment/opa-server -n financial
+```
+
+---
+
+## 12. Xử lý sự cố thường gặp
+
+### Payment trả 503 — SOAR đã auto-isolate service
+
+```bash
+# Kiểm tra selector
+kubectl --context ctx-aws get svc payment-service -n financial \
+  -o jsonpath='{.spec.selector}'
+# Nếu có "soar.ztlab.io/isolated":"true" → restore:
+kubectl --context ctx-aws patch svc payment-service -n financial \
+  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
+
+# Xem SOAR case để hiểu nguyên nhân
 curl http://localhost:8091/cases | python3 -c "
 import sys,json
-[print(c['case_id'], c['status'], c['severity']) for c in json.load(sys.stdin)
- if c['status']=='pending_approval']"
-
-# Approve thủ công (cần token)
-TOKEN=$(curl -s http://localhost:8091/health | python3 -c "import sys,json; print('no-token')")
-curl "http://localhost:8091/cases/{case_id}/approve?token={hitl_token}"
+for c in sorted(json.load(sys.stdin), key=lambda x:x.get('ts',''), reverse=True)[:5]:
+    print(c['ts'][11:19], c['attack_type'], c['playbook'], c['status'])"
 ```
 
----
+### Lateral Movement alert fire khi đang test OPA trực tiếp
 
-## 17. Xử lý lỗi thường gặp
+Khi test OPA qua `curl localhost:XXXX/v1/data/...` (không qua Envoy), request không có SPIFFE SVID → OPA deny → Promtail pick up → Grafana alert fire → SOAR isolate payment-service. Đây là **behavior đúng**.
 
-### Không đăng nhập được Web Portal — `invalid_redirect_uri`
+Restore payment-service và dừng test OPA direct để alert tự về inactive sau ~5 phút.
 
-Keycloak live thiếu `localhost:18081` trong redirectUris. Fix qua Admin API:
+### Payment trả 503 — cross-cloud không hoạt động
+
+```bash
+# 1. Kiểm tra OpenStack VMs
+source /etc/kolla/admin-openrc.sh && openstack server list
+# Nếu SHUTOFF: openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
+
+# 2. Kiểm tra WireGuard
+ssh -i ~/.ssh/ztlab-key ubuntu@52.221.255.36 "sudo wg show wg0"
+
+# 3. Kiểm tra OpenStack pods
+kubectl --context ctx-openstack get pods -n financial | grep -v Running
+
+# 4. Test TCP từ payment-service đến core-banking
+kubectl --context ctx-aws exec -n financial deployment/payment-service \
+  -c payment-service -- python3 -c "
+import socket; s=socket.socket(); s.settimeout(5)
+try: s.connect(('192.168.101.11',30080)); print('30080 OK')
+except Exception as e: print('FAIL:', e)"
+```
+
+### Payment trả 403 — HMAC fail
+
+```bash
+# Kiểm tra secret trên cả hai cluster
+kubectl --context ctx-aws get secret core-banking-integrity-secret -n financial
+kubectl --context ctx-openstack get secret core-banking-integrity-secret -n financial
+
+# Nếu thiếu trên OpenStack, sync từ AWS:
+SECRET=$(kubectl --context ctx-aws get secret core-banking-integrity-secret \
+  -n financial -o jsonpath='{.data.CORE_BANKING_SHARED_SECRET}')
+kubectl --context ctx-openstack create secret generic core-banking-integrity-secret \
+  -n financial --from-literal=CORE_BANKING_SHARED_SECRET=$(echo $SECRET | base64 -d) \
+  --dry-run=client -o yaml | kubectl --context ctx-openstack apply -f -
+```
+
+### API Gateway trả 403 — JWT invalid issuer
+
+OPA kiểm tra `jwt_payload.iss == "http://keycloak.ztlab.local:8180/realms/ztlab"`. Nếu Keycloak chạy URL khác → 403. Kiểm tra issuer trong token:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!&scope=openid" \
+  -H "Content-Type: application/x-www-form-urlencoded" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+# Decode payload (base64)
+echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool | grep iss
+```
+
+### API Gateway trả jwks_keys_loaded=0
+
+Keycloak chưa sẵn sàng khi api-gateway start. Restart:
+```bash
+kubectl --context ctx-aws -n financial rollout restart deployment/api-gateway
+```
+
+### Không đăng nhập được Web Portal — invalid_redirect_uri
 
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8180/realms/master/protocol/openid-connect/token \
   -d "client_id=admin-cli&grant_type=password&username=admin&password=ztlab-admin-2026" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 CLIENT_ID=$(curl -s "http://localhost:8180/admin/realms/ztlab/clients?clientId=web-portal" \
@@ -832,167 +818,93 @@ CLIENT_ID=$(curl -s "http://localhost:8180/admin/realms/ztlab/clients?clientId=w
 
 curl -s -X PUT "http://localhost:8180/admin/realms/ztlab/clients/$CLIENT_ID" \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"clientId":"web-portal","publicClient":true,"standardFlowEnabled":true,
-       "attributes":{"pkce.code.challenge.method":"S256"},
-       "redirectUris":["http://localhost:18081/*","http://127.0.0.1:18081/*",
-                       "http://portal.ztlab.local/*","http://localhost:8080/*"],
-       "webOrigins":["+"]}'
+  -d '{
+    "clientId":"web-portal","publicClient":true,"standardFlowEnabled":true,
+    "attributes":{"pkce.code.challenge.method":"S256"},
+    "redirectUris":["http://localhost:18081/*","http://127.0.0.1:18081/*"],
+    "webOrigins":["+"]
+  }'
 ```
 
-### Reset password user trong Keycloak
+### Loki không nhận log từ OpenStack
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8180/realms/master/protocol/openid-connect/token \
-  -d "client_id=admin-cli&grant_type=password&username=admin&password=ztlab-admin-2026" \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+# Kiểm tra socat proxy đang chạy
+ss -lnt | grep 13099
+# Phải có: 10.10.10.1:13099
 
-# Lấy user ID
-USER_ID=$(curl -s "http://localhost:8180/admin/realms/ztlab/users?username=testuser01" \
-  -H "Authorization: Bearer $TOKEN" | python3 -c "import sys,json; print(json.load(sys.stdin)[0]['id'])")
+# Nếu không có → khởi động lại port-forwards
+bash scripts/open-admin-uis.sh stop
+bash scripts/open-admin-uis.sh
 
-# Reset password
-curl -X PUT "http://localhost:8180/admin/realms/ztlab/users/$USER_ID/reset-password" \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"type":"password","value":"Test1234!","temporary":false}'
-```
-
-### API Gateway trả 403 cho mọi request dù token hợp lệ
-
-OPA `valid_jwt` false do issuer URL sai. Kiểm tra `opa/policies/zta_policy.rego`:
-```
-jwt_payload.iss == "http://keycloak.ztlab.local:8180/realms/ztlab"
-```
-Sau khi sửa:
-```bash
-kubectl --context ctx-aws create configmap opa-policies \
-  --from-file=opa/policies/ -n financial --dry-run=client -o yaml | \
-  kubectl --context ctx-aws apply -f -
-kubectl --context ctx-aws -n financial rollout restart deployment/api-gateway
-```
-
-### API Gateway trả `jwks_keys_loaded=0`
-
-Keycloak chưa sẵn sàng khi api-gateway start. Restart:
-```bash
-kubectl --context ctx-aws -n financial rollout restart deployment/api-gateway
-```
-
-### Payment trả 503 — cross-cloud không hoạt động
-
-1. Kiểm tra OpenStack VMs đang chạy:
-```bash
-source /etc/kolla/admin-openrc.sh && openstack server list
-# Tất cả phải ACTIVE
-```
-
-2. Kiểm tra WireGuard tunnel:
-```bash
-ansible aws_gateway,os_gateway -i ansible/inventory/hosts.yml -m shell -a "wg show wg0"
-# Hoặc: ssh -i ~/.ssh/ztlab-key ubuntu@52.221.255.36 "wg show"
-```
-
-3. Kiểm tra NodePorts OpenStack:
-```bash
-kubectl --context ctx-openstack get svc -n financial | grep -E "core-banking|account|transaction"
-# Phải có: 15006:30080, 15006:30082, 15006:30083
-```
-
-4. Test TCP từ AWS pod đến OpenStack:
-```bash
-kubectl --context ctx-aws exec -n financial deployment/payment-service \
-  -c payment-service -- python3 -c "
-import socket
-s=socket.socket(); s.settimeout(5)
-try: s.connect(('192.168.101.11',30080)); print('30080 OK')
-except Exception as e: print('30080 FAIL:', e)
-"
-```
-
-### Payment trả 503 — SOAR đã auto-isolate service
-
-SOAR có thể tự động chạy playbook `isolate_workload` khi phát hiện `lateral_movement` hoặc `fraud_gate_bypass`. Service bị isolate sẽ trả 503 (K8s Service selector không match pod nào).
-
-Kiểm tra:
-```bash
-# Xem service bị isolate không
-kubectl --context ctx-aws get svc payment-service -n financial \
-  -o jsonpath='{.spec.selector}'
-# Nếu có "soar.ztlab.io/isolated":"true" → bị isolate
-
-# Xem SOAR case để hiểu lý do
-curl http://localhost:8091/cases | python3 -c "
+# Kiểm tra OpenStack promtail LOKI_PUSH_URL
+kubectl --context ctx-openstack get daemonset promtail -n plg-stack \
+  -o jsonpath='{.spec.template.spec.containers[0].env}' | python3 -c "
 import sys,json
-[print(c['case_id'], c['playbook'], c['target_workload'], c['status']) 
- for c in json.load(sys.stdin)]"
-
-# Rollback (restore service)
-curl -X POST http://localhost:8091/cases/{case_id}/rollback
-
-# Hoặc patch thủ công nếu không có case_id
-kubectl --context ctx-aws patch svc payment-service -n financial \
-  --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]'
-```
-
-### Payment trả 403 — HMAC fail
-
-```bash
-# Kiểm tra secret tồn tại cả hai cluster
-kubectl --context ctx-aws get secret core-banking-integrity-secret -n financial
-kubectl --context ctx-openstack get secret core-banking-integrity-secret -n financial
-
-# Nếu thiếu trên OpenStack:
-SECRET=$(kubectl --context ctx-aws get secret core-banking-integrity-secret \
-  -n financial -o jsonpath='{.data.CORE_BANKING_SHARED_SECRET}')
-kubectl --context ctx-openstack create secret generic core-banking-integrity-secret \
-  -n financial --from-literal=CORE_BANKING_SHARED_SECRET=$(echo $SECRET | base64 -d)
-```
-
-### SOAR pod không start (CrashLoopBackOff)
-
-```bash
-kubectl --context ctx-aws -n plg-stack describe pod -l app=soar-engine | tail -20
-# Thường do secret redis-auth thiếu. Chạy lại:
-bash scripts/deploy-all.sh   # idempotent
-```
-
-### K8s tunnel mất kết nối
-
-```bash
-bash scripts/k8s-tunnel.sh status
-bash scripts/k8s-tunnel.sh down all && bash scripts/k8s-tunnel.sh up all
+for e in json.load(sys.stdin):
+    if 'LOKI' in e.get('name',''):
+        print(e['name'], '=', e.get('value','?'))"
+# Phải là: LOKI_PUSH_URL = http://10.10.10.1:13099/loki/api/v1/push
 ```
 
 ### SPIRE SVID hết hạn (lỗi mTLS sau ~1h)
 
 ```bash
-# Restart SPIRE agent để renew SVIDs
 kubectl --context ctx-aws rollout restart daemonset/spire-agent -n spire
-
-# Sau đó restart các services để Envoy re-fetch SVID mới
+# Đợi SVID renew xong
 kubectl --context ctx-aws -n financial rollout restart deployment
+kubectl --context ctx-openstack -n financial rollout restart deployment
 ```
 
-### SPIFFE_ID sai trong Envoy (lỗi "workload not authorized")
+### K8s tunnel mất kết nối
 
-Nếu Envoy log báo "workload is not authorized for the requested identities":
 ```bash
-# Kiểm tra SPIFFE_ID env var trong container envoy
-kubectl --context ctx-aws exec -n financial <pod> -c envoy -- \
-  cat /tmp/envoy.yaml | python3 -c "
-import sys
-for l in sys.stdin:
-    if 'name: spiffe://' in l and 'ROOTCA' not in l:
-        print(l.strip()); break"
-
-# Nếu sai, sửa bằng:
-kubectl --context ctx-aws set env deployment/<service> -n financial \
-  "SPIFFE_ID=spiffe://ztlab.local/<prefix>/<service>"
+bash scripts/k8s-tunnel.sh down all
+bash scripts/k8s-tunnel.sh up all
+kubectl --context ctx-aws get nodes
+kubectl --context ctx-openstack get nodes
 ```
 
-SPIFFE IDs đúng theo NT114 Bảng 4.2:
-- `aws/api-gateway` · `aws/payment-service` · `aws/fraud-detection` · `aws/notification-service`
-- `openstack/core-banking` · `openstack/account-service` · `openstack/transaction-service`
+### Grafana alert bị firing liên tục (false positive)
+
+```bash
+# Kiểm tra trạng thái các alert
+curl -s -u admin:ZTALab2026! \
+  "http://localhost:3000/api/prometheus/grafana/api/v1/rules" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+for g in d.get('data',{}).get('groups',[]):
+    for r in g.get('rules',[]):
+        if r.get('state')=='firing':
+            for a in r.get('alerts',[]):
+                print(r['name'], '→', a.get('state'), 'value:', a.get('value'))"
+
+# Nếu state="Alerting (Error)" → query lỗi → check execErrState
+# Nếu có OPA deny không mong muốn → kiểm tra xem có test OPA trực tiếp không
+# Alert tự về inactive sau 5 phút khi không còn trigger
+```
+
+### SOAR pod không start
+
+```bash
+kubectl --context ctx-aws -n plg-stack describe pod -l app=soar-engine | tail -20
+# Thường do secret redis-auth thiếu → chạy lại deploy
+bash scripts/deploy-all.sh
+```
+
+### Token test API nhanh
+
+```bash
+# Lấy token testuser01
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!&scope=openid" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+echo $TOKEN
+
+# Dùng token
+curl -H "Authorization: Bearer $TOKEN" http://localhost:18080/accounts/ACC-1001
+```
 
 ---
 
-*Hệ thống implement Zero Trust Architecture theo NIST SP 800-207: không có implicit trust, mọi request đều verify identity (JWT + SPIFFE SVID) và policy (OPA) trước khi được phép.*
+*Hệ thống implement Zero Trust Architecture theo NIST SP 800-207: không có implicit trust, mọi request đều xác thực identity (JWT + SPIFFE SVID) và policy (OPA) trước khi được phép truy cập tài nguyên.*
