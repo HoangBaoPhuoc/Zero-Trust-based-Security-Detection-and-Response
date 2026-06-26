@@ -452,6 +452,7 @@ values = [[str(now + i*1_000_000), json.dumps({
 })] for i in range(5)]
 payload = {"streams":[{"stream":{
     "job":"opa-decisions","opa_result":"false",
+    "attack_scenario":"lateral_movement",
     "service":"payment-service","namespace":"financial"
 },"values":values}]}
 urllib.request.urlopen(urllib.request.Request(
@@ -484,6 +485,7 @@ values = [[str(now + i*1_000_000), json.dumps({
 })] for i in range(5)]
 payload = {"streams":[{"stream":{
     "job":"opa-decisions","opa_result":"false",
+    "attack_scenario":"fraud_gate_bypass",
     "request_path":"/transactions/execute",
     "service":"payment-service","namespace":"financial"
 },"values":values}]}
@@ -639,12 +641,12 @@ for c in cases[-3:]:
 
 **Mô tả:** Service bên ngoài trust domain dùng SVID không hợp lệ → OPA từ chối → SOAR isolate payment-service.
 
-**Grafana query:** `{job="opa-decisions", opa_result="false"} [5m]`
+**Grafana query:** `{job="opa-decisions", opa_result="false", attack_scenario="lateral_movement"} [5m]`
 
-> **Tại sao không thể tấn công thực từ bên ngoài:** Để trigger KB2 thật sự, kẻ tấn công cần có một service đang chạy với SPIFFE SVID từ trust domain ngoài (`spiffe://external.attacker/...`). Điều này đòi hỏi kiểm soát SPIRE agent nội bộ — không thể làm từ client bên ngoài. Thay vào đó, inject log mô phỏng hành vi này vào Loki để trigger alert.
+> **Tại sao không thể tấn công thực từ bên ngoài:** Để trigger KB2 thật sự, kẻ tấn công cần có một service đang chạy với SPIFFE SVID từ trust domain ngoài (`spiffe://external.attacker/...`). Điều này đòi hỏi kiểm soát SPIRE agent nội bộ — không thể làm từ client bên ngoài. Thay vào đó, inject log mô phỏng hành vi này vào Loki để trigger alert. Label `attack_scenario=lateral_movement` phân biệt KB2 với các OPA deny thông thường từ KB1.
 
 ```bash
-# Push 5 log OPA deny vào Loki (opa_result=false là stream label)
+# Push 5 log OPA deny vào Loki (attack_scenario=lateral_movement là stream label phân biệt)
 python3 - <<'PY'
 import json, urllib.request, time
 loki_url = "http://127.0.0.1:13100"
@@ -659,6 +661,7 @@ values = [[str(now + i * 1_000_000), json.dumps({
 })] for i in range(5)]
 payload = {"streams": [{"stream": {
     "job": "opa-decisions", "opa_result": "false",
+    "attack_scenario": "lateral_movement",
     "service": "payment-service", "namespace": "financial"
 }, "values": values}]}
 req = urllib.request.Request(f"{loki_url}/loki/api/v1/push",
@@ -669,8 +672,8 @@ PY
 ```
 
 **Chuỗi sự kiện:**
-1. 5 log với stream label `opa_result=false` push vào Loki
-2. Grafana alert "Kịch bản 2 — Lateral Movement" → FIRING
+1. 5 log với stream labels `opa_result=false` + `attack_scenario=lateral_movement` push vào Loki
+2. Grafana alert "Kịch bản 2 — Lateral Movement" → FIRING (chỉ match log KB2, không nhầm KB1)
 3. SOAR: `attack_type=lateral_movement` → playbook `isolate_workload`
 4. K8s Service selector của payment-service bị patch → pod không nhận traffic → payment trả 503
 
@@ -695,12 +698,12 @@ kubectl --context ctx-aws patch svc payment-service -n financial \
 
 **Mô tả:** Kẻ tấn công cố gọi `/transactions/execute` mà không có header `x-fraud-gate: passed` → OPA từ chối → SOAR isolate payment-service.
 
-**Grafana query:** `{job="opa-decisions", opa_result="false", request_path="/transactions/execute"} [5m]`
+**Grafana query:** `{job="opa-decisions", opa_result="false", attack_scenario="fraud_gate_bypass"} [5m]`
 
-> **Tại sao không thể tấn công thực từ bên ngoài:** Endpoint `/transactions/execute` nằm trên core-banking (OpenStack), không được expose qua api-gateway (chỉ có `/payments`, `/accounts`, `/transactions`). Kẻ tấn công từ ngoài không có đường gọi trực tiếp vào core-banking. Thực tế, fraud gate bypass xảy ra khi service nội bộ bị compromise và cố bypass payment-service. Dùng inject log để mô phỏng.
+> **Tại sao không thể tấn công thực từ bên ngoài:** Endpoint `/transactions/execute` nằm trên core-banking (OpenStack), không được expose qua api-gateway (chỉ có `/payments`, `/accounts`, `/transactions`). Kẻ tấn công từ ngoài không có đường gọi trực tiếp vào core-banking. Thực tế, fraud gate bypass xảy ra khi service nội bộ bị compromise và cố bypass payment-service. Label `attack_scenario=fraud_gate_bypass` phân biệt KB3 với KB2.
 
 ```bash
-# Push 5 log OPA deny với request_path là stream label
+# Push 5 log OPA deny vào Loki (attack_scenario=fraud_gate_bypass là stream label phân biệt)
 python3 - <<'PY'
 import json, urllib.request, time
 loki_url = "http://127.0.0.1:13100"
@@ -715,6 +718,7 @@ values = [[str(now + i * 1_000_000), json.dumps({
 })] for i in range(5)]
 payload = {"streams": [{"stream": {
     "job": "opa-decisions", "opa_result": "false",
+    "attack_scenario": "fraud_gate_bypass",
     "request_path": "/transactions/execute",
     "service": "payment-service", "namespace": "financial"
 }, "values": values}]}
@@ -735,8 +739,8 @@ PY
 | GET /transactions/* (không phải /execute) | ALLOW |
 
 **Chuỗi sự kiện:**
-1. 5 log với stream labels `opa_result=false` + `request_path=/transactions/execute` push vào Loki
-2. Grafana alert "Kịch bản 3 — Fraud Gate Bypass" → FIRING
+1. 5 log với stream labels `opa_result=false` + `attack_scenario=fraud_gate_bypass` push vào Loki
+2. Grafana alert "Kịch bản 3 — Fraud Gate Bypass" → FIRING (chỉ match log KB3, không nhầm KB2)
 3. SOAR: `attack_type=fraud_gate_bypass` → playbook `isolate_workload` (severity=critical)
 4. K8s Service selector của payment-service bị patch → 503
 
