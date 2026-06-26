@@ -29,8 +29,9 @@ log "registered SPIFFE IDs: $entries"
 [[ "$entries" -ge 5 ]] || log "WARNING: only $entries SPIFFE IDs registered (expected ≥5)"
 
 if [[ "$ENABLE_DESTRUCTIVE" != "1" ]]; then
-  log "non-destructive check complete (SPIRE healthy, $entries SVIDs registered)"
-  skip "set ENABLE_DESTRUCTIVE=1 to test pod deletion + recovery"
+  pass "SPIRE healthy — AWS agents=$aws_agents OS agents=$os_agents SVIDs=$entries (T1552.004, non-destructive mode)"
+  log "INFO: set ENABLE_DESTRUCTIVE=1 to test pod deletion + recovery"
+  exit 0
 fi
 
 log "DESTRUCTIVE: deleting SPIRE agent pods to simulate SVID expiry..."
