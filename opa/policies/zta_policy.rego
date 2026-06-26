@@ -97,6 +97,7 @@ internal_service_request if {
   valid_svid
   method == "POST"
   startswith(path, "/transactions")
+  not startswith(path, "/transactions/execute")
 }
 
 core_transaction_with_fraud_gate if {

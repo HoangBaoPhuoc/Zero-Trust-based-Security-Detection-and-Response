@@ -163,8 +163,11 @@ data:
               expressions:
                 decision_id: decision_id
                 opa_result: result
+          - regex:
+              expression: '":path":"(?P<request_path>[^"]+)"'
           - labels:
               opa_result:
+              request_path:
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_node_name]
             action: keep

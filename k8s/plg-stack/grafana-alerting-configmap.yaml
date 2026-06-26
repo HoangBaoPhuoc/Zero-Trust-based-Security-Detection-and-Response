@@ -1,142 +1,363 @@
 apiVersion: v1
 data:
-  access-denied-spike-alert.yml: "apiVersion: 1\ngroups:\n  - orgId: 1\n    name:\
-    \ access-denied-spike\n    folder: ZTLab\n    interval: 1m\n    rules:\n     \
-    \ - uid: access-denied-spike\n        title: \"Access Denied Spike\"\n       \
-    \ for: 0s\n        condition: A\n        data:\n          - refId: A\n       \
-    \     relativeTimeRange:\n              from: 60\n              to: 0\n      \
-    \      datasourceUid: Loki\n            model:\n              datasource:\n  \
-    \              type: loki\n                uid: Loki\n              expr: 'sum\
-    \ by (source_ip) (count_over_time({job=\"opa-decisions\"} | json | result=\"deny\"\
-    \ [1m]))'\n              instant: true\n              queryType: instant\n   \
-    \           refId: A\n        noDataState: OK\n        execErrState: Alerting\n\
-    \        annotations:\n          summary: \"OPA deny rate tăng đột biến từ cùng\
-    \ source_ip\"\n          description: \"ATT&CK T1078 — IP nguồn đang probe các\
-    \ endpoint trái phép liên tiếp.\"\n          admin_action: |\n            HƯỚNG\
-    \ DẪN XỬ LÝ:\n            1. Xác nhận IP nguồn từ OPA Decision Log dashboard\n\
-    \            2. SOAR tự động block_source_ip nếu mức medium+\n            3. Kiểm\
-    \ tra Web Portal /security -> blocked IPs\n        labels:\n          severity:\
-    \ high\n          category: security\n          mitre: T1078\n"
-  brute-force-alert.yml: "apiVersion: 1\n\ngroups:\n  - orgId: 1\n    name: brute-force\n\
-    \    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: brute-force-login\n\
-    \        title: \"Kịch bản 1 — Brute Force Login Detected\"\n        for: 0s\n\
-    \        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n\
-    \              from: 60\n              to: 0\n            datasourceUid: Loki\n\
-    \            model:\n              datasource:\n                type: loki\n \
-    \               uid: Loki\n              expr: 'sum by (source_ip) (count_over_time({job=\"\
-    envoy-access\"} | json | response_code=`401` [1m]))'\n              instant: true\n\
-    \              queryType: instant\n              refId: A\n        noDataState:\
-    \ OK\n        execErrState: Alerting\n        annotations:\n          summary:\
-    \ \"Brute force login — nhiều lần 401 từ cùng source_ip trong 1 phút\"\n     \
-    \     description: \"ATT&CK T1110.001 — Kẻ tấn công đang thử đoán mật khẩu. OPA\
-    \ đã log request bị từ chối từ IP nguồn.\"\n          admin_action: |\n      \
-    \      HƯỚNG DẪN XỬ LÝ:\n            1. Vào Web Portal /security → xem incident\
-    \ \"brute_force\"\n            2. Nhấn \"Block IP\" → chặn IP nguồn (Redis, TTL\
-    \ 24h), api-gateway reject ngay\n            3. Nhấn \"Revoke All Sessions\" nếu\
-    \ nghi account bị compromise\n            4. Xem log: Grafana → Envoy Access Logs\
-    \ → filter source_ip\n            5. Nhấn \"Acknowledge\" để đóng incident sau\
-    \ xử lý\n        labels:\n          severity: high\n          category: security\n\
-    \          mitre: T1110.001\n"
-  fraud-gate-bypass-alert.yml: "apiVersion: 1\n\ngroups:\n  - orgId: 1\n    name:\
-    \ fraud-gate\n    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: fraud-gate-bypass\n\
-    \        title: \"Kịch bản 3 — Fraud Gate Bypass (Gap 2)\"\n        for: 0s\n\
-    \        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n\
-    \              from: 300\n              to: 0\n            datasourceUid: Loki\n\
-    \            model:\n              datasource:\n                type: loki\n \
-    \               uid: Loki\n              expr: '{job=\"opa-decisions\",opa_result=\"\
-    false\",request_path=\"/transactions/execute\"}'\n              instant: false\n\
-    \              queryType: range\n              refId: A\n        noDataState:\
-    \ OK\n        execErrState: Alerting\n        annotations:\n          summary:\
-    \ \"Fraud Gate bypass — cố thực hiện giao dịch không qua fraud-detection\"\n \
-    \         description: \"ATT&CK T1078.004 — Request gọi POST /transactions/execute\
-    \ thiếu hoặc sai header X-Fraud-Gate/X-Fraud-Score. OPA từ chối.\"\n         \
-    \ admin_action: |\n            HƯỚNG DẪN XỬ LÝ:\n            1. Vào Web Portal\
-    \ /security → xem incident \"fraud_gate_bypass\"\n            2. Nhấn \"Scale\
-    \ Down Payment\" để dừng thanh toán mới trong khi điều tra\n            3. Kiểm\
-    \ tra: Grafana → OPA Decision Log → filter request_path=/transactions/execute\n\
-    \            4. Kiểm tra HMAC: kubectl logs -n financial deploy/payment-service\n\
-    \            5. Nhấn \"Restore Payment\" sau xác nhận payment-service hoạt động\
-    \ đúng\n            6. Nhấn \"Acknowledge\" để đóng incident\n        labels:\n\
-    \          severity: critical\n          category: security\n          gap: gap2\n\
-    \          mitre: T1078.004\n"
-  large-response-alert.yml: "apiVersion: 1\n\ngroups:\n  - orgId: 1\n    name: gap1-exfiltration\n\
-    \    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: gap1-large-response\n\
-    \        title: \"Kịch bản 4 — Data Exfiltration Suspect (Gap 1)\"\n        for:\
-    \ 0s\n        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n\
-    \              from: 300\n              to: 0\n            datasourceUid: Loki\n\
-    \            model:\n              datasource:\n                type: loki\n \
-    \               uid: Loki\n              expr: '{job=\"envoy-access\"} | json\
-    \ | bytes_sent > 1048576'\n              instant: false\n              queryType:\
-    \ range\n              refId: A\n        noDataState: OK\n        execErrState:\
-    \ Alerting\n        annotations:\n          summary: \"Response >1MB từ Envoy\
-    \ — nghi ngờ data exfiltration\"\n          description: \"ATT&CK T1041 — Envoy\
-    \ log ghi bytes_sent > 1MB. Có thể đang dump database hoặc exfiltrate file.\"\n\
-    \          admin_action: |\n            HƯỚNG DẪN XỬ LÝ:\n            1. Vào Web\
-    \ Portal /security → xem incident \"exfiltration\"\n            2. Nhấn \"Scale\
-    \ Down Banking\" để dừng core-banking tạm thời\n            3. Kiểm tra log: Grafana\
-    \ → Envoy Access Logs → filter bytes_sent>1M\n            4. Kiểm tra endpoint:\
-    \ kubectl logs -n financial deploy/core-banking\n            5. Nhấn \"Restore\
-    \ Banking\" sau xác nhận an toàn\n            6. Nhấn \"Acknowledge\" để đóng\
-    \ incident\n        labels:\n          severity: high\n          category: security\n\
-    \          gap: gap1\n          mitre: T1041\n"
-  lateral-movement-alert.yml: "apiVersion: 1\n\ngroups:\n  - orgId: 1\n    name: lateral-movement\n\
-    \    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: lateral-movement-svid\n\
-    \        title: \"Kịch bản 2 — Lateral Movement: Invalid SVID\"\n        for:\
-    \ 0s\n        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n\
-    \              from: 300\n              to: 0\n            datasourceUid: Loki\n\
-    \            model:\n              datasource:\n                type: loki\n \
-    \               uid: Loki\n              expr: '{job=\"opa-decisions\",opa_result=\"\
-    false\"}'\n              instant: false\n              queryType: range\n    \
-    \          refId: A\n        noDataState: OK\n        execErrState: Alerting\n\
-    \        annotations:\n          summary: \"OPA từ chối request — SVID không hợp\
-    \ lệ hoặc ngoài allowlist\"\n          description: \"ATT&CK T1021.007 — Service\
-    \ cố truy cập service khác với SPIFFE ID sai hoặc không được phép. OPA từ chối\
-    \ và ghi log.\"\n          admin_action: |\n            HƯỚNG DẪN XỬ LÝ:\n   \
-    \         1. Vào Web Portal /security → xem incident \"lateral_movement\"\n  \
-    \          2. Nhấn \"Scale Down Payment\" để dừng payment-service tạm thời\n \
-    \           3. Kiểm tra SVID vi phạm: Grafana → OPA Decision Log → filter opa_result=false\n\
-    \            4. Kiểm tra log Envoy: kubectl logs -n financial deploy/payment-service\
-    \ -c envoy\n            5. Nhấn \"Restore Payment\" sau khi xác nhận an toàn\n\
-    \            6. Nhấn \"Acknowledge\" để đóng incident\n        labels:\n     \
-    \     severity: critical\n          category: security\n          mitre: T1021.007\n"
-  notification-policy.yml: "apiVersion: 1\n\ncontactPoints:\n  - orgId: 1\n    name:\
-    \ ztlab-security-admin\n    receivers:\n      - uid: ztlab-admin-email\n     \
-    \   type: email\n        settings:\n          addresses: \"voha2005@gmail.com\"\
-    \n          subject: >-\n            [ZTLab SECURITY] {{ .CommonLabels.alertname\
-    \ }} — {{ .CommonLabels.severity | toUpper }}\n          message: |\n        \
-    \    CẢNH BÁO BẢO MẬT — ZTLab Zero Trust\n            ══════════════════════════════════════════\n\
-    \n            Alert:    {{ .CommonLabels.alertname }}\n            Severity: {{\
-    \ .CommonLabels.severity | toUpper }}\n            MITRE:    {{ .CommonLabels.mitre\
-    \ }}\n            Time:     {{ now | date \"2006-01-02 15:04:05 UTC\" }}\n\n \
-    \           ──────────────────────────────────────────\n            {{ range .Alerts.Firing\
-    \ -}}\n            SỰ KIỆN: {{ .Annotations.summary }}\n\n            MÔ TẢ: {{\
-    \ .Annotations.description }}\n            {{ end }}\n            ──────────────────────────────────────────\n\
-    \            HƯỚNG DẪN XỬ LÝ CHO ADMIN:\n            {{ .CommonAnnotations.admin_action\
-    \ }}\n            ──────────────────────────────────────────\n\n            Web\
-    \ Portal: http://127.0.0.1:18081/security\n            Grafana:    http://127.0.0.1:3000/alerting/list\n\
-    \        disableResolveMessage: false\n      - uid: ztlab-soar-webhook\n     \
-    \   type: webhook\n        settings:\n          url: http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook\n\
-    \          httpMethod: POST\n        disableResolveMessage: true\n\npolicies:\n\
-    \  - orgId: 1\n    receiver: ztlab-security-admin\n    group_by:\n      - grafana_folder\n\
-    \      - alertname\n    group_wait: 10s\n    group_interval: 5m\n    repeat_interval:\
-    \ 4h\n    routes:\n      - receiver: ztlab-security-admin\n        matchers:\n\
-    \          - 'category=\"security\"'\n        group_wait: 10s\n        group_interval:\
-    \ 5m\n        repeat_interval: 1h\n"
-  soar-health-alert.yml: "apiVersion: 1\ngroups:\n  - orgId: 1\n    name: soar-health\n\
-    \    folder: ZTLab\n    interval: 2m\n    rules:\n      - uid: soar-engine-health\n\
-    \        title: \"SOAR Engine Health\"\n        for: 2m\n        condition: A\n\
-    \        data:\n          - refId: A\n            relativeTimeRange:\n       \
-    \       from: 300\n              to: 0\n            datasourceUid: Loki\n    \
-    \        model:\n              datasource:\n                type: loki\n     \
-    \           uid: Loki\n              expr: 'sum(count_over_time({app=\"soar-engine\"\
-    } [5m]))'\n              instant: true\n              queryType: instant\n   \
-    \           refId: A\n        noDataState: Alerting\n        execErrState: Alerting\n\
-    \        annotations:\n          summary: \"SOAR Engine pod không có log trong\
-    \ 5 phút\"\n          description: \"SOAR Engine có thể bị down — phản ứng tự\
-    \ động với security incidents bị vô hiệu.\"\n        labels:\n          severity:\
-    \ warning\n          category: ops\n          mitre: \"\"\n"
+  access-denied-spike-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 1m
+      name: access-denied-spike
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'HƯỚNG DẪN XỬ LÝ:
+
+            1. Xác nhận IP nguồn từ OPA Decision Log dashboard
+
+            2. SOAR tự động block_source_ip nếu mức medium+
+
+            3. Kiểm tra Web Portal /security -> blocked IPs
+
+            '
+          description: ATT&CK T1078 — IP nguồn đang probe các endpoint trái phép liên
+            tiếp.
+          summary: OPA deny rate tăng đột biến từ cùng source_ip
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum by (source_ip) (count_over_time({job="opa-decisions"} | json | result="deny"
+              [1m]))
+            instant: true
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 60
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: access_denied
+          category: security
+          mitre: T1078
+          severity: high
+        noDataState: OK
+        title: Access Denied Spike
+        uid: access-denied-spike
+  brute-force-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 1m
+      name: brute-force
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'HƯỚNG DẪN XỬ LÝ:
+
+            1. Vào Web Portal /security → xem incident "brute_force"
+
+            2. Nhấn "Block IP" → chặn IP nguồn (Redis, TTL 24h), api-gateway reject ngay
+
+            3. Nhấn "Revoke All Sessions" nếu nghi account bị compromise
+
+            4. Xem log: Grafana → Envoy Access Logs → filter source_ip
+
+            5. Nhấn "Acknowledge" để đóng incident sau xử lý
+
+            '
+          description: ATT&CK T1110.001 — Kẻ tấn công đang thử đoán mật khẩu. OPA đã log
+            request bị từ chối từ IP nguồn.
+          summary: Brute force login — nhiều lần 401 từ cùng source_ip trong 1 phút
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum by (source_ip) (count_over_time({job="envoy-access"} | json | response_code=`401`
+              [1m]))
+            instant: true
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 60
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: brute_force
+          category: security
+          mitre: T1110.001
+          severity: high
+        noDataState: OK
+        title: Kịch bản 1 — Brute Force Login Detected
+        uid: brute-force-login
+  fraud-gate-bypass-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 1m
+      name: fraud-gate
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'HƯỚNG DẪN XỬ LÝ:
+
+            1. Vào Web Portal /security → xem incident "fraud_gate_bypass"
+
+            2. Nhấn "Scale Down Payment" để dừng thanh toán mới trong khi điều tra
+
+            3. Kiểm tra: Grafana → OPA Decision Log → filter request_path=/transactions/execute
+
+            4. Kiểm tra HMAC: kubectl logs -n financial deploy/payment-service
+
+            5. Nhấn "Restore Payment" sau xác nhận payment-service hoạt động đúng
+
+            6. Nhấn "Acknowledge" để đóng incident
+
+            '
+          description: ATT&CK T1078.004 — Request gọi POST /transactions/execute thiếu
+            hoặc sai header X-Fraud-Gate/X-Fraud-Score. OPA từ chối.
+          summary: Fraud Gate bypass — cố thực hiện giao dịch không qua fraud-detection
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: '{job="opa-decisions",opa_result="false",request_path="/transactions/execute"}'
+            instant: false
+            queryType: range
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: fraud_gate_bypass
+          category: security
+          gap: gap2
+          mitre: T1078.004
+          severity: critical
+        noDataState: OK
+        title: Kịch bản 3 — Fraud Gate Bypass (Gap 2)
+        uid: fraud-gate-bypass
+  large-response-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 1m
+      name: gap1-exfiltration
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'HƯỚNG DẪN XỬ LÝ:
+
+            1. Vào Web Portal /security → xem incident "exfiltration"
+
+            2. Nhấn "Scale Down Banking" để dừng core-banking tạm thời
+
+            3. Kiểm tra log: Grafana → Envoy Access Logs → filter bytes_sent>1M
+
+            4. Kiểm tra endpoint: kubectl logs -n financial deploy/core-banking
+
+            5. Nhấn "Restore Banking" sau xác nhận an toàn
+
+            6. Nhấn "Acknowledge" để đóng incident
+
+            '
+          description: ATT&CK T1041 — Envoy log ghi bytes_sent > 1MB. Có thể đang dump
+            database hoặc exfiltrate file.
+          summary: Response >1MB từ Envoy — nghi ngờ data exfiltration
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: '{job="envoy-access"} | json | bytes_sent > 1048576'
+            instant: false
+            queryType: range
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: large_response
+          category: security
+          gap: gap1
+          mitre: T1041
+          severity: high
+        noDataState: OK
+        title: Kịch bản 4 — Data Exfiltration Suspect (Gap 1)
+        uid: gap1-large-response
+  lateral-movement-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 1m
+      name: lateral-movement
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'HƯỚNG DẪN XỬ LÝ:
+
+            1. Vào Web Portal /security → xem incident "lateral_movement"
+
+            2. Nhấn "Scale Down Payment" để dừng payment-service tạm thời
+
+            3. Kiểm tra SVID vi phạm: Grafana → OPA Decision Log → filter opa_result=false
+
+            4. Kiểm tra log Envoy: kubectl logs -n financial deploy/payment-service -c
+            envoy
+
+            5. Nhấn "Restore Payment" sau khi xác nhận an toàn
+
+            6. Nhấn "Acknowledge" để đóng incident
+
+            '
+          description: ATT&CK T1021.007 — Service cố truy cập service khác với SPIFFE
+            ID sai hoặc không được phép. OPA từ chối và ghi log.
+          summary: OPA từ chối request — SVID không hợp lệ hoặc ngoài allowlist
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: '{job="opa-decisions",opa_result="false"}'
+            instant: false
+            queryType: range
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: lateral_movement
+          category: security
+          mitre: T1021.007
+          severity: critical
+        noDataState: OK
+        title: 'Kịch bản 2 — Lateral Movement: Invalid SVID'
+        uid: lateral-movement-svid
+  notification-policy.yml: |
+    apiVersion: 1
+
+    contactPoints:
+      - orgId: 1
+        name: ztlab-security-admin
+        receivers:
+          - uid: ztlab-admin-email
+            type: email
+            settings:
+              addresses: "voha2005@gmail.com"
+              subject: >-
+                [ZTLab SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.severity | toUpper }}
+              message: |
+                CẢNH BÁO BẢO MẬT — ZTLab Zero Trust
+                ══════════════════════════════════════════
+
+                Alert:    {{ .CommonLabels.alertname }}
+                Severity: {{ .CommonLabels.severity | toUpper }}
+                MITRE:    {{ .CommonLabels.mitre }}
+                Time:     {{ now | date "2006-01-02 15:04:05 UTC" }}
+
+                ──────────────────────────────────────────
+                {{ range .Alerts.Firing -}}
+                SỰ KIỆN: {{ .Annotations.summary }}
+
+                MÔ TẢ: {{ .Annotations.description }}
+                {{ end }}
+                ──────────────────────────────────────────
+                HƯỚNG DẪN XỬ LÝ CHO ADMIN:
+                {{ .CommonAnnotations.admin_action }}
+                ──────────────────────────────────────────
+
+                Web Portal: http://127.0.0.1:18081/security
+                Grafana:    http://127.0.0.1:3000/alerting/list
+            disableResolveMessage: false
+          - uid: ztlab-soar-webhook
+            type: webhook
+            settings:
+              url: http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook
+              httpMethod: POST
+            disableResolveMessage: true
+
+    policies:
+      - orgId: 1
+        receiver: ztlab-security-admin
+        group_by:
+          - grafana_folder
+          - alertname
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 4h
+        routes:
+          - receiver: ztlab-security-admin
+            matchers:
+              - 'category="security"'
+            group_wait: 10s
+            group_interval: 5m
+            repeat_interval: 1h
+  soar-health-alert.yml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: soar-health
+        folder: ZTLab
+        interval: 2m
+        rules:
+          - uid: soar-engine-health
+            title: "SOAR Engine Health"
+            for: 2m
+            condition: A
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: Loki
+                model:
+                  datasource:
+                    type: loki
+                    uid: Loki
+                  expr: 'sum(count_over_time({app="soar-engine"} [5m]))'
+                  instant: true
+                  queryType: instant
+                  refId: A
+            noDataState: Alerting
+            execErrState: Alerting
+            annotations:
+              summary: "SOAR Engine pod không có log trong 5 phút"
+              description: "SOAR Engine có thể bị down — phản ứng tự động với security incidents bị vô hiệu."
+            labels:
+              severity: warning
+              category: ops
+              mitre: ""
 kind: ConfigMap
 metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"v1","data":{"access-denied-spike-alert.yml":"apiVersion: 1\ngroups:\n  - orgId: 1\n    name: access-denied-spike\n    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: access-denied-spike\n        title: \"Access Denied Spike\"\n        for: 0s\n        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n              from: 60\n              to: 0\n            datasourceUid: Loki\n            model:\n              datasource:\n                type: loki\n                uid: Loki\n              expr: 'sum by (source_ip) (count_over_time({job=\"opa-decisions\"} | json | result=\"deny\" [1m]))'\n              instant: true\n              queryType: instant\n              refId: A\n        noDataState: OK\n        execErrState: Alerting\n        annotations:\n          summary: \"OPA deny rate tăng đột biến từ cùng source_ip\"\n          description: \"ATT\u0026CK T1078 — IP nguồn đang probe các endpoint trái phép liên tiếp.\"\n          admin_action: |\n            HƯỚNG DẪN XỬ LÝ:\n            1. Xác nhận IP nguồn từ OPA Decision Log dashboard\n            2. SOAR tự động block_source_ip nếu mức medium+\n            3. Kiểm tra Web Portal /security -\u003e blocked IPs\n        labels:\n          severity: high\n          category: security\n          mitre: T1078\n","brute-force-alert.yml":"apiVersion: 1\n\ngroups:\n  - orgId: 1\n    name: brute-force\n    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: brute-force-login\n        title: \"Kịch bản 1 — Brute Force Login Detected\"\n        for: 0s\n        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n              from: 60\n              to: 0\n            datasourceUid: Loki\n            model:\n              datasource:\n                type: loki\n                uid: Loki\n              expr: 'sum by (source_ip) (count_over_time({job=\"envoy-access\"} | json | response_code=`401` [1m]))'\n              instant: true\n              queryType: instant\n              refId: A\n        noDataState: OK\n        execErrState: Alerting\n        annotations:\n          summary: \"Brute force login — nhiều lần 401 từ cùng source_ip trong 1 phút\"\n          description: \"ATT\u0026CK T1110.001 — Kẻ tấn công đang thử đoán mật khẩu. OPA đã log request bị từ chối từ IP nguồn.\"\n          admin_action: |\n            HƯỚNG DẪN XỬ LÝ:\n            1. Vào Web Portal /security → xem incident \"brute_force\"\n            2. Nhấn \"Block IP\" → chặn IP nguồn (Redis, TTL 24h), api-gateway reject ngay\n            3. Nhấn \"Revoke All Sessions\" nếu nghi account bị compromise\n            4. Xem log: Grafana → Envoy Access Logs → filter source_ip\n            5. Nhấn \"Acknowledge\" để đóng incident sau xử lý\n        labels:\n          severity: high\n          category: security\n          mitre: T1110.001\n","fraud-gate-bypass-alert.yml":"apiVersion: 1\n\ngroups:\n  - orgId: 1\n    name: fraud-gate\n    folder: ZTLab\n    interval: 1m\n    rules:\n      - uid: fraud-gate-bypass\n        title: \"Kịch bản 3 — Fraud Gate Bypass (Gap 2)\"\n        for: 0s\n        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n              from: 300\n              to: 0\n            datasourceUid: Loki\n            model:\n              datasource:\n                type: loki\n                uid: Loki\n              expr: '{job=\"opa-decisions\",opa_result=\"false\",request_path=\"/transactions/execute\"}'\n              instant: false\n              queryType: range\n              refId: A\n        noDataState: OK\n        execErrState: Alerting\n        annotations:\n          summary: \"Fraud Gate bypass — cố thực hiện giao dịch không qua fraud-detection\"\n          description: \"ATT\u0026CK T1078.004 — Request gọi POST /transactions/execute thiếu hoặc sai header X-Fraud-Gate/X-Fraud-Score. OPA từ chối.\"\n          admin_action: |\n            HƯỚNG DẪN XỬ LÝ:\n            1. Vào Web Portal /security → xem incident \"fraud_gate_bypass\"\n            2. Nhấn \"Scale Down Payment\" để dừng thanh toán mới trong khi điều tra\n            3. Kiểm tra: Grafana → OPA Decision Log → filter request_path=/transactions/execute\n            4. Kiểm tra HMAC: kubectl logs -n financial deploy/payment-service\n            5. Nhấn \"Restore Payment\" sau xác nhận payment-service hoạt động đúng\n            6. Nhấn \"Acknowledge\" để đóng incident\n        labels:\n          severity: critical\n          category: security\n          gap: gap2\n          mitre: T1078.004\n","large-response-alert.yml":"apiVersion: 1\ngroups:\n- folder: ZTLab\n  interval: 1m\n  name: gap1-exfiltration\n  orgId: 1\n  rules:\n  - annotations:\n      admin_action: 'HƯỚNG DẪN XỬ LÝ:\n\n        1. Vào Web Portal /security → xem incident \"exfiltration\"\n\n        2. Nhấn \"Scale Down Banking\" để dừng core-banking tạm thời\n\n        3. Kiểm tra log: Grafana → Envoy Access Logs → filter bytes_sent\u003e1M\n\n        4. Kiểm tra endpoint: kubectl logs -n financial deploy/core-banking\n\n        5. Nhấn \"Restore Banking\" sau xác nhận an toàn\n\n        6. Nhấn \"Acknowledge\" để đóng incident\n\n        '\n      description: ATT\u0026CK T1041 — Envoy log ghi bytes_sent \u003e 1MB. Có thể đang dump\n        database hoặc exfiltrate file.\n      summary: Response \u003e1MB từ Envoy — nghi ngờ data exfiltration\n    condition: A\n    data:\n    - datasourceUid: Loki\n      model:\n        datasource:\n          type: loki\n          uid: Loki\n        expr: '{job=\"envoy-access\"} | json | bytes_sent \u003e 1048576'\n        instant: false\n        queryType: range\n        refId: A\n      refId: A\n      relativeTimeRange:\n        from: 300\n        to: 0\n    execErrState: Alerting\n    for: 0s\n    labels:\n      attack_type: large_response\n      category: security\n      gap: gap1\n      mitre: T1041\n      severity: high\n    noDataState: OK\n    title: Kịch bản 4 — Data Exfiltration Suspect (Gap 1)\n    uid: gap1-large-response\n","lateral-movement-alert.yml":"apiVersion: 1\ngroups:\n- folder: ZTLab\n  interval: 1m\n  name: lateral-movement\n  orgId: 1\n  rules:\n  - annotations:\n      admin_action: 'HƯỚNG DẪN XỬ LÝ:\n\n        1. Vào Web Portal /security → xem incident \"lateral_movement\"\n\n        2. Nhấn \"Scale Down Payment\" để dừng payment-service tạm thời\n\n        3. Kiểm tra SVID vi phạm: Grafana → OPA Decision Log → filter opa_result=false\n\n        4. Kiểm tra log Envoy: kubectl logs -n financial deploy/payment-service -c\n        envoy\n\n        5. Nhấn \"Restore Payment\" sau khi xác nhận an toàn\n\n        6. Nhấn \"Acknowledge\" để đóng incident\n\n        '\n      description: ATT\u0026CK T1021.007 — Service cố truy cập service khác với SPIFFE\n        ID sai hoặc không được phép. OPA từ chối và ghi log.\n      summary: OPA từ chối request — SVID không hợp lệ hoặc ngoài allowlist\n    condition: A\n    data:\n    - datasourceUid: Loki\n      model:\n        datasource:\n          type: loki\n          uid: Loki\n        expr: '{job=\"opa-decisions\",opa_result=\"false\"}'\n        instant: false\n        queryType: range\n        refId: A\n      refId: A\n      relativeTimeRange:\n        from: 300\n        to: 0\n    execErrState: Alerting\n    for: 0s\n    labels:\n      attack_type: lateral_movement\n      category: security\n      mitre: T1021.007\n      severity: critical\n    noDataState: OK\n    title: 'Kịch bản 2 — Lateral Movement: Invalid SVID'\n    uid: lateral-movement-svid\n","notification-policy.yml":"apiVersion: 1\n\ncontactPoints:\n  - orgId: 1\n    name: ztlab-security-admin\n    receivers:\n      - uid: ztlab-admin-email\n        type: email\n        settings:\n          addresses: \"voha2005@gmail.com\"\n          subject: \u003e-\n            [ZTLab SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.severity | toUpper }}\n          message: |\n            CẢNH BÁO BẢO MẬT — ZTLab Zero Trust\n            ══════════════════════════════════════════\n\n            Alert:    {{ .CommonLabels.alertname }}\n            Severity: {{ .CommonLabels.severity | toUpper }}\n            MITRE:    {{ .CommonLabels.mitre }}\n            Time:     {{ now | date \"2006-01-02 15:04:05 UTC\" }}\n\n            ──────────────────────────────────────────\n            {{ range .Alerts.Firing -}}\n            SỰ KIỆN: {{ .Annotations.summary }}\n\n            MÔ TẢ: {{ .Annotations.description }}\n            {{ end }}\n            ──────────────────────────────────────────\n            HƯỚNG DẪN XỬ LÝ CHO ADMIN:\n            {{ .CommonAnnotations.admin_action }}\n            ──────────────────────────────────────────\n\n            Web Portal: http://127.0.0.1:18081/security\n            Grafana:    http://127.0.0.1:3000/alerting/list\n        disableResolveMessage: false\n      - uid: ztlab-soar-webhook\n        type: webhook\n        settings:\n          url: http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook\n          httpMethod: POST\n        disableResolveMessage: true\n\npolicies:\n  - orgId: 1\n    receiver: ztlab-security-admin\n    group_by:\n      - grafana_folder\n      - alertname\n    group_wait: 10s\n    group_interval: 5m\n    repeat_interval: 4h\n    routes:\n      - receiver: ztlab-security-admin\n        matchers:\n          - 'category=\"security\"'\n        group_wait: 10s\n        group_interval: 5m\n        repeat_interval: 1h\n","soar-health-alert.yml":"apiVersion: 1\ngroups:\n  - orgId: 1\n    name: soar-health\n    folder: ZTLab\n    interval: 2m\n    rules:\n      - uid: soar-engine-health\n        title: \"SOAR Engine Health\"\n        for: 2m\n        condition: A\n        data:\n          - refId: A\n            relativeTimeRange:\n              from: 300\n              to: 0\n            datasourceUid: Loki\n            model:\n              datasource:\n                type: loki\n                uid: Loki\n              expr: 'sum(count_over_time({app=\"soar-engine\"} [5m]))'\n              instant: true\n              queryType: instant\n              refId: A\n        noDataState: Alerting\n        execErrState: Alerting\n        annotations:\n          summary: \"SOAR Engine pod không có log trong 5 phút\"\n          description: \"SOAR Engine có thể bị down — phản ứng tự động với security incidents bị vô hiệu.\"\n        labels:\n          severity: warning\n          category: ops\n          mitre: \"\"\n"},"kind":"ConfigMap","metadata":{"annotations":{},"creationTimestamp":"2026-06-05T07:40:59Z","name":"grafana-alerting","namespace":"plg-stack","resourceVersion":"502276","uid":"4bf2c3b5-c22a-4280-aa86-69a1a236b299"}}
+  creationTimestamp: "2026-06-05T07:40:59Z"
   name: grafana-alerting
   namespace: plg-stack
-
+  resourceVersion: "522578"
+  uid: 4bf2c3b5-c22a-4280-aa86-69a1a236b299
