@@ -198,6 +198,48 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/account-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
@@ -209,10 +251,14 @@ spec:
   selector:
     app: account-service
   ports:
+    - name: envoy
+      port: 15006
+      targetPort: 15006
+      nodePort: 30082
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30082
+      nodePort: 30086
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -276,6 +322,48 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/transaction-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
@@ -287,7 +375,11 @@ spec:
   selector:
     app: transaction-service
   ports:
+    - name: envoy
+      port: 15006
+      targetPort: 15006
+      nodePort: 30083
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30083
+      nodePort: 30087

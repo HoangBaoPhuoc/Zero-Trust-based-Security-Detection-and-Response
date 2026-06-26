@@ -1,0 +1,506 @@
+apiVersion: v1
+data:
+  dashboard-provider.yml: "apiVersion: 1\n\nproviders:\n  - name: ztlab\n    orgId:\
+    \ 1\n    folder: ZTLab\n    type: file\n    disableDeletion: false\n    editable:\
+    \ true\n    options:\n      path: /var/lib/grafana/dashboards\n"
+  envoy-access-logs.json: "{\n  \"uid\": \"ztlab-envoy-access-logs\",\n  \"title\"\
+    : \"Envoy Access Logs\",\n  \"schemaVersion\": 39,\n  \"version\": 2,\n  \"refresh\"\
+    : \"30s\",\n  \"tags\": [\n    \"ztlab\",\n    \"security\"\n  ],\n  \"time\"\
+    : {\n    \"from\": \"now-6h\",\n    \"to\": \"now\"\n  },\n  \"panels\": [\n \
+    \   {\n      \"id\": 1,\n      \"title\": \"Request Rate by Cloud\",\n      \"\
+    type\": \"timeseries\",\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\"\
+    : 0,\n        \"w\": 8,\n        \"h\": 4\n      },\n      \"datasource\": {\n\
+    \        \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"targets\"\
+    : [\n        {\n          \"datasource\": {\n            \"type\": \"loki\",\n\
+    \            \"uid\": \"Loki\"\n          },\n          \"expr\": \"sum by (cloud)\
+    \ (rate({job=\\\"envoy-access\\\"}[1m]))\",\n          \"refId\": \"A\"\n    \
+    \    }\n      ],\n      \"options\": {},\n      \"fieldConfig\": {\n        \"\
+    defaults\": {},\n        \"overrides\": []\n      }\n    },\n    {\n      \"id\"\
+    : 2,\n      \"title\": \"Error Rate\",\n      \"type\": \"timeseries\",\n    \
+    \  \"gridPos\": {\n        \"x\": 8,\n        \"y\": 0,\n        \"w\": 8,\n \
+    \       \"h\": 4\n      },\n      \"datasource\": {\n        \"type\": \"loki\"\
+    ,\n        \"uid\": \"Loki\"\n      },\n      \"targets\": [\n        {\n    \
+    \      \"datasource\": {\n            \"type\": \"loki\",\n            \"uid\"\
+    : \"Loki\"\n          },\n          \"expr\": \"sum(rate({job=\\\"envoy-access\\\
+    \"} | json | response_code >= 400 [5m])) / sum(rate({job=\\\"envoy-access\\\"\
+    }[5m]))\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"options\"\
+    : {},\n      \"fieldConfig\": {\n        \"defaults\": {},\n        \"overrides\"\
+    : []\n      }\n    },\n    {\n      \"id\": 3,\n      \"title\": \"P95 Response\
+    \ Time by Cloud\",\n      \"type\": \"timeseries\",\n      \"gridPos\": {\n  \
+    \      \"x\": 16,\n        \"y\": 0,\n        \"w\": 8,\n        \"h\": 4\n  \
+    \    },\n      \"datasource\": {\n        \"type\": \"loki\",\n        \"uid\"\
+    : \"Loki\"\n      },\n      \"targets\": [\n        {\n          \"datasource\"\
+    : {\n            \"type\": \"loki\",\n            \"uid\": \"Loki\"\n        \
+    \  },\n          \"expr\": \"quantile_over_time(0.95, {job=\\\"envoy-access\\\"\
+    } | json | unwrap response_time [5m]) by (cloud)\",\n          \"refId\": \"A\"\
+    \n        }\n      ],\n      \"options\": {},\n      \"fieldConfig\": {\n    \
+    \    \"defaults\": {},\n        \"overrides\": []\n      }\n    },\n    {\n  \
+    \    \"id\": 4,\n      \"title\": \"Recent Envoy Logs\",\n      \"type\": \"logs\"\
+    ,\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 4,\n        \"w\":\
+    \ 24,\n        \"h\": 8\n      },\n      \"datasource\": {\n        \"type\":\
+    \ \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"targets\": [\n     \
+    \   {\n          \"datasource\": {\n            \"type\": \"loki\",\n        \
+    \    \"uid\": \"Loki\"\n          },\n          \"expr\": \"{job=\\\"envoy-access\\\
+    \"}\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"options\": {},\n\
+    \      \"fieldConfig\": {\n        \"defaults\": {},\n        \"overrides\": []\n\
+    \      }\n    }\n  ]\n}\n"
+  opa-decision-log.json: "{\n  \"uid\": \"ztlab-opa-decision-log\",\n  \"title\":\
+    \ \"OPA Decision Log\",\n  \"schemaVersion\": 39,\n  \"version\": 2,\n  \"refresh\"\
+    : \"30s\",\n  \"tags\": [\n    \"ztlab\",\n    \"security\"\n  ],\n  \"time\"\
+    : {\n    \"from\": \"now-6h\",\n    \"to\": \"now\"\n  },\n  \"panels\": [\n \
+    \   {\n      \"id\": 1,\n      \"title\": \"Allow vs Deny Rate\",\n      \"type\"\
+    : \"timeseries\",\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 0,\n\
+    \        \"w\": 12,\n        \"h\": 4\n      },\n      \"datasource\": {\n   \
+    \     \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"targets\"\
+    : [\n        {\n          \"datasource\": {\n            \"type\": \"loki\",\n\
+    \            \"uid\": \"Loki\"\n          },\n          \"expr\": \"sum by (opa_result)\
+    \ (rate({job=\\\"opa-decisions\\\"} | json [5m]))\",\n          \"refId\": \"\
+    A\"\n        }\n      ],\n      \"options\": {},\n      \"fieldConfig\": {\n \
+    \       \"defaults\": {},\n        \"overrides\": []\n      }\n    },\n    {\n\
+    \      \"id\": 2,\n      \"title\": \"Denied Paths\",\n      \"type\": \"table\"\
+    ,\n      \"gridPos\": {\n        \"x\": 12,\n        \"y\": 0,\n        \"w\"\
+    : 12,\n        \"h\": 4\n      },\n      \"datasource\": {\n        \"type\":\
+    \ \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"targets\": [\n     \
+    \   {\n          \"datasource\": {\n            \"type\": \"loki\",\n        \
+    \    \"uid\": \"Loki\"\n          },\n          \"expr\": \"sum by (request_path)\
+    \ (count_over_time({job=\\\"opa-decisions\\\",opa_result=\\\"false\\\"} [1h]))\"\
+    ,\n          \"refId\": \"A\"\n        }\n      ],\n      \"options\": {},\n \
+    \     \"fieldConfig\": {\n        \"defaults\": {},\n        \"overrides\": []\n\
+    \      }\n    },\n    {\n      \"id\": 3,\n      \"title\": \"Recent OPA Decisions\"\
+    ,\n      \"type\": \"logs\",\n      \"gridPos\": {\n        \"x\": 0,\n      \
+    \  \"y\": 4,\n        \"w\": 24,\n        \"h\": 8\n      },\n      \"datasource\"\
+    : {\n        \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"\
+    targets\": [\n        {\n          \"datasource\": {\n            \"type\": \"\
+    loki\",\n            \"uid\": \"Loki\"\n          },\n          \"expr\": \"{job=\\\
+    \"opa-decisions\\\"}\",\n          \"refId\": \"A\"\n        }\n      ],\n   \
+    \   \"options\": {},\n      \"fieldConfig\": {\n        \"defaults\": {},\n  \
+    \      \"overrides\": []\n      }\n    }\n  ]\n}\n"
+  siem-soar.json: "{\n  \"__inputs\": [],\n  \"__requires\": [],\n  \"annotations\"\
+    : { \"list\": [] },\n  \"description\": \"SIEM SOAR — Security incidents, SOAR\
+    \ cases, Grafana alert history\",\n  \"editable\": true,\n  \"fiscalYearStartMonth\"\
+    : 0,\n  \"graphTooltip\": 1,\n  \"id\": null,\n  \"links\": [],\n  \"panels\"\
+    : [\n    {\n      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n\
+    \      \"fieldConfig\": { \"defaults\": { \"color\": { \"mode\": \"thresholds\"\
+    \ }, \"thresholds\": { \"mode\": \"absolute\", \"steps\": [{\"color\":\"green\"\
+    ,\"value\":null},{\"color\":\"yellow\",\"value\":1},{\"color\":\"red\",\"value\"\
+    :5}] } }, \"overrides\": [] },\n      \"gridPos\": { \"h\": 4, \"w\": 4, \"x\"\
+    : 0, \"y\": 0 },\n      \"id\": 1,\n      \"options\": { \"colorMode\": \"background\"\
+    , \"graphMode\": \"none\", \"justifyMode\": \"center\", \"orientation\": \"auto\"\
+    , \"reduceOptions\": { \"calcs\": [\"lastNotNull\"], \"fields\": \"\", \"values\"\
+    : false }, \"textMode\": \"auto\" },\n      \"title\": \"SOAR Cases (Total)\"\
+    ,\n      \"type\": \"stat\",\n      \"targets\": [{ \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" }, \"expr\": \"count_over_time({app=\\\"soar-engine\\\
+    \"} |= \\\"soar_case_created\\\" [24h])\", \"legendFormat\": \"Cases\", \"refId\"\
+    : \"A\" }]\n    },\n    {\n      \"datasource\": { \"type\": \"loki\", \"uid\"\
+    : \"Loki\" },\n      \"fieldConfig\": { \"defaults\": { \"color\": { \"mode\"\
+    : \"thresholds\" }, \"thresholds\": { \"mode\": \"absolute\", \"steps\": [{\"\
+    color\":\"green\",\"value\":null},{\"color\":\"red\",\"value\":1}] } }, \"overrides\"\
+    : [] },\n      \"gridPos\": { \"h\": 4, \"w\": 4, \"x\": 4, \"y\": 0 },\n    \
+    \  \"id\": 2,\n      \"options\": { \"colorMode\": \"background\", \"graphMode\"\
+    : \"none\", \"justifyMode\": \"center\", \"orientation\": \"auto\", \"reduceOptions\"\
+    : { \"calcs\": [\"lastNotNull\"], \"fields\": \"\", \"values\": false }, \"textMode\"\
+    : \"auto\" },\n      \"title\": \"Pending HITL Approvals\",\n      \"type\": \"\
+    stat\",\n      \"targets\": [{ \"datasource\": { \"type\": \"loki\", \"uid\":\
+    \ \"Loki\" }, \"expr\": \"count_over_time({app=\\\"soar-engine\\\"} |= \\\"status\\\
+    \\\\\":\\\\\\\"pending\\\\\\\"\\\" [1h])\", \"legendFormat\": \"Pending\", \"\
+    refId\": \"A\" }]\n    },\n    {\n      \"datasource\": { \"type\": \"loki\",\
+    \ \"uid\": \"Loki\" },\n      \"fieldConfig\": { \"defaults\": { \"color\": {\
+    \ \"mode\": \"thresholds\" }, \"thresholds\": { \"mode\": \"absolute\", \"steps\"\
+    : [{\"color\":\"green\",\"value\":null},{\"color\":\"yellow\",\"value\":1},{\"\
+    color\":\"red\",\"value\":3}] } }, \"overrides\": [] },\n      \"gridPos\": {\
+    \ \"h\": 4, \"w\": 4, \"x\": 8, \"y\": 0 },\n      \"id\": 3,\n      \"options\"\
+    : { \"colorMode\": \"background\", \"graphMode\": \"none\", \"justifyMode\": \"\
+    center\", \"orientation\": \"auto\", \"reduceOptions\": { \"calcs\": [\"lastNotNull\"\
+    ], \"fields\": \"\", \"values\": false }, \"textMode\": \"auto\" },\n      \"\
+    title\": \"Playbooks Executed (24h)\",\n      \"type\": \"stat\",\n      \"targets\"\
+    : [{ \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" }, \"expr\": \"count_over_time({app=\\\
+    \"soar-engine\\\"} |= \\\"playbook_executed\\\" [24h])\", \"legendFormat\": \"\
+    Playbooks\", \"refId\": \"A\" }]\n    },\n    {\n      \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" },\n      \"fieldConfig\": { \"defaults\": { \"\
+    color\": { \"mode\": \"thresholds\" }, \"thresholds\": { \"mode\": \"absolute\"\
+    , \"steps\": [{\"color\":\"green\",\"value\":null},{\"color\":\"yellow\",\"value\"\
+    :1},{\"color\":\"red\",\"value\":5}] } }, \"overrides\": [] },\n      \"gridPos\"\
+    : { \"h\": 4, \"w\": 4, \"x\": 12, \"y\": 0 },\n      \"id\": 4,\n      \"options\"\
+    : { \"colorMode\": \"background\", \"graphMode\": \"none\", \"justifyMode\": \"\
+    center\", \"orientation\": \"auto\", \"reduceOptions\": { \"calcs\": [\"lastNotNull\"\
+    ], \"fields\": \"\", \"values\": false }, \"textMode\": \"auto\" },\n      \"\
+    title\": \"IPs Blocked (24h)\",\n      \"type\": \"stat\",\n      \"targets\"\
+    : [{ \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" }, \"expr\": \"count_over_time({app=\\\
+    \"soar-engine\\\"} |= \\\"block_source_ip\\\" [24h])\", \"legendFormat\": \"Blocked\
+    \ IPs\", \"refId\": \"A\" }]\n    },\n    {\n      \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" },\n      \"fieldConfig\": { \"defaults\": {}, \"\
+    overrides\": [] },\n      \"gridPos\": { \"h\": 8, \"w\": 24, \"x\": 0, \"y\"\
+    : 4 },\n      \"id\": 5,\n      \"options\": { \"dedupStrategy\": \"none\", \"\
+    enableLogDetails\": true, \"prettifyLogMessage\": true, \"showTime\": true, \"\
+    wrapLogMessage\": false },\n      \"title\": \"SOAR Engine — Recent Cases & Playbooks\"\
+    ,\n      \"type\": \"logs\",\n      \"targets\": [{ \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" }, \"expr\": \"{app=\\\"soar-engine\\\"} | json\
+    \ | line_format \\\"[{{.event_type}}] case={{.case_id}} attack={{.attack_type}}\
+    \ playbook={{.playbook}} status={{.status}}\\\"\", \"legendFormat\": \"\", \"\
+    refId\": \"A\" }]\n    },\n    {\n      \"datasource\": { \"type\": \"loki\",\
+    \ \"uid\": \"Loki\" },\n      \"fieldConfig\": { \"defaults\": { \"color\": {\
+    \ \"mode\": \"palette-classic\" } }, \"overrides\": [] },\n      \"gridPos\":\
+    \ { \"h\": 8, \"w\": 12, \"x\": 0, \"y\": 12 },\n      \"id\": 6,\n      \"options\"\
+    : { \"legend\": { \"calcs\": [], \"displayMode\": \"list\", \"placement\": \"\
+    bottom\" }, \"tooltip\": { \"mode\": \"single\" } },\n      \"title\": \"Security\
+    \ Alerts — Grafana Firing Rate\",\n      \"type\": \"timeseries\",\n      \"targets\"\
+    : [\n        { \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" }, \"expr\"\
+    : \"sum(count_over_time({app=\\\"soar-engine\\\"} |= \\\"grafana_webhook\\\" [5m]))\"\
+    , \"legendFormat\": \"Grafana Alerts → SOAR\", \"refId\": \"A\" },\n        {\
+    \ \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" }, \"expr\": \"sum(count_over_time({app=\\\
+    \"api-gateway\\\"} | json | event=\\\"auth_failed\\\" [5m]))\", \"legendFormat\"\
+    : \"Auth Failures\", \"refId\": \"B\" },\n        { \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" }, \"expr\": \"sum(count_over_time({app=\\\"opa\\\
+    \"} | json | result=\\\"deny\\\" [5m]))\", \"legendFormat\": \"OPA Denies\", \"\
+    refId\": \"C\" }\n      ]\n    },\n    {\n      \"datasource\": { \"type\": \"\
+    loki\", \"uid\": \"Loki\" },\n      \"fieldConfig\": { \"defaults\": {}, \"overrides\"\
+    : [] },\n      \"gridPos\": { \"h\": 8, \"w\": 12, \"x\": 12, \"y\": 12 },\n \
+    \     \"id\": 7,\n      \"options\": { \"dedupStrategy\": \"none\", \"enableLogDetails\"\
+    : true, \"prettifyLogMessage\": true, \"showTime\": true, \"wrapLogMessage\":\
+    \ false },\n      \"title\": \"Security Events Stream (OPA Denies + Auth Failures)\"\
+    ,\n      \"type\": \"logs\",\n      \"targets\": [{ \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" }, \"expr\": \"{app=~\\\"api-gateway|opa\\\"} |\
+    \ json | result=\\\"deny\\\" or event=\\\"auth_failed\\\"\", \"legendFormat\"\
+    : \"\", \"refId\": \"A\" }]\n    }\n  ],\n  \"schemaVersion\": 38,\n  \"tags\"\
+    : [\"security\", \"soar\", \"siem\"],\n  \"time\": { \"from\": \"now-6h\", \"\
+    to\": \"now\" },\n  \"timepicker\": {},\n  \"timezone\": \"browser\",\n  \"title\"\
+    : \"SIEM SOAR — Security Incidents & Response\",\n  \"uid\": \"siem-soar-ztlab\"\
+    ,\n  \"version\": 1\n}\n"
+  zta-security-overview.json: "{\n  \"uid\": \"ztlab-security-overview\",\n  \"title\"\
+    : \"ZTLab Security Overview\",\n  \"schemaVersion\": 39,\n  \"version\": 2,\n\
+    \  \"refresh\": \"30s\",\n  \"tags\": [\n    \"ztlab\",\n    \"security\"\n  ],\n\
+    \  \"time\": {\n    \"from\": \"now-6h\",\n    \"to\": \"now\"\n  },\n  \"panels\"\
+    : [\n    {\n      \"id\": 1,\n      \"title\": \"OPA Denials / 24h\",\n      \"\
+    type\": \"stat\",\n      \"gridPos\": {\n        \"x\": 0,\n        \"y\": 0,\n\
+    \        \"w\": 6,\n        \"h\": 4\n      },\n      \"datasource\": {\n    \
+    \    \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"targets\"\
+    : [\n        {\n          \"datasource\": {\n            \"type\": \"loki\",\n\
+    \            \"uid\": \"Loki\"\n          },\n          \"expr\": \"sum(count_over_time({job=\\\
+    \"opa-decisions\\\",opa_result=\\\"false\\\"} [24h]))\",\n          \"refId\"\
+    : \"A\"\n        }\n      ],\n      \"options\": {},\n      \"fieldConfig\": {\n\
+    \        \"defaults\": {},\n        \"overrides\": []\n      }\n    },\n    {\n\
+    \      \"id\": 2,\n      \"title\": \"JWT Failures / min\",\n      \"type\": \"\
+    timeseries\",\n      \"gridPos\": {\n        \"x\": 6,\n        \"y\": 0,\n  \
+    \      \"w\": 9,\n        \"h\": 4\n      },\n      \"datasource\": {\n      \
+    \  \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"targets\"\
+    : [\n        {\n          \"datasource\": {\n            \"type\": \"loki\",\n\
+    \            \"uid\": \"Loki\"\n          },\n          \"expr\": \"sum(rate({job=\\\
+    \"envoy-access\\\"} | json | response_code=\\\"401\\\" [1m]))\",\n          \"\
+    refId\": \"A\"\n        }\n      ],\n      \"options\": {},\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {},\n        \"overrides\": []\n      }\n    },\n \
+    \   {\n      \"id\": 3,\n      \"title\": \"Large OpenStack Responses\",\n   \
+    \   \"type\": \"logs\",\n      \"gridPos\": {\n        \"x\": 15,\n        \"\
+    y\": 0,\n        \"w\": 9,\n        \"h\": 8\n      },\n      \"datasource\":\
+    \ {\n        \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"\
+    targets\": [\n        {\n          \"datasource\": {\n            \"type\": \"\
+    loki\",\n            \"uid\": \"Loki\"\n          },\n          \"expr\": \"{job=\\\
+    \"envoy-access\\\", cloud=\\\"openstack\\\"} | json | bytes_sent > 1048576\",\n\
+    \          \"refId\": \"A\"\n        }\n      ],\n      \"options\": {},\n   \
+    \   \"fieldConfig\": {\n        \"defaults\": {},\n        \"overrides\": []\n\
+    \      }\n    },\n    {\n      \"id\": 4,\n      \"title\": \"Fraud Gate Bypass\
+    \ Events\",\n      \"type\": \"logs\",\n      \"gridPos\": {\n        \"x\": 0,\n\
+    \        \"y\": 4,\n        \"w\": 12,\n        \"h\": 6\n      },\n      \"datasource\"\
+    : {\n        \"type\": \"loki\",\n        \"uid\": \"Loki\"\n      },\n      \"\
+    targets\": [\n        {\n          \"datasource\": {\n            \"type\": \"\
+    loki\",\n            \"uid\": \"Loki\"\n          },\n          \"expr\": \"{job=\\\
+    \"opa-decisions\\\",opa_result=\\\"false\\\",request_path=\\\"/transactions/execute\\\
+    \"}\",\n          \"refId\": \"A\"\n        }\n      ],\n      \"options\": {},\n\
+    \      \"fieldConfig\": {\n        \"defaults\": {},\n        \"overrides\": []\n\
+    \      }\n    },\n    {\n      \"id\": 5,\n      \"title\": \"Top Denied SVID\
+    \ / Path\",\n      \"type\": \"table\",\n      \"gridPos\": {\n        \"x\":\
+    \ 12,\n        \"y\": 8,\n        \"w\": 12,\n        \"h\": 6\n      },\n   \
+    \   \"datasource\": {\n        \"type\": \"loki\",\n        \"uid\": \"Loki\"\n\
+    \      },\n      \"targets\": [\n        {\n          \"datasource\": {\n    \
+    \        \"type\": \"loki\",\n            \"uid\": \"Loki\"\n          },\n  \
+    \        \"expr\": \"topk(10, sum by (request_path, method) (count_over_time({job=\\\
+    \"opa-decisions\\\",opa_result=\\\"false\\\"} [1h])))\",\n          \"refId\"\
+    : \"A\"\n        }\n      ],\n      \"options\": {},\n      \"fieldConfig\": {\n\
+    \        \"defaults\": {},\n        \"overrides\": []\n      }\n    }\n  ]\n}\n"
+  ztlab-full-logs.json: "{\n  \"__inputs\": [],\n  \"__requires\": [],\n  \"annotations\"\
+    : { \"list\": [] },\n  \"description\": \"ZTLab — Full System Logs từ tất cả namespaces\
+    \ qua Loki\",\n  \"editable\": true,\n  \"fiscalYearStartMonth\": 0,\n  \"graphTooltip\"\
+    : 1,\n  \"id\": null,\n  \"links\": [],\n  \"panels\": [\n\n    {\n      \"collapsed\"\
+    : false,\n      \"gridPos\": { \"h\": 1, \"w\": 24, \"x\": 0, \"y\": 0 },\n  \
+    \    \"id\": 200,\n      \"title\": \"\U0001F50D Full System Logs — All Namespaces\"\
+    ,\n      \"type\": \"row\"\n    },\n\n    {\n      \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" },\n      \"description\": \"Toàn bộ logs từ namespace\
+    \ financial (api-gateway, payment, fraud, core-banking...)\",\n      \"gridPos\"\
+    : { \"h\": 12, \"w\": 24, \"x\": 0, \"y\": 1 },\n      \"id\": 201,\n      \"\
+    options\": {\n        \"dedupStrategy\": \"none\",\n        \"enableLogDetails\"\
+    : true,\n        \"prettifyLogMessage\": false,\n        \"showCommonLabels\"\
+    : false,\n        \"showLabels\": true,\n        \"showTime\": true,\n       \
+    \ \"sortOrder\": \"Descending\",\n        \"wrapLogMessage\": false\n      },\n\
+    \      \"title\": \"\U0001F4B0 Financial Namespace Logs\",\n      \"type\": \"\
+    logs\",\n      \"targets\": [\n        {\n          \"datasource\": { \"type\"\
+    : \"loki\", \"uid\": \"Loki\" },\n          \"expr\": \"{namespace=\\\"financial\\\
+    \"}\",\n          \"legendFormat\": \"\",\n          \"refId\": \"A\"\n      \
+    \  }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\": \"loki\", \"\
+    uid\": \"Loki\" },\n      \"description\": \"Logs từ Grafana, Loki, Prometheus,\
+    \ SOAR Engine, AI Analyzer\",\n      \"gridPos\": { \"h\": 10, \"w\": 12, \"x\"\
+    : 0, \"y\": 13 },\n      \"id\": 202,\n      \"options\": {\n        \"dedupStrategy\"\
+    : \"none\",\n        \"enableLogDetails\": true,\n        \"prettifyLogMessage\"\
+    : false,\n        \"showCommonLabels\": false,\n        \"showLabels\": true,\n\
+    \        \"showTime\": true,\n        \"sortOrder\": \"Descending\",\n       \
+    \ \"wrapLogMessage\": false\n      },\n      \"title\": \"\U0001F4CA PLG Stack\
+    \ Logs (Grafana, Loki, SOAR, AI)\",\n      \"type\": \"logs\",\n      \"targets\"\
+    : [\n        {\n          \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\"\
+    \ },\n          \"expr\": \"{namespace=\\\"plg-stack\\\"}\",\n          \"legendFormat\"\
+    : \"\",\n          \"refId\": \"A\"\n        }\n      ]\n    },\n\n    {\n   \
+    \   \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"description\"\
+    : \"Logs từ Keycloak (identity namespace)\",\n      \"gridPos\": { \"h\": 10,\
+    \ \"w\": 12, \"x\": 12, \"y\": 13 },\n      \"id\": 203,\n      \"options\": {\n\
+    \        \"dedupStrategy\": \"none\",\n        \"enableLogDetails\": true,\n \
+    \       \"prettifyLogMessage\": false,\n        \"showCommonLabels\": false,\n\
+    \        \"showLabels\": true,\n        \"showTime\": true,\n        \"sortOrder\"\
+    : \"Descending\",\n        \"wrapLogMessage\": false\n      },\n      \"title\"\
+    : \"\U0001F511 Identity Logs (Keycloak)\",\n      \"type\": \"logs\",\n      \"\
+    targets\": [\n        {\n          \"datasource\": { \"type\": \"loki\", \"uid\"\
+    : \"Loki\" },\n          \"expr\": \"{namespace=\\\"identity\\\"}\",\n       \
+    \   \"legendFormat\": \"\",\n          \"refId\": \"A\"\n        }\n      ]\n\
+    \    },\n\n    {\n      \"collapsed\": false,\n      \"gridPos\": { \"h\": 1,\
+    \ \"w\": 24, \"x\": 0, \"y\": 23 },\n      \"id\": 210,\n      \"title\": \"⚠️\
+    \ Security Events & Anomalies\",\n      \"type\": \"row\"\n    },\n\n    {\n \
+    \     \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"description\"\
+    : \"Log các sự kiện bất thường: fraud, blocked, denied, error\",\n      \"gridPos\"\
+    : { \"h\": 12, \"w\": 24, \"x\": 0, \"y\": 24 },\n      \"id\": 211,\n      \"\
+    options\": {\n        \"dedupStrategy\": \"signature\",\n        \"enableLogDetails\"\
+    : true,\n        \"prettifyLogMessage\": false,\n        \"showCommonLabels\"\
+    : false,\n        \"showLabels\": true,\n        \"showTime\": true,\n       \
+    \ \"sortOrder\": \"Descending\",\n        \"wrapLogMessage\": true\n      },\n\
+    \      \"title\": \"\U0001F6A8 Security Anomaly Logs (fraud | blocked | denied\
+    \ | attack | error)\",\n      \"type\": \"logs\",\n      \"targets\": [\n    \
+    \    {\n          \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n\
+    \          \"expr\": \"{namespace=~\\\"financial|plg-stack|identity\\\"} |~ \\\
+    \"(?i)(fraud|blocked|denied|attack|anomaly|error|401|403|malicious|bypass|injection|xmrig|brute.force|lateral|port.scan|credential.stuffing|soar_action)\\\
+    \"\",\n          \"legendFormat\": \"\",\n          \"refId\": \"A\"\n       \
+    \ }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\": \"loki\", \"\
+    uid\": \"Loki\" },\n      \"description\": \"SOAR engine action logs\",\n    \
+    \  \"gridPos\": { \"h\": 10, \"w\": 12, \"x\": 0, \"y\": 36 },\n      \"id\":\
+    \ 212,\n      \"options\": {\n        \"dedupStrategy\": \"none\",\n        \"\
+    enableLogDetails\": true,\n        \"prettifyLogMessage\": true,\n        \"showCommonLabels\"\
+    : false,\n        \"showLabels\": true,\n        \"showTime\": true,\n       \
+    \ \"sortOrder\": \"Descending\",\n        \"wrapLogMessage\": true\n      },\n\
+    \      \"title\": \"\U0001F916 SOAR Actions Log\",\n      \"type\": \"logs\",\n\
+    \      \"targets\": [\n        {\n          \"datasource\": { \"type\": \"loki\"\
+    , \"uid\": \"Loki\" },\n          \"expr\": \"{app=\\\"soar-engine\\\"} |~ \\\"\
+    soar_action\\\"\",\n          \"legendFormat\": \"\",\n          \"refId\": \"\
+    A\"\n        }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\": \"\
+    loki\", \"uid\": \"Loki\" },\n      \"description\": \"Notification service logs\
+    \ — email sent/failed\",\n      \"gridPos\": { \"h\": 10, \"w\": 12, \"x\": 12,\
+    \ \"y\": 36 },\n      \"id\": 213,\n      \"options\": {\n        \"dedupStrategy\"\
+    : \"none\",\n        \"enableLogDetails\": true,\n        \"prettifyLogMessage\"\
+    : true,\n        \"showCommonLabels\": false,\n        \"showLabels\": true,\n\
+    \        \"showTime\": true,\n        \"sortOrder\": \"Descending\",\n       \
+    \ \"wrapLogMessage\": true\n      },\n      \"title\": \"\U0001F4E7 Email Notification\
+    \ Logs\",\n      \"type\": \"logs\",\n      \"targets\": [\n        {\n      \
+    \    \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n          \"\
+    expr\": \"{app=\\\"notification-service\\\"} |~ \\\"(?i)(email|notification|smtp|queued|sent|failed)\\\
+    \"\",\n          \"legendFormat\": \"\",\n          \"refId\": \"A\"\n       \
+    \ }\n      ]\n    },\n\n    {\n      \"collapsed\": false,\n      \"gridPos\"\
+    : { \"h\": 1, \"w\": 24, \"x\": 0, \"y\": 46 },\n      \"id\": 220,\n      \"\
+    title\": \"\U0001F4C8 Log Volume Stats\",\n      \"type\": \"row\"\n    },\n\n\
+    \    {\n      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n   \
+    \   \"description\": \"Số lượng log entries theo namespace theo thời gian\",\n\
+    \      \"fieldConfig\": {\n        \"defaults\": {\n          \"color\": { \"\
+    mode\": \"palette-classic\" },\n          \"custom\": {\n            \"lineWidth\"\
+    : 2,\n            \"fillOpacity\": 10\n          }\n        }\n      },\n    \
+    \  \"gridPos\": { \"h\": 8, \"w\": 12, \"x\": 0, \"y\": 47 },\n      \"id\": 221,\n\
+    \      \"options\": {\n        \"legend\": { \"calcs\": [], \"displayMode\": \"\
+    list\", \"placement\": \"bottom\" },\n        \"tooltip\": { \"mode\": \"multi\"\
+    \ }\n      },\n      \"title\": \"Log Volume by Namespace\",\n      \"type\":\
+    \ \"timeseries\",\n      \"targets\": [\n        {\n          \"datasource\":\
+    \ { \"type\": \"loki\", \"uid\": \"Loki\" },\n          \"expr\": \"sum by (namespace)\
+    \ (rate({namespace=~\\\"financial|plg-stack|identity|monitoring\\\"}[5m]))\",\n\
+    \          \"legendFormat\": \"{{namespace}}\",\n          \"refId\": \"A\"\n\
+    \        }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\": \"loki\"\
+    , \"uid\": \"Loki\" },\n      \"description\": \"Số lượng error/warn logs theo\
+    \ service\",\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"\
+    color\": { \"mode\": \"palette-classic\" },\n          \"custom\": {\n       \
+    \     \"lineWidth\": 2,\n            \"fillOpacity\": 10\n          }\n      \
+    \  }\n      },\n      \"gridPos\": { \"h\": 8, \"w\": 12, \"x\": 12, \"y\": 47\
+    \ },\n      \"id\": 222,\n      \"options\": {\n        \"legend\": { \"calcs\"\
+    : [], \"displayMode\": \"list\", \"placement\": \"bottom\" },\n        \"tooltip\"\
+    : { \"mode\": \"multi\" }\n      },\n      \"title\": \"Error/Warning Rate by\
+    \ Service\",\n      \"type\": \"timeseries\",\n      \"targets\": [\n        {\n\
+    \          \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \
+    \    \"expr\": \"sum by (app) (rate({namespace=~\\\"financial|plg-stack\\\"} |~\
+    \ \\\"(?i)(error|warn|denied|fraud|blocked)\\\" [5m]))\",\n          \"legendFormat\"\
+    : \"{{app}}\",\n          \"refId\": \"A\"\n        }\n      ]\n    }\n\n  ],\n\
+    \  \"refresh\": \"30s\",\n  \"schemaVersion\": 38,\n  \"tags\": [\"ztlab\", \"\
+    logs\", \"loki\"],\n  \"templating\": { \"list\": [] },\n  \"time\": { \"from\"\
+    : \"now-1h\", \"to\": \"now\" },\n  \"timepicker\": {},\n  \"timezone\": \"browser\"\
+    ,\n  \"title\": \"ZTLab Full Logs\",\n  \"uid\": \"ztlab-full-logs\",\n  \"version\"\
+    : 1\n}\n"
+  ztlab-security-overview.json: "{\n  \"__inputs\": [],\n  \"__requires\": [],\n \
+    \ \"annotations\": { \"list\": [] },\n  \"description\": \"ZTLab Zero Trust Security\
+    \ Overview — Anomaly Score, Logs, Fraud, Multi-Cloud\",\n  \"editable\": true,\n\
+    \  \"fiscalYearStartMonth\": 0,\n  \"graphTooltip\": 1,\n  \"id\": null,\n  \"\
+    links\": [],\n  \"panels\": [\n\n    {\n      \"collapsed\": false,\n      \"\
+    gridPos\": { \"h\": 1, \"w\": 24, \"x\": 0, \"y\": 0 },\n      \"id\": 100,\n\
+    \      \"title\": \"\U0001F510 Anomaly Score (Redis 15 phút)\",\n      \"type\"\
+    : \"row\"\n    },\n\n    {\n      \"datasource\": { \"type\": \"prometheus\",\
+    \ \"uid\": \"Prometheus\" },\n      \"description\": \"Điểm bất thường tổng hợp\
+    \ từ Redis 15-minute window scorer\",\n      \"fieldConfig\": {\n        \"defaults\"\
+    : {\n          \"color\": { \"mode\": \"thresholds\" },\n          \"thresholds\"\
+    : {\n            \"mode\": \"absolute\",\n            \"steps\": [\n         \
+    \     { \"color\": \"green\", \"value\": null },\n              { \"color\": \"\
+    yellow\", \"value\": 40 },\n              { \"color\": \"red\", \"value\": 70\
+    \ }\n            ]\n          },\n          \"mappings\": [],\n          \"unit\"\
+    : \"none\",\n          \"min\": 0, \"max\": 100\n        }\n      },\n      \"\
+    gridPos\": { \"h\": 6, \"w\": 4, \"x\": 0, \"y\": 1 },\n      \"id\": 1,\n   \
+    \   \"options\": {\n        \"reduceOptions\": { \"calcs\": [\"lastNotNull\"]\
+    \ },\n        \"orientation\": \"auto\",\n        \"showThresholdLabels\": false,\n\
+    \        \"showThresholdMarkers\": true\n      },\n      \"title\": \"Anomaly\
+    \ Score\",\n      \"type\": \"gauge\",\n      \"targets\": [\n        {\n    \
+    \      \"datasource\": { \"type\": \"prometheus\", \"uid\": \"Prometheus\" },\n\
+    \          \"expr\": \"ztlab_anomaly_score\",\n          \"legendFormat\": \"\
+    Score\"\n        }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\"\
+    : \"prometheus\", \"uid\": \"Prometheus\" },\n      \"fieldConfig\": {\n     \
+    \   \"defaults\": {\n          \"color\": { \"mode\": \"palette-classic\" },\n\
+    \          \"custom\": { \"lineWidth\": 2, \"fillOpacity\": 10 }\n        }\n\
+    \      },\n      \"gridPos\": { \"h\": 6, \"w\": 10, \"x\": 4, \"y\": 1 },\n \
+    \     \"id\": 2,\n      \"options\": {\n        \"legend\": { \"displayMode\"\
+    : \"list\", \"placement\": \"bottom\" },\n        \"tooltip\": { \"mode\": \"\
+    multi\" }\n      },\n      \"title\": \"Anomaly Score (15 phút)\",\n      \"type\"\
+    : \"timeseries\",\n      \"targets\": [\n        {\n          \"datasource\":\
+    \ { \"type\": \"prometheus\", \"uid\": \"Prometheus\" },\n          \"expr\":\
+    \ \"ztlab_anomaly_score\",\n          \"legendFormat\": \"Score tổng\"\n     \
+    \   }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\": \"prometheus\"\
+    , \"uid\": \"Prometheus\" },\n      \"fieldConfig\": {\n        \"defaults\":\
+    \ {\n          \"color\": { \"mode\": \"palette-classic\" },\n          \"custom\"\
+    : { \"displayMode\": \"list\", \"lineWidth\": 1 },\n          \"unit\": \"short\"\
+    \n        }\n      },\n      \"gridPos\": { \"h\": 6, \"w\": 10, \"x\": 14, \"\
+    y\": 1 },\n      \"id\": 3,\n      \"options\": {\n        \"reduceOptions\":\
+    \ { \"calcs\": [\"sum\"] },\n        \"orientation\": \"horizontal\",\n      \
+    \  \"displayMode\": \"gradient\"\n      },\n      \"title\": \"Security Events\
+    \ theo Pattern\",\n      \"type\": \"bargauge\",\n      \"targets\": [\n     \
+    \   {\n          \"datasource\": { \"type\": \"prometheus\", \"uid\": \"Prometheus\"\
+    \ },\n          \"expr\": \"increase(ztlab_anomaly_patterns_total[15m])\",\n \
+    \         \"legendFormat\": \"{{pattern}}\"\n        }\n      ]\n    },\n\n  \
+    \  {\n      \"collapsed\": false,\n      \"gridPos\": { \"h\": 1, \"w\": 24, \"\
+    x\": 0, \"y\": 7 },\n      \"id\": 101,\n      \"title\": \"\U0001F4CA Logs &\
+    \ Events\",\n      \"type\": \"row\"\n    },\n\n    {\n      \"datasource\": {\
+    \ \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"gridPos\": { \"h\": 8, \"\
+    w\": 12, \"x\": 0, \"y\": 8 },\n      \"id\": 10,\n      \"options\": {\n    \
+    \    \"dedupStrategy\": \"none\",\n        \"enableLogDetails\": true,\n     \
+    \   \"prettifyLogMessage\": false,\n        \"showLabels\": true,\n        \"\
+    showTime\": true,\n        \"sortOrder\": \"Descending\",\n        \"wrapLogMessage\"\
+    : false\n      },\n      \"title\": \"Security Logs — Tất cả Services (AWS + OpenStack)\"\
+    ,\n      \"type\": \"logs\",\n      \"targets\": [\n        {\n          \"datasource\"\
+    : { \"type\": \"loki\", \"uid\": \"Loki\" },\n          \"expr\": \"{namespace=\\\
+    \"financial\\\"} |~ \\\"(?i)(403|401|denied|fraud|block|error|attack|anomaly|lateral|scan|bypass)\\\
+    \"\",\n          \"legendFormat\": \"\",\n          \"refId\": \"A\"\n       \
+    \ }\n      ]\n    },\n\n    {\n      \"datasource\": { \"type\": \"loki\", \"\
+    uid\": \"Loki\" },\n      \"gridPos\": { \"h\": 8, \"w\": 12, \"x\": 12, \"y\"\
+    : 8 },\n      \"id\": 11,\n      \"options\": {\n        \"dedupStrategy\": \"\
+    none\",\n        \"enableLogDetails\": true,\n        \"showTime\": true,\n  \
+    \      \"sortOrder\": \"Descending\"\n      },\n      \"title\": \"OPA Decisions\
+    \ — Deny Events\",\n      \"type\": \"logs\",\n      \"targets\": [\n        {\n\
+    \          \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \
+    \    \"expr\": \"{job=~\\\"opa-decisions|envoy-access\\\"} |~ \\\"(?i)(deny|denied|forbidden|403)\\\
+    \"\",\n          \"refId\": \"A\"\n        }\n      ]\n    },\n\n    {\n     \
+    \ \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"color\": { \"mode\": \"palette-classic\"\
+    \ },\n          \"custom\": { \"lineWidth\": 2, \"fillOpacity\": 8 }\n       \
+    \ }\n      },\n      \"gridPos\": { \"h\": 6, \"w\": 12, \"x\": 0, \"y\": 16 },\n\
+    \      \"id\": 12,\n      \"title\": \"Log Volume theo Service\",\n      \"type\"\
+    : \"timeseries\",\n      \"targets\": [\n        {\n          \"datasource\":\
+    \ { \"type\": \"loki\", \"uid\": \"Loki\" },\n          \"expr\": \"sum by(app)\
+    \ (count_over_time({namespace=\\\"financial\\\"}[5m]))\",\n          \"legendFormat\"\
+    : \"{{app}}\",\n          \"refId\": \"A\"\n        }\n      ]\n    },\n\n   \
+    \ {\n      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"\
+    fieldConfig\": {\n        \"defaults\": {\n          \"color\": { \"mode\": \"\
+    palette-classic\" },\n          \"custom\": { \"lineWidth\": 2, \"fillOpacity\"\
+    : 8 }\n        }\n      },\n      \"gridPos\": { \"h\": 6, \"w\": 12, \"x\": 12,\
+    \ \"y\": 16 },\n      \"id\": 13,\n      \"title\": \"Log Volume theo Cloud (AWS\
+    \ vs OpenStack)\",\n      \"type\": \"timeseries\",\n      \"targets\": [\n  \
+    \      {\n          \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n\
+    \          \"expr\": \"sum by(cloud) (count_over_time({namespace=\\\"financial\\\
+    \"}[5m]))\",\n          \"legendFormat\": \"☁ {{cloud}}\",\n          \"refId\"\
+    : \"A\"\n        }\n      ]\n    },\n\n    {\n      \"collapsed\": false,\n  \
+    \    \"gridPos\": { \"h\": 1, \"w\": 24, \"x\": 0, \"y\": 22 },\n      \"id\"\
+    : 102,\n      \"title\": \"\U0001F4B3 Fraud Detection & Transactions\",\n    \
+    \  \"type\": \"row\"\n    },\n\n    {\n      \"datasource\": { \"type\": \"prometheus\"\
+    , \"uid\": \"Prometheus\" },\n      \"fieldConfig\": {\n        \"defaults\":\
+    \ {\n          \"color\": { \"mode\": \"palette-classic\" },\n          \"custom\"\
+    : { \"lineWidth\": 2, \"fillOpacity\": 10 }\n        }\n      },\n      \"gridPos\"\
+    : { \"h\": 7, \"w\": 8, \"x\": 0, \"y\": 23 },\n      \"id\": 20,\n      \"title\"\
+    : \"Fraud Score Distribution\",\n      \"type\": \"timeseries\",\n      \"targets\"\
+    : [\n        {\n          \"datasource\": { \"type\": \"prometheus\", \"uid\"\
+    : \"Prometheus\" },\n          \"expr\": \"rate(ztlab_fraud_score_sum[5m]) / rate(ztlab_fraud_score_count[5m])\"\
+    ,\n          \"legendFormat\": \"Score trung bình\"\n        }\n      ]\n    },\n\
+    \n    {\n      \"datasource\": { \"type\": \"prometheus\", \"uid\": \"Prometheus\"\
+    \ },\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"color\":\
+    \ { \"mode\": \"thresholds\" },\n          \"thresholds\": {\n            \"mode\"\
+    : \"absolute\",\n            \"steps\": [\n              { \"color\": \"green\"\
+    , \"value\": null },\n              { \"color\": \"yellow\", \"value\": 1 },\n\
+    \              { \"color\": \"red\", \"value\": 5 }\n            ]\n         \
+    \ },\n          \"unit\": \"short\"\n        }\n      },\n      \"gridPos\": {\
+    \ \"h\": 7, \"w\": 8, \"x\": 8, \"y\": 23 },\n      \"id\": 21,\n      \"options\"\
+    : { \"reduceOptions\": { \"calcs\": [\"sum\"] }, \"orientation\": \"horizontal\"\
+    , \"displayMode\": \"lcd\" },\n      \"title\": \"Fraud Verdicts (15 phút)\",\n\
+    \      \"type\": \"bargauge\",\n      \"targets\": [\n        {\n          \"\
+    datasource\": { \"type\": \"prometheus\", \"uid\": \"Prometheus\" },\n       \
+    \   \"expr\": \"increase(ztlab_fraud_score_count{verdict!=\\\"\\\"}[15m])\",\n\
+    \          \"legendFormat\": \"{{verdict}}\"\n        }\n      ]\n    },\n\n \
+    \   {\n      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n    \
+    \  \"gridPos\": { \"h\": 7, \"w\": 8, \"x\": 16, \"y\": 23 },\n      \"id\": 22,\n\
+    \      \"options\": {\n        \"dedupStrategy\": \"none\",\n        \"enableLogDetails\"\
+    : true,\n        \"showTime\": true,\n        \"sortOrder\": \"Descending\"\n\
+    \      },\n      \"title\": \"Fraud Events Log\",\n      \"type\": \"logs\",\n\
+    \      \"targets\": [\n        {\n          \"datasource\": { \"type\": \"loki\"\
+    , \"uid\": \"Loki\" },\n          \"expr\": \"{app=\\\"fraud-detection\\\"} |=\
+    \ \\\"fraud_score_computed\\\"\",\n          \"refId\": \"A\"\n        }\n   \
+    \   ]\n    },\n\n    {\n      \"collapsed\": false,\n      \"gridPos\": { \"h\"\
+    : 1, \"w\": 24, \"x\": 0, \"y\": 30 },\n      \"id\": 103,\n      \"title\": \"\
+    \U0001F6E1 Zero Trust Controls\",\n      \"type\": \"row\"\n    },\n\n    {\n\
+    \      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"fieldConfig\"\
+    : {\n        \"defaults\": {\n          \"color\": { \"mode\": \"palette-classic\"\
+    \ },\n          \"custom\": { \"lineWidth\": 2, \"fillOpacity\": 8 }\n       \
+    \ }\n      },\n      \"gridPos\": { \"h\": 7, \"w\": 12, \"x\": 0, \"y\": 31 },\n\
+    \      \"id\": 30,\n      \"title\": \"OPA Decisions: Allow vs Deny\",\n     \
+    \ \"type\": \"timeseries\",\n      \"targets\": [\n        {\n          \"datasource\"\
+    : { \"type\": \"loki\", \"uid\": \"Loki\" },\n          \"expr\": \"sum by(decision)\
+    \ (count_over_time({job=\\\"opa-decisions\\\"}[5m]))\",\n          \"legendFormat\"\
+    : \"OPA: {{decision}}\",\n          \"refId\": \"A\"\n        }\n      ]\n   \
+    \ },\n\n    {\n      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n\
+    \      \"fieldConfig\": {\n        \"defaults\": {\n          \"color\": { \"\
+    mode\": \"palette-classic\" },\n          \"custom\": { \"lineWidth\": 2, \"fillOpacity\"\
+    : 8 }\n        }\n      },\n      \"gridPos\": { \"h\": 7, \"w\": 12, \"x\": 12,\
+    \ \"y\": 31 },\n      \"id\": 31,\n      \"title\": \"Envoy Access: HTTP Status\
+    \ Codes\",\n      \"type\": \"timeseries\",\n      \"targets\": [\n        {\n\
+    \          \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \
+    \    \"expr\": \"sum by(response_code) (count_over_time({job=\\\"envoy-access\\\
+    \"}[5m]))\",\n          \"legendFormat\": \"HTTP {{response_code}}\",\n      \
+    \    \"refId\": \"A\"\n        }\n      ]\n    },\n\n    {\n      \"collapsed\"\
+    : false,\n      \"gridPos\": { \"h\": 1, \"w\": 24, \"x\": 0, \"y\": 38 },\n \
+    \     \"id\": 104,\n      \"title\": \"☁ Multi-Cloud Status\",\n      \"type\"\
+    : \"row\"\n    },\n\n    {\n      \"datasource\": { \"type\": \"loki\", \"uid\"\
+    : \"Loki\" },\n      \"fieldConfig\": {\n        \"defaults\": {\n          \"\
+    color\": { \"mode\": \"palette-classic\" },\n          \"custom\": { \"lineWidth\"\
+    : 2, \"fillOpacity\": 6 }\n        }\n      },\n      \"gridPos\": { \"h\": 7,\
+    \ \"w\": 24, \"x\": 0, \"y\": 39 },\n      \"id\": 40,\n      \"title\": \"Service\
+    \ Activity: AWS vs OpenStack (theo cloud label)\",\n      \"type\": \"timeseries\"\
+    ,\n      \"targets\": [\n        {\n          \"datasource\": { \"type\": \"loki\"\
+    , \"uid\": \"Loki\" },\n          \"expr\": \"sum by(cloud, app) (count_over_time({namespace=\\\
+    \"financial\\\", cloud=~\\\".+\\\"}[5m]))\",\n          \"legendFormat\": \"{{cloud}}\
+    \ / {{app}}\",\n          \"refId\": \"A\"\n        }\n      ]\n    },\n\n   \
+    \ {\n      \"datasource\": { \"type\": \"loki\", \"uid\": \"Loki\" },\n      \"\
+    gridPos\": { \"h\": 8, \"w\": 24, \"x\": 0, \"y\": 46 },\n      \"id\": 41,\n\
+    \      \"options\": {\n        \"dedupStrategy\": \"none\",\n        \"enableLogDetails\"\
+    : true,\n        \"showLabels\": true,\n        \"showTime\": true,\n        \"\
+    sortOrder\": \"Descending\"\n      },\n      \"title\": \"SOAR Engine Events\"\
+    ,\n      \"type\": \"logs\",\n      \"targets\": [\n        {\n          \"datasource\"\
+    : { \"type\": \"loki\", \"uid\": \"Loki\" },\n          \"expr\": \"{app=\\\"\
+    soar-engine\\\"}\",\n          \"refId\": \"A\"\n        }\n      ]\n    }\n\n\
+    \  ],\n  \"refresh\": \"30s\",\n  \"schemaVersion\": 38,\n  \"tags\": [\"ztlab\"\
+    , \"zero-trust\", \"security\", \"banking\"],\n  \"templating\": { \"list\": []\
+    \ },\n  \"time\": { \"from\": \"now-1h\", \"to\": \"now\" },\n  \"timepicker\"\
+    : {},\n  \"timezone\": \"Asia/Ho_Chi_Minh\",\n  \"title\": \"ZTLab — Zero Trust\
+    \ Security Overview\",\n  \"uid\": \"ztlab-security-v2\",\n  \"version\": 2\n\
+    }\n"
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: plg-stack
+
