@@ -366,7 +366,9 @@ EOF
 sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/null || warn "socat relay setup skipped (SSH unavailable)"
 
   kos apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
-  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://10.10.1.11:31100/loki/api/v1/push CLOUD_PROVIDER=openstack
+  # 10.10.10.1:13099 = deployer machine br-exnat interface (reachable from OpenStack via os-gateway default route)
+  # socat on deployer bridges this port to localhost:13100 → kubectl port-forward → Loki
+  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://10.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"
