@@ -202,12 +202,15 @@ spec:
       ports:
         - port: 6443
           protocol: TCP
-    # Prometheus scrape OpenStack services via WireGuard (os-k3s-master 192.168.101.11)
+    # Prometheus scrape OpenStack services + SOAR cross-cloud K8s API
     # 30084=core-banking HTTP, 30086=account-service HTTP, 30087=transaction-service HTTP
+    # 6443=OpenStack K3s API server (SOAR restrict_egress playbook scales OpenStack workloads)
     - to:
         - ipBlock:
             cidr: 192.168.101.11/32
       ports:
+        - port: 6443
+          protocol: TCP
         - port: 30084
           protocol: TCP
         - port: 30086
