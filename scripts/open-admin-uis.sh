@@ -13,6 +13,7 @@
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
 #   SOAR Engine  → http://localhost:8091
+#   AI Analyzer  → http://localhost:18082
 #   Scorer       → http://localhost:18092
 #   Prometheus   → http://localhost:9090
 #   pgAdmin      → http://localhost:5050   (admin@ztlab.com / ztlab2026)
@@ -110,12 +111,13 @@ show_status() {
     [3000]="Grafana"
     [13100]="Loki"
     [8091]="SOAR Engine"
+    [18082]="AI Analyzer"
     [18092]="Security Scorer"
     [9090]="Prometheus"
     [5050]="pgAdmin"
     [5540]="RedisInsight"
   )
-  for port in 8180 18080 18081 3000 13100 8091 18092 9090 5050 5540; do
+  for port in 8180 18080 18081 3000 13100 8091 18082 18092 9090 5050 5540; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -168,6 +170,7 @@ if ! ss -lnt | awk '{print $4}' | grep -Eq ":13099$"; then
   echo "[ OK ] Loki-proxy → 10.10.10.1:13099 → localhost:13100 (for OpenStack promtail)"
 fi
 start_pf_daemon "SOAR Engine"         plg-stack  soar-engine       8091  8080
+start_pf_daemon "AI Analyzer"         plg-stack  ai-analyzer      18082  8080
 start_pf_daemon "Security Scorer"     plg-stack  security-scorer  18092  8080
 # Monitoring
 start_pf_daemon "Prometheus"          monitoring prometheus        9090  9090

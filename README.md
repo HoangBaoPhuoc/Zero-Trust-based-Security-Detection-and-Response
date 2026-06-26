@@ -34,6 +34,7 @@ User (browser)      │                                                         
 - **Policy:** Envoy sidecar + OPA ext_authz gRPC — JWT verify, RBAC, fraud gate, SVID check
 - **Services:** FastAPI microservices trên K3s (AWS + OpenStack), Redis, PostgreSQL
 - **Observability:** Promtail → Loki (90 ngày) → Grafana (6 dashboards, 4 security alert rules)
+- **AI Detection:** AI Analyzer — provider chain OpenAI → Gemini → Heuristic, 15 attack patterns, `/analyze` API
 - **Security Ops:** SOAR Engine — HITL (Human-in-the-Loop), 6 playbooks, email với action buttons
 
 ---
@@ -93,6 +94,7 @@ bash scripts/run-demo.sh
 | Keycloak Admin | http://localhost:8180 | admin / ztlab-admin-2026 |
 | Grafana | http://localhost:3000 | admin / ZTALab2026! |
 | SOAR Engine | http://localhost:8091 | — |
+| AI Analyzer | http://localhost:18082 | — |
 | Prometheus | http://localhost:9090 | — |
 | Loki | http://localhost:13100 | — |
 | pgAdmin | http://localhost:5050 | admin@ztlab.com / ztlab2026 |
