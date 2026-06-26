@@ -233,10 +233,10 @@ bash scripts/open-admin-uis.sh
 | Username | Password | Role | Tài khoản ngân hàng |
 |----------|----------|------|---------------------|
 | admin | ztlab-admin-2026 | Keycloak superadmin | — |
-| testuser01 | Test1234! | financial-read, financial-write | ACC-1001 (1,000,000,000 VND) |
-| testuser02 | Test1234! | financial-read, financial-write | ACC-2001 (250,000,000 VND) |
-| merchant01 | Test1234! | financial-read | ACC-4001 |
-| analyst01 | Test1234! | security-analyst | ACC-5001 |
+| testuser01 | Test@123! | financial-read, financial-write | ACC-1001 (1,000,000,000 VND) |
+| testuser02 | Test@123! | financial-read, financial-write | ACC-2001 (250,000,000 VND) |
+| merchant01 | Merchant@123! | financial-read | ACC-4001 |
+| analyst01 | Analyst@123! | security-analyst | ACC-5001 |
 
 > **merchant01** chỉ có `financial-read` → POST /payments → 403 (demo RBAC).  
 > **analyst01** xem được `/security` và `/monitor` nhưng không chuyển tiền.
@@ -276,7 +276,7 @@ bash scripts/open-admin-uis.sh   # khởi động tất cả daemon
 
 | Service | URL | Đăng nhập |
 |---------|-----|-----------|
-| Web Portal | http://localhost:18081 | testuser01 / Test1234! (qua Keycloak SSO) |
+| Web Portal | http://localhost:18081 | testuser01 / Test@123! (qua Keycloak SSO) |
 | API Gateway | http://localhost:18080 | — (cần Bearer JWT) |
 | Keycloak Admin | http://localhost:8180 | admin / ztlab-admin-2026 |
 | Grafana | http://localhost:3000 | admin / ZTALab2026! |
@@ -323,7 +323,7 @@ print('Targets UP:', sum(1 for x in t if x['health']=='up'), '/', len(t))"
 # E2E payment test
 TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!&scope=openid" \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test%40123%21&scope=openid" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
 curl -s -X POST http://localhost:18080/payments \
@@ -661,7 +661,7 @@ OPA kiểm tra `jwt_payload.iss == "http://keycloak.ztlab.local:8180/realms/ztla
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!&scope=openid" \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test%40123%21&scope=openid" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 echo $TOKEN | cut -d. -f2 | python3 -c "
 import sys,base64,json
@@ -756,7 +756,7 @@ for g in d.get('data',{}).get('groups',[]):
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!&scope=openid" \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test%40123%21&scope=openid" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 echo $TOKEN
 
