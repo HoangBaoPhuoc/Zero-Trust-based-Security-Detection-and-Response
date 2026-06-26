@@ -391,7 +391,161 @@ bash scripts/run-demo.sh --restore
 bash scripts/run-demo.sh --continuous
 ```
 
-**Cách 2 — Thủ công từng kịch bản** (xem mục 8.1–8.4 bên dưới)
+**Cách 2 — Thủ công từng kịch bản** (copy-paste nhanh bên dưới, không cần script)
+
+---
+
+### Lệnh tấn công thủ công (copy-paste nhanh)
+
+> Mở Grafana `http://localhost:3000/alerting/list` để theo dõi alert FIRING và `http://localhost:8091/cases` để xem SOAR xử lý.
+
+#### Chuẩn bị
+
+```bash
+bash scripts/run-demo.sh --restore
+curl -s http://localhost:18080/health | python3 -c "import sys,json; d=json.load(sys.stdin); print('GW OK, jwks='+str(d['jwks_keys_loaded']))"
+```
+
+#### KB1 — Brute Force Login
+
+```bash
+# Craft JWT: payload hợp lệ nhưng signature giả
+# OPA chỉ decode payload (không verify chữ ký) → cho qua → app kiểm tra chữ ký → 401
+# Envoy ghi log response_code=401 → Promtail → Loki → Grafana alert
+FUTURE_EXP=$(($(date +%s) + 3600))
+HEADER=$(python3 -c "import base64,json; h=json.dumps({'alg':'RS256','typ':'JWT'}).encode(); print(base64.urlsafe_b64encode(h).rstrip(b'=').decode())")
+PAYLOAD=$(python3 -c "
+import base64,json
+p={'sub':'attacker','iss':'http://keycloak.ztlab.local:8180/realms/ztlab',
+   'exp':$FUTURE_EXP,'realm_access':{'roles':['financial-write','financial-read']}}
+print(base64.urlsafe_b64encode(json.dumps(p).encode()).rstrip(b'=').decode())")
+FAKE_JWT="${HEADER}.${PAYLOAD}.FAKESIGNATUREFAKESIGNATUREFAKESIG"
+
+echo "Gửi 20 request với JWT giả..."
+for i in $(seq 1 20); do
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://localhost:18080/payments \
+    -H "Authorization: Bearer $FAKE_JWT" \
+    -H "Content-Type: application/json" \
+    -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1}'
+done
+echo ""
+echo "Xong! Chờ ~60s rồi kiểm tra SOAR..."
+sleep 65
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json
+c=[x for x in json.load(sys.stdin) if x.get('attack_type')=='brute_force']
+x=c[-1] if c else {}
+print('KB1:', x.get('status','CHƯA CÓ'), '|', x.get('playbook','?'))"
+```
+
+#### KB2 — Lateral Movement
+
+```bash
+python3 - <<'PY'
+import json, urllib.request, time
+now = time.time_ns()
+values = [[str(now + i*1_000_000), json.dumps({
+    "event_type": "lateral_movement_attempt", "opa_result": "false",
+    "svid": "spiffe://external.attacker/malicious-service",
+    "destination": "core-banking", "source_ip": "10.10.1.99",
+    "message": f"SVID ngoài trust domain ztlab.local — OPA deny #{i+1}"
+})] for i in range(5)]
+payload = {"streams":[{"stream":{
+    "job":"opa-decisions","opa_result":"false",
+    "service":"payment-service","namespace":"financial"
+},"values":values}]}
+urllib.request.urlopen(urllib.request.Request(
+    "http://127.0.0.1:13100/loki/api/v1/push",
+    data=json.dumps(payload).encode(),
+    headers={"Content-Type":"application/json"}, method="POST"), timeout=5)
+print("Inject OK — chờ ~60s...")
+PY
+sleep 65
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json
+c=[x for x in json.load(sys.stdin) if x.get('attack_type')=='lateral_movement']
+x=c[-1] if c else {}
+print('KB2:', x.get('status','CHƯA CÓ'), '|', x.get('playbook','?'))"
+kubectl --context ctx-aws get svc payment-service -n financial -o jsonpath='{.spec.selector}' && echo
+bash scripts/run-demo.sh --restore
+```
+
+#### KB3 — Fraud Gate Bypass
+
+```bash
+python3 - <<'PY'
+import json, urllib.request, time
+now = time.time_ns()
+values = [[str(now + i*1_000_000), json.dumps({
+    "event_type": "opa_deny", "opa_result": "false",
+    "request_path": "/transactions/execute", "source_ip": "10.10.1.77",
+    "reason": "fraud_gate header missing or tampered",
+    "message": f"OPA DENY fraud_gate_bypass #{i+1}"
+})] for i in range(5)]
+payload = {"streams":[{"stream":{
+    "job":"opa-decisions","opa_result":"false",
+    "request_path":"/transactions/execute",
+    "service":"payment-service","namespace":"financial"
+},"values":values}]}
+urllib.request.urlopen(urllib.request.Request(
+    "http://127.0.0.1:13100/loki/api/v1/push",
+    data=json.dumps(payload).encode(),
+    headers={"Content-Type":"application/json"}, method="POST"), timeout=5)
+print("Inject OK — chờ ~60s...")
+PY
+sleep 65
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json
+c=[x for x in json.load(sys.stdin) if x.get('attack_type')=='fraud_gate_bypass']
+x=c[-1] if c else {}
+print('KB3:', x.get('status','CHƯA CÓ'), '|', x.get('playbook','?'))"
+bash scripts/run-demo.sh --restore
+```
+
+#### KB4 — Data Exfiltration
+
+```bash
+# Ghi lại replicas trước
+echo -n "core-banking trước: " && kubectl --context ctx-openstack get deploy core-banking -n financial -o jsonpath='{.spec.replicas}' && echo
+
+python3 - <<'PY'
+import json, urllib.request, time
+now = time.time_ns()
+values = [[str(now + i*1_000_000), json.dumps({
+    "bytes_sent": 3100000, "response_code": 200,
+    "path": "/accounts/export", "source_ip": "10.10.4.88",
+    "message": f"Response size 3.1MB — possible data exfiltration #{i+1}"
+})] for i in range(5)]
+payload = {"streams":[{"stream":{
+    "job":"envoy-access","service":"core-banking","namespace":"financial"
+},"values":values}]}
+urllib.request.urlopen(urllib.request.Request(
+    "http://127.0.0.1:13100/loki/api/v1/push",
+    data=json.dumps(payload).encode(),
+    headers={"Content-Type":"application/json"}, method="POST"), timeout=5)
+print("Inject OK — chờ ~60s...")
+PY
+sleep 65
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json
+c=[x for x in json.load(sys.stdin) if x.get('attack_type')=='large_response']
+x=c[-1] if c else {}
+print('KB4:', x.get('status','CHƯA CÓ'), '|', x.get('playbook','?'), '|', x.get('target_context','?'))"
+echo -n "core-banking sau: " && kubectl --context ctx-openstack get deploy core-banking -n financial -o jsonpath='{.spec.replicas}' && echo
+bash scripts/run-demo.sh --restore
+```
+
+#### Xem kết quả tổng hợp
+
+```bash
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json
+cases=json.load(sys.stdin)
+print(f'Tổng {len(cases)} cases. 4 mới nhất:')
+for c in cases[-4:]:
+    icon='✓' if c.get('status') in ('executed','dry_run') else '✗'
+    print(f'  {icon} {c[\"attack_type\"]:25} → {c[\"playbook\"]:22} [{c[\"status\"]}]')"
+```
 
 ---
 
