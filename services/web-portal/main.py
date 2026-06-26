@@ -487,13 +487,27 @@ async def kc_proxy(path: str, request: Request):
     portal_base = str(request.base_url).rstrip("/")
     kc_ext_base_http = f"http://{KC_EXTERNAL_HOST}"
     kc_ext_base_https = f"https://{KC_EXTERNAL_HOST}"
+    # Must replace the full public URL (with port) first to avoid partial replace
+    # e.g. "http://keycloak.ztlab.local:8180" → "http://localhost:18081/kc"
+    # If we replace hostname-only first, ":8180" would be left dangling in the path
+    kc_replacements = [
+        KEYCLOAK_PUBLIC_URL,       # http://keycloak.ztlab.local:8180 (with port, most specific)
+        kc_ext_base_https,         # https://keycloak.ztlab.local
+        kc_ext_base_http,          # http://keycloak.ztlab.local
+        KEYCLOAK_URL,              # http://keycloak.identity.svc.cluster.local:8080 (internal)
+    ]
+
+    def _rewrite(text: str) -> str:
+        for src in kc_replacements:
+            if src:
+                text = text.replace(src, portal_base + "/kc")
+        return text
 
     content = kc_resp.content
     ct = kc_resp.headers.get("content-type", "")
     if "html" in ct or "javascript" in ct:
         text = content.decode("utf-8", errors="replace")
-        text = text.replace(kc_ext_base_https, portal_base + "/kc")
-        text = text.replace(kc_ext_base_http, portal_base + "/kc")
+        text = _rewrite(text)
         content = text.encode("utf-8")
 
     skip_hdrs = {"content-encoding", "transfer-encoding", "content-length", "connection"}
@@ -503,8 +517,7 @@ async def kc_proxy(path: str, request: Request):
         if hn in skip_hdrs:
             continue
         if hn == "location":
-            hdr_val = hdr_val.replace(kc_ext_base_https, portal_base + "/kc")
-            hdr_val = hdr_val.replace(kc_ext_base_http, portal_base + "/kc")
+            hdr_val = _rewrite(hdr_val)
         elif hn == "set-cookie":
             hdr_val = re.sub(r'(?i)(;\s*[Pp]ath=)/realms/', r'\1/kc/realms/', hdr_val)
         response.headers.append(hdr_name, hdr_val)
