@@ -84,6 +84,29 @@ ALLOWED_PLAYBOOKS = {
     "monitor_only",
 }
 
+# Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn)
+SUGGESTED_PLAYBOOKS: dict[str, list[str]] = {
+    "brute_force":          ["revoke_user_sessions", "block_source_ip", "monitor_only"],
+    "credential_stuffing":  ["revoke_user_sessions", "block_source_ip", "monitor_only"],
+    "jwt_replay":           ["revoke_user_sessions", "block_source_ip", "monitor_only"],
+    "fraud_gate_bypass":    ["isolate_workload", "block_source_ip", "monitor_only"],
+    "lateral_movement":     ["isolate_workload", "block_source_ip", "monitor_only"],
+    "cryptomining":         ["quarantine_workload", "block_source_ip", "monitor_only"],
+    "port_scan":            ["block_source_ip", "monitor_only"],
+    "exploit_probe":        ["block_source_ip", "isolate_workload", "monitor_only"],
+    "large_response":       ["restrict_egress", "block_source_ip", "monitor_only"],
+    "access_denied":        ["block_source_ip", "monitor_only"],
+}
+
+PLAYBOOK_LABELS: dict[str, str] = {
+    "isolate_workload":     "Cô lập dịch vụ",
+    "restrict_egress":      "Hạn chế lưu lượng ra",
+    "quarantine_workload":  "Cách ly workload",
+    "block_source_ip":      "Chặn IP nguồn",
+    "revoke_user_sessions": "Thu hồi phiên đăng nhập",
+    "monitor_only":         "Chỉ theo dõi",
+}
+
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger(APP_NAME)
 app = FastAPI(title="ZTLab SOAR Engine")
@@ -229,6 +252,32 @@ def _first_known_attack(alert: SecurityAlert) -> str:
 _OPENSTACK_WORKLOADS = {"core-banking", "account-service", "transaction-service"}
 
 
+# ── Heuristic Log Poller (replaces ai-analyzer) ─────────────────────────────
+
+_HEURISTIC_RULES: list[tuple[re.Pattern, str, str, float]] = [
+    (re.compile(r"jwt_verification_failed|invalid_jwt|authentication.fail|login.fail", re.I), "brute_force", "high", 0.80),
+    (re.compile(r"fraud.gate.bypass|fraud_block|channel.*tor", re.I), "fraud_gate_bypass", "high", 0.85),
+    (re.compile(r"invalid.*svid|spiffe.*evil|lateral.move", re.I), "lateral_movement", "critical", 0.90),
+    (re.compile(r"port.scan|nmap|masscan|syn.scan", re.I), "port_scan", "medium", 0.75),
+    (re.compile(r"sqlmap|union.select|/etc/passwd|cmd=|command.inject", re.I), "exploit_probe", "high", 0.85),
+    (re.compile(r"xmrig|stratum\+tcp|cryptomin", re.I), "cryptomining", "critical", 0.90),
+    (re.compile(r"credential.stuf|multiple.usernames|common.password", re.I), "credential_stuffing", "high", 0.80),
+    (re.compile(r"bytes_sent[=: ]\d{7,}|large.response|data.exfil", re.I), "large_response", "medium", 0.75),
+    (re.compile(r"jwt.*replay|stolen.token|duplicate.jti|token.reuse", re.I), "jwt_replay", "high", 0.80),
+]
+
+_HEURISTIC_MIN_COUNT: dict[str, int] = {
+    "brute_force": 5, "fraud_gate_bypass": 1, "lateral_movement": 1,
+    "port_scan": 3, "exploit_probe": 1, "cryptomining": 1,
+    "credential_stuffing": 2, "large_response": 1, "jwt_replay": 1,
+}
+
+_HEURISTIC_POLL_INTERVAL = int(os.getenv("HEURISTIC_POLL_INTERVAL", "60"))
+_HEURISTIC_WINDOW_S = 300   # 5 min lookback trong Loki
+_HEURISTIC_DEDUP_S  = 600   # 10 min dedup — không gửi alert trùng cùng loại
+_heuristic_last_seen: dict[str, float] = {}
+
+
 def _infer_target(alert: SecurityAlert, attack: str) -> dict[str, str | None]:
     target = dict(TARGETS_BY_ATTACK.get(attack, {}))
     if alert.affected_service:
@@ -279,42 +328,64 @@ def _verify_hitl_token(case_id: str, token: str) -> bool:
 
 
 def _hitl_email_html(case: CaseRecord, alert_name: str, mitre: str, log_lines: list[str]) -> str:
-    approve_url = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/approve?token={_hitl_token(case.case_id)}"
-    deny_url    = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/deny?token={_hitl_token(case.case_id)}"
+    token = _hitl_token(case.case_id)
+    deny_url = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/deny?token={token}"
     severity_color = {"low": "#4CAF50", "medium": "#FF9800", "high": "#F44336", "critical": "#9C27B0"}.get(case.severity, "#F44336")
-    logs_html = "".join(f"<li style='font-size:12px;color:#555'>{l}</li>" for l in log_lines[:10]) or "<li>Không có log evidence</li>"
+    logs_html = "".join(f"<li style='font-size:12px;color:#555;word-break:break-all'>{l}</li>" for l in log_lines[:10]) or "<li>Không có log evidence</li>"
+
+    # Các hành động phản ứng được gợi ý cho loại tấn công này
+    suggested = SUGGESTED_PLAYBOOKS.get(case.attack_type, ["block_source_ip", "monitor_only"])
+    action_colors = {
+        "isolate_workload": "#E53935", "quarantine_workload": "#E53935",
+        "restrict_egress": "#F57C00", "block_source_ip": "#C62828",
+        "revoke_user_sessions": "#1565C0", "monitor_only": "#757575",
+    }
+    action_icons = {
+        "isolate_workload": "🔒", "quarantine_workload": "⚠️",
+        "restrict_egress": "🚧", "block_source_ip": "🚫",
+        "revoke_user_sessions": "🔑", "monitor_only": "📊",
+    }
+    action_buttons_html = ""
+    for pb in suggested:
+        url = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/choose-action?playbook={pb}&token={token}"
+        color = action_colors.get(pb, "#555")
+        icon = action_icons.get(pb, "▶")
+        label = PLAYBOOK_LABELS.get(pb, pb)
+        action_buttons_html += f"""
+      <a href="{url}" style="display:inline-block;background:{color};color:#fff;padding:10px 18px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:13px;margin:4px">
+        {icon} {label}
+      </a>"""
+
     return f"""
-<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden">
+<div style="font-family:Arial,sans-serif;max-width:660px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden">
   <div style="background:#1a1a2e;padding:20px 24px">
-    <h2 style="color:#fff;margin:0;font-size:18px">🚨 ZTLab Security Alert — Cần phê duyệt</h2>
+    <h2 style="color:#fff;margin:0;font-size:18px">🚨 ZTLab Security Alert — Yêu cầu xử lý</h2>
   </div>
   <div style="padding:24px">
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold;width:140px">Alert</td><td style="padding:6px 12px">{alert_name}</td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Severity</td><td style="padding:6px 12px"><span style="background:{severity_color};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">{case.severity.upper()}</span></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">MITRE ATT&CK</td><td style="padding:6px 12px">{mitre}</td></tr>
-      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Playbook</td><td style="padding:6px 12px"><code>{case.playbook}</code></td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Loại tấn công</td><td style="padding:6px 12px"><code>{case.attack_type}</code></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Target</td><td style="padding:6px 12px">{case.target_context or '—'} / {case.target_workload or '—'}</td></tr>
-      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Source IP</td><td style="padding:6px 12px">{case.source_ip or '—'}</td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Source IP</td><td style="padding:6px 12px"><code>{case.source_ip or '—'}</code></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Case ID</td><td style="padding:6px 12px"><code style="font-size:11px">{case.case_id}</code></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Thời gian</td><td style="padding:6px 12px">{case.ts}</td></tr>
     </table>
-    <h4 style="margin:0 0 8px;color:#333">Log Evidence (Loki):</h4>
-    <ul style="background:#f9f9f9;border:1px solid #e0e0e0;border-radius:4px;padding:12px 12px 12px 28px;margin:0 0 24px">{logs_html}</ul>
-    <p style="color:#555;font-size:13px;margin:0 0 20px">
-      Playbook <strong>{case.playbook}</strong> sẽ được thực thi trên <strong>{case.target_context}/{case.target_workload or case.source_ip}</strong>.
-      Vui lòng xem xét log evidence và phê duyệt hoặc từ chối.
-    </p>
-    <div style="text-align:center;margin-bottom:8px">
-      <a href="{approve_url}" style="display:inline-block;background:#4CAF50;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px;margin-right:16px">
-        ✅ PHÊ DUYỆT &amp; THỰC THI
-      </a>
-      <a href="{deny_url}" style="display:inline-block;background:#9e9e9e;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:bold;font-size:15px">
-        ❌ TỪ CHỐI
+    <h4 style="margin:0 0 8px;color:#333">Log Evidence:</h4>
+    <ul style="background:#f9f9f9;border:1px solid #e0e0e0;border-radius:4px;padding:12px 12px 12px 28px;margin:0 0 20px">{logs_html}</ul>
+    <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:14px 16px;margin-bottom:20px">
+      <p style="margin:0 0 12px;font-weight:bold;color:#333">Chọn hành động phản ứng:</p>
+      <div style="display:flex;flex-wrap:wrap;gap:4px">{action_buttons_html}
+      </div>
+    </div>
+    <div style="text-align:center">
+      <a href="{deny_url}" style="display:inline-block;background:#9e9e9e;color:#fff;padding:10px 28px;border-radius:6px;text-decoration:none;font-size:13px">
+        ❌ Bỏ qua — không thực hiện
       </a>
     </div>
     <p style="text-align:center;font-size:11px;color:#aaa;margin-top:16px">
-      Link có hiệu lực 24h. SOAR Engine: {SOAR_PUBLIC_URL}
+      Link có hiệu lực 24h. Hoặc xử lý qua Web Portal → Security page.
     </p>
   </div>
 </div>
@@ -786,6 +857,158 @@ def rollback_playbook(case: CaseRecord) -> str:
     raise ValueError(f"playbook {case.playbook!r} has no rollback action")
 
 
+# ── Heuristic analysis functions ────────────────────────────────────────────
+
+def _extract_source_ip_from_line(line: str) -> str | None:
+    m = re.search(r"source_ip[=: ]+(\d{1,3}(?:\.\d{1,3}){3})", line)
+    if m:
+        return m.group(1)
+    m = re.search(r"\b((?!10\.|127\.|172\.1[6-9]\.|172\.2\d\.|172\.3[01]\.|192\.168\.)\d{1,3}(?:\.\d{1,3}){3})\b", line)
+    return m.group(1) if m else None
+
+
+async def _heuristic_analyze() -> None:
+    """Poll Loki, apply heuristic rules, create SOAR cases for detected attacks."""
+    end_ns = time.time_ns()
+    start_ns = end_ns - _HEURISTIC_WINDOW_S * 10**9
+    try:
+        async with httpx.AsyncClient(timeout=15) as h:
+            resp = await h.get(
+                f"{LOKI_URL}/loki/api/v1/query_range",
+                params={"query": '{namespace="financial"}', "start": start_ns, "end": end_ns, "limit": 1000},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as exc:
+        logger.warning(json.dumps({"event_type": "heuristic_loki_query_failed", "error": str(exc)}))
+        return
+
+    log_items: list[tuple[str, str]] = []
+    for stream in data.get("data", {}).get("result", []):
+        app = stream.get("stream", {}).get("app", "unknown")
+        for _, line in stream.get("values", []):
+            log_items.append((app, line))
+
+    if not log_items:
+        return
+
+    now = time.time()
+    detected: dict[str, dict] = {}
+    for rule_pat, attack_type, severity, confidence in _HEURISTIC_RULES:
+        for app, line in log_items:
+            if rule_pat.search(line):
+                if attack_type not in detected:
+                    detected[attack_type] = {"count": 0, "evidence": [], "source_ip": None,
+                                              "severity": severity, "confidence": confidence}
+                info = detected[attack_type]
+                info["count"] += 1
+                if len(info["evidence"]) < 5:
+                    info["evidence"].append(f"[{app}] {line[:200]}")
+                if not info["source_ip"]:
+                    info["source_ip"] = _extract_source_ip_from_line(line)
+
+    for attack_type, info in detected.items():
+        if info["count"] < _HEURISTIC_MIN_COUNT.get(attack_type, 1):
+            continue
+        if now - _heuristic_last_seen.get(attack_type, 0) < _HEURISTIC_DEDUP_S:
+            continue
+        _heuristic_last_seen[attack_type] = now
+
+        alert = SecurityAlert(
+            analyzer="heuristic",
+            provider="loki-poller",
+            model="rule-based",
+            source="heuristic-log-poller",
+            verdict="malicious",
+            severity=info["severity"],  # type: ignore[arg-type]
+            confidence=info["confidence"],
+            attack_type=attack_type,
+            summary=f"Heuristic detection: {attack_type} ({info['count']} log entries matched in {_HEURISTIC_WINDOW_S}s window)",
+            evidence=info["evidence"],
+            recommended_action=f"respond to {attack_type}",
+            recommended_playbook=PLAYBOOK_BY_ATTACK.get(attack_type),
+            source_ip=info["source_ip"],
+            log_count=info["count"],
+            ts=_now_iso(),
+        )
+        logger.warning(json.dumps({
+            "event_type": "heuristic_detection",
+            "attack_type": attack_type,
+            "severity": info["severity"],
+            "count": info["count"],
+            "source_ip": info["source_ip"],
+        }))
+        try:
+            await _process_heuristic_alert(alert)
+        except Exception as exc:
+            logger.error(json.dumps({"event_type": "heuristic_alert_failed", "attack_type": attack_type, "error": str(exc)}))
+
+
+async def _process_heuristic_alert(alert: SecurityAlert) -> CaseRecord:
+    """Xử lý alert từ heuristic poller — tạo case và gửi email HITL nếu cần."""
+    alert_hash = _hash_alert(alert)
+    case_id = _case_id(alert_hash)
+    attack = _first_known_attack(alert)
+    playbook = _select_playbook(alert, attack)
+    target = _infer_target(alert, attack)
+    eligible, reason = _should_execute(alert)
+
+    status: Literal["pending_approval", "skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
+    action = "no action"
+    error: str | None = None
+    steps: list[PlaybookStep] = []
+
+    if playbook == "monitor_only" or not eligible:
+        status = "skipped"
+        reason = reason if playbook != "monitor_only" else f"no automated playbook for {alert.attack_type}"
+    elif _needs_hitl(alert):
+        status = "pending_approval"
+        action = f"awaiting admin approval for playbook {playbook}"
+        reason = f"severity={alert.severity} >= hitl_threshold={SOAR_HITL_SEVERITY}"
+    else:
+        try:
+            action, steps = await _run_steps(
+                playbook=playbook, context=target.get("context"), workload=target.get("workload"),
+                source_ip=alert.source_ip, username=alert.username, attack_type=attack,
+                dry_run=SOAR_DRY_RUN,
+            )
+            status = "dry_run" if SOAR_DRY_RUN else "executed"
+        except Exception as exc:
+            status = "failed"
+            error = str(exc)
+            action = "execution failed"
+
+    case = CaseRecord(
+        case_id=case_id, status=status, alert_hash=alert_hash, attack_type=attack,
+        severity=alert.severity, confidence=alert.confidence, playbook=playbook,
+        target_context=target.get("context"), target_workload=target.get("workload"),
+        source_ip=alert.source_ip, username=alert.username, action=action, reason=reason,
+        error=error, dry_run=SOAR_DRY_RUN, steps=steps, ts=_now_iso(),
+    )
+    result = await record_case(case)
+
+    if status == "pending_approval":
+        _HITL_QUEUE[case_id] = (case, playbook, target)
+        await _send_hitl_email(
+            case=case,
+            alert_name=f"Heuristic: {attack}",
+            mitre=PLAYBOOK_BY_ATTACK.get(attack, "—"),
+            log_lines=alert.evidence,
+        )
+    return result
+
+
+async def _heuristic_poll() -> None:
+    """Background task: poll Loki mỗi HEURISTIC_POLL_INTERVAL giây."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            await _heuristic_analyze()
+        except Exception as exc:
+            logger.error(json.dumps({"event_type": "heuristic_poll_error", "error": str(exc)}))
+        await asyncio.sleep(_HEURISTIC_POLL_INTERVAL)
+
+
 # ── Loki + record helpers ────────────────────────────────────────────────────
 
 async def push_case_to_loki(case: CaseRecord) -> None:
@@ -879,6 +1102,8 @@ async def startup() -> None:
         logger.info(json.dumps({"event_type": "redis_connected", "url": REDIS_URL}))
     except Exception as exc:
         logger.warning(json.dumps({"event_type": "redis_connect_failed", "error": str(exc)}))
+    asyncio.create_task(_heuristic_poll())
+    logger.info(json.dumps({"event_type": "heuristic_poller_started", "interval_s": _HEURISTIC_POLL_INTERVAL}))
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -1287,6 +1512,164 @@ async def list_blocked_ips(authorization: str | None = Header(default=None)) -> 
     require_soar_token(authorization)
     ips = await redis_get_blocked_ips()
     return {"blocked_ips": ips, "count": len(ips), "ttl_seconds": REDIS_BLOCKED_IPS_TTL}
+
+
+@app.post("/cases/{case_id}/approve-admin", response_model=CaseRecord)
+async def hitl_approve_admin(case_id: str, authorization: str | None = Header(default=None)) -> CaseRecord:
+    """Web Portal admin approve — xác thực bằng SOAR API token (không cần HMAC email token)."""
+    require_soar_token(authorization)
+
+    queued = _HITL_QUEUE.pop(case_id, None)
+    if queued is None:
+        stored = CASES.get(case_id)
+        if stored and stored.status != "pending_approval":
+            return stored
+        raise HTTPException(status_code=404, detail="case không tồn tại hoặc đã xử lý")
+
+    draft, playbook, target = queued
+    action = "no action"
+    error: str | None = None
+    steps: list[PlaybookStep] = []
+    try:
+        action, steps = await _run_steps(
+            playbook=playbook, context=target.get("context"), workload=target.get("workload"),
+            source_ip=draft.source_ip, username=draft.username,
+            attack_type=draft.attack_type, dry_run=SOAR_DRY_RUN,
+        )
+        final_status: Any = "dry_run" if SOAR_DRY_RUN else "executed"
+    except Exception as exc:
+        final_status = "failed"
+        error = str(exc)
+        action = "execution failed"
+
+    approved = draft.model_copy(update={
+        "status": final_status, "action": action,
+        "reason": "admin approved via web portal", "error": error, "steps": steps, "ts": _now_iso(),
+    })
+    result = await record_case(approved)
+    logger.warning(json.dumps({"event_type": "hitl_approved_portal", "case_id": case_id, "status": final_status}))
+    return result
+
+
+@app.post("/cases/{case_id}/deny-admin", response_model=CaseRecord)
+async def hitl_deny_admin(case_id: str, authorization: str | None = Header(default=None)) -> CaseRecord:
+    """Web Portal admin deny — xác thực bằng SOAR API token (không cần HMAC email token)."""
+    require_soar_token(authorization)
+
+    queued = _HITL_QUEUE.pop(case_id, None)
+    if queued is None:
+        stored = CASES.get(case_id)
+        if stored and stored.status != "pending_approval":
+            return stored
+        raise HTTPException(status_code=404, detail="case không tồn tại hoặc đã xử lý")
+
+    draft, _pb, _tgt = queued
+    denied = draft.model_copy(update={
+        "status": "skipped", "action": "admin denied via web portal",
+        "reason": "admin rejected via web portal", "ts": _now_iso(),
+    })
+    result = await record_case(denied)
+    logger.warning(json.dumps({"event_type": "hitl_denied_portal", "case_id": case_id}))
+    return result
+
+
+# ── Execute chosen playbook (admin tự chọn hành động) ───────────────────────
+
+class PlaybookExecuteRequest(BaseModel):
+    playbook: str
+
+
+async def _execute_chosen_playbook(case_id: str, chosen_playbook: str, actor: str) -> CaseRecord:
+    """Thực thi playbook do admin chọn cho case pending_approval."""
+    if chosen_playbook not in ALLOWED_PLAYBOOKS:
+        raise HTTPException(status_code=400, detail=f"playbook không được phép: {chosen_playbook}")
+
+    case = CASES.get(case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="case không tồn tại")
+    if case.status != "pending_approval":
+        return case  # đã xử lý — trả về kết quả hiện tại
+
+    _HITL_QUEUE.pop(case_id, None)
+
+    if chosen_playbook == "monitor_only":
+        result = case.model_copy(update={
+            "status": "skipped", "playbook": "monitor_only",
+            "action": "admin chọn chỉ theo dõi — không thực thi hành động nào",
+            "reason": f"admin decision via {actor}", "error": None, "ts": _now_iso(),
+        })
+    else:
+        error: str | None = None
+        steps: list[PlaybookStep] = []
+        try:
+            action, steps = await _run_steps(
+                playbook=chosen_playbook,
+                context=case.target_context,
+                workload=case.target_workload,
+                source_ip=case.source_ip,
+                username=case.username,
+                attack_type=case.attack_type,
+                dry_run=SOAR_DRY_RUN,
+            )
+            final_status: Any = "dry_run" if SOAR_DRY_RUN else "executed"
+        except Exception as exc:
+            action = "execution failed"
+            error = str(exc)
+            final_status = "failed"
+        result = case.model_copy(update={
+            "status": final_status, "playbook": chosen_playbook, "action": action,
+            "reason": f"admin chọn playbook {chosen_playbook} via {actor}",
+            "error": error, "steps": steps, "ts": _now_iso(),
+        })
+
+    await record_case(result)
+    logger.warning(json.dumps({
+        "event_type": "playbook_executed_by_admin",
+        "case_id": case_id, "playbook": chosen_playbook,
+        "status": result.status, "actor": actor,
+    }))
+    return result
+
+
+@app.get("/cases/{case_id}/choose-action")
+async def choose_action_email(case_id: str, playbook: str = "", token: str = "") -> Any:
+    """Endpoint cho email link: admin click → chọn playbook cụ thể → thực thi → HTML xác nhận."""
+    from fastapi.responses import HTMLResponse
+    if not _verify_hitl_token(case_id, token):
+        raise HTTPException(status_code=403, detail="token không hợp lệ hoặc đã hết hạn")
+    try:
+        result = await _execute_chosen_playbook(case_id, playbook, actor="email-link")
+    except HTTPException as exc:
+        return HTMLResponse(_hitl_result_html(case_id, "failed", already_done=(exc.status_code == 409)))
+    label = PLAYBOOK_LABELS.get(playbook, playbook)
+    return HTMLResponse(_hitl_action_result_html(case_id, result.status, label))
+
+
+@app.post("/cases/{case_id}/execute-playbook", response_model=CaseRecord)
+async def execute_playbook_portal(
+    case_id: str,
+    body: PlaybookExecuteRequest,
+    authorization: str | None = Header(default=None),
+) -> CaseRecord:
+    """Web Portal: admin chọn và thực thi một playbook cụ thể cho case pending_approval."""
+    require_soar_token(authorization)
+    return await _execute_chosen_playbook(case_id, body.playbook, actor="web-portal")
+
+
+def _hitl_action_result_html(case_id: str, status: str, playbook_label: str) -> str:
+    if status in {"executed", "dry_run"}:
+        icon, msg, color = "✅", f"Đã thực thi: <strong>{playbook_label}</strong> (status: {status})", "#4CAF50"
+    elif status == "skipped":
+        icon, msg, color = "📊", "Đã chọn theo dõi — không có hành động tự động", "#757575"
+    else:
+        icon, msg, color = "⚠️", f"Lỗi khi thực thi {playbook_label} (status: {status})", "#F44336"
+    return f"""<!DOCTYPE html><html><body style="font-family:Arial;text-align:center;padding:60px">
+<div style="max-width:480px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;padding:40px">
+  <div style="font-size:48px">{icon}</div>
+  <h2 style="color:{color}">{msg}</h2>
+  <p style="color:#777;font-size:13px">Case ID: <code>{case_id}</code></p>
+  <a href="{SOAR_PUBLIC_URL}/cases" style="color:#1976D2;font-size:13px">Xem tất cả cases →</a>
+</div></body></html>"""
 
 
 @app.post("/blocked-ips/{ip}")
