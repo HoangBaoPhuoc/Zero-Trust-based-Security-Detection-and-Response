@@ -15,7 +15,7 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 5. [Tài khoản & credentials](#5-tài-khoản--credentials)
 6. [Truy cập các UI](#6-truy-cập-các-ui)
 7. [Health check nhanh](#7-health-check-nhanh)
-8. [Test kịch bản demo](#8-test-kịch-bản-demo)
+8. [Test kịch bản demo](#8-test-kịch-bản-demo) — KB1-KB4 (Grafana) + SC01-SC20 (AI Analyzer)
 9. [SOAR Engine & HITL](#9-soar-engine--hitl)
 10. [Grafana — Dashboards & Alerts](#10-grafana--dashboards--alerts)
 11. [OPA — Chính sách Zero Trust](#11-opa--chính-sách-zero-trust)
@@ -46,6 +46,7 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 │ namespace: plg-stack                                                     │
 │   Promtail (DaemonSet) → Loki (90 ngày) → Grafana                      │
 │   SOAR Engine   (heuristic + Grafana webhook → HITL email → K8s)       │
+│   AI Analyzer   (OpenAI → Gemini → Heuristic · 15 patterns · /analyze) │
 │   Security Scorer   (anomaly score 0-100 · window 15 phút · Redis)     │
 │                                                                          │
 │ namespace: monitoring                                                    │
@@ -90,7 +91,13 @@ Log event (Envoy/OPA/app) → Promtail → Loki
   ├─ Heuristic Poller (poll Loki mỗi 60s, 9 regex rules)
   │    └─ phát hiện anomaly → tạo SOAR case
   └─ Grafana alert fire (count_over_time query, eval 1 phút)
-       └─ POST soar-engine/grafana-webhook → tạo SOAR case
+       └─ POST soar-engine/grafana-webhook → tạo SOAR case (KB1-KB4)
+
+Scenario test POST /analyze → AI Analyzer (port 18082)
+  ├─ Provider chain: OpenAI API → Gemini API → Heuristic fallback
+  ├─ 15 attack patterns (brute_force, lateral_movement, cryptomining, ...)
+  ├─ severity < high → verdict + playbook (không cần admin duyệt)
+  └─ severity ≥ high → pending alert → POST soar-engine/alerts → SOAR case
 
 SOAR case tạo xong:
   ├─ severity < high (medium/low): auto-execute playbook ngay
@@ -285,6 +292,7 @@ bash scripts/open-admin-uis.sh   # khởi động tất cả daemon
 | Grafana | http://localhost:3000 | admin / ZTALab2026! |
 | Prometheus | http://localhost:9090 | — |
 | SOAR Engine API | http://localhost:8091 | — |
+| AI Analyzer | http://localhost:18082 | — |
 | Security Scorer | http://localhost:18092 | — |
 | Loki | http://localhost:13100 | — |
 | pgAdmin | http://localhost:5050 | admin@ztlab.com / ztlab2026 |
@@ -316,6 +324,7 @@ bash scripts/open-admin-uis.sh   # khởi động tất cả daemon
 curl -s http://localhost:18081/health   # web-portal: {"status":"ok"}
 curl -s http://localhost:18080/health   # api-gateway: jwks_keys_loaded≥1
 curl -s http://localhost:8091/health    # soar-engine: dry_run=false, case_count=N
+curl -s http://localhost:18082/health   # ai-analyzer: {"status":"ok","provider":"heuristic"}
 curl -s http://localhost:3000/api/health  # grafana: database=ok
 curl -s http://localhost:13100/ready    # loki: ready
 curl -s http://localhost:9090/-/healthy # prometheus: Prometheus Server is Healthy.
@@ -339,6 +348,11 @@ curl -s -X POST http://localhost:18080/payments \
 ---
 
 ## 8. Test kịch bản demo
+
+Hệ thống hỗ trợ **20 kịch bản kiểm thử** chia làm hai nhóm:
+
+- **KB1-KB4** (mục 8.1-8.4): Phát hiện qua Grafana alert → SOAR HITL (inject log Loki → Grafana query → webhook)
+- **SC01-SC20** (mục 8.5): Phát hiện qua AI Analyzer (`/analyze` API → heuristic/AI → verdict + playbook)
 
 ### Chuẩn bị trước mỗi lần demo
 
@@ -826,6 +840,95 @@ python3 tests/seed_db.py
 
 ---
 
+---
+
+### 8.5 — 20 Kịch Bản Kiểm Thử (AI Analyzer)
+
+**Yêu cầu:** AI Analyzer đang chạy tại `http://localhost:18082` (kiểm tra: `curl -s http://localhost:18082/health`)
+
+#### Chạy toàn bộ 20 kịch bản
+
+```bash
+python3 tests/scenario_00_full_suite.py
+```
+
+Script này chạy lần lượt tất cả SC01-SC20 và in kết quả PASS/FAIL.
+
+#### Chạy từng kịch bản riêng lẻ
+
+```bash
+# Shell scripts
+bash tests/scenario_01_brute_force.sh        # SC01 — Brute Force (T1110.001)
+python3 tests/scenario_02_jwt_forgery.py     # SC02 — JWT Forgery (T1550.001)
+bash tests/scenario_03_lateral_movement.sh   # SC03 — Lateral Movement (T1021.007)
+python3 tests/scenario_04_fraud_gate_bypass.py  # SC04 — Fraud Gate Bypass (T1078)
+python3 tests/scenario_05_high_velocity.py   # SC05 — High-Velocity Flood (T1496/T1110)
+python3 tests/scenario_06_exfiltration.py    # SC06 — Data Exfiltration (T1041)
+bash tests/scenario_07_svid_expiry.sh        # SC07 — SVID Expiry & Recovery (T1552.004)
+bash tests/scenario_08_cross_cloud.sh        # SC08 — Unauthorized Cross-Cloud (T1021.007)
+bash tests/scenario_09_privesc.sh            # SC09 — Privilege Escalation (T1611)
+bash tests/scenario_10_portscan.sh           # SC10 — Port Scanning (T1046)
+bash tests/scenario_11_cryptomining.sh       # SC11 — Cryptomining (T1496)
+bash tests/scenario_12_soar_response.sh      # SC12 — SOAR 4-step Pipeline (TA0040)
+bash tests/scenario_13_sql_injection.sh      # SC13 — SQL Injection (T1190)
+bash tests/scenario_14_command_injection.sh  # SC14 — Command Injection (T1059)
+bash tests/scenario_15_account_manipulation.sh  # SC15 — Account Manipulation (T1098)
+bash tests/scenario_16_credential_stuffing.sh   # SC16 — Credential Stuffing (T1078.001)
+bash tests/scenario_17_impair_defenses.sh    # SC17 — Impair Defenses (T1562)
+bash tests/scenario_18_container_escape.sh   # SC18 — Container Escape (T1611)
+bash tests/scenario_19_data_staging.sh       # SC19 — Data Staging (T1074/T1020)
+bash tests/scenario_20_replay_attack.sh      # SC20 — JWT Replay Attack (T1539)
+```
+
+#### Bảng 20 kịch bản kiểm thử
+
+| # | Tên | ATT&CK | Phát hiện | Kết quả mong đợi |
+|---|-----|--------|-----------|-----------------|
+| SC01 | Brute Force Login | T1110.001 | AI: brute_force | severity=high, playbook=revoke_user_sessions |
+| SC02 | JWT Token Forgery | T1550.001 | GW: 401/403 | api-gateway từ chối JWT giả signature |
+| SC03 | Lateral Movement | T1021.007 | AI: lateral_movement | severity=critical, playbook=isolate_workload |
+| SC04 | Fraud Gate Bypass | T1078 | AI: fraud_gate_bypass | severity=critical, playbook=isolate_workload |
+| SC05 | High-Velocity Flood | T1496/T1110 | Fraud: velocity block | fraud score ≥ 75 → blocked sau ~30 req |
+| SC06 | Data Exfiltration | T1041 | AI: large_response | severity=high, playbook=restrict_egress |
+| SC07 | SVID Expiry | T1552.004 | SPIRE: health check | SPIRE healthy, SVIDs ≥ 5 đã đăng ký |
+| SC08 | Unauthorized Cross-Cloud | T1021.007 | OPA/mTLS: block | Request thiếu SVID/fraud-gate bị chặn |
+| SC09 | Privilege Escalation | T1611 | K8s: security ctx | Container chạy non-root, sudo bị block |
+| SC10 | Port Scanning | T1046 | AI: port_scan | severity=medium, playbook=block_source_ip |
+| SC11 | Cryptomining | T1496 | AI: cryptomining | severity=critical, playbook=quarantine_workload |
+| SC12 | SOAR 4-step Response | TA0040/TA0006 | SOAR: pipeline | isolate → block → revoke → rollback PASS |
+| SC13 | SQL Injection | T1190 | API+AI: exploit_probe | 400/422 + AI detect inject pattern |
+| SC14 | Command Injection | T1059 | API+AI: exploit_probe | 400/422 + AI detect shell metachar |
+| SC15 | Account Manipulation | T1098 | OPA+AI: block | 403 + AI detect account_manipulation |
+| SC16 | Credential Stuffing | T1078.001 | AI: credential_stuffing | severity=high, playbook=revoke_user_sessions |
+| SC17 | Impair Defenses | T1562 | Net+AI: impair_defenses | Security infra inaccessible từ ngoài |
+| SC18 | Container Escape | T1611 | K8s+AI: container_escape | Host FS/socket inaccessible, AI detect |
+| SC19 | Data Staging | T1074/T1020 | AI: data_staging | severity=high, playbook=restrict_egress |
+| SC20 | JWT Replay Attack | T1539/T1550 | GW+AI: jwt_replay | Expired/stolen JWT rejected + AI detect |
+
+#### Kiểm tra kết quả AI Analyzer
+
+```bash
+# Health + provider đang dùng
+curl -s http://localhost:18082/health | python3 -c "import sys,json; d=json.load(sys.stdin); print('AI Analyzer:', d.get('status'), '| provider:', d.get('provider'))"
+
+# Xem pending alerts (chờ admin duyệt)
+curl -s http://localhost:18082/pending | python3 -c "
+import sys,json
+alerts=json.load(sys.stdin)
+print(f'{len(alerts)} pending alert(s)')
+for a in alerts:
+    print(' -', a.get('id'), '|', a.get('attack_type'), '|', a.get('severity'))"
+
+# Test thủ công /analyze endpoint
+curl -s -X POST http://localhost:18082/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"source":"manual-test","logs":[{"timestamp":"2026-01-01T00:00:00Z","message":"jwt_verification_failed too_many_attempts brute force","labels":{"job":"envoy-access"}}]}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('verdict:', d.get('verdict'), '| attack:', d.get('attack_type'), '| severity:', d.get('severity'))"
+# Kỳ vọng: verdict: malicious | attack: brute_force | severity: high
+```
+
+---
+
 ### Lưu ý quan trọng khi demo
 
 > **SOAR tạo case pending_approval, KHÔNG tự execute:** Với `SOAR_HITL_SEVERITY=high`, tất cả KB1-KB4 (severity high/critical) đều yêu cầu admin duyệt. Admin nhận email hoặc vào `http://localhost:18081/security` để chọn hành động.
@@ -846,7 +949,8 @@ python3 tests/seed_db.py
 | Nguồn phát hiện | Cơ chế |
 |-----------------|--------|
 | **Heuristic Poller** | Poll Loki mỗi 60s, 9 regex rules (brute_force, lateral_movement, fraud_gate_bypass, cryptomining...) |
-| **Grafana Webhook** | Grafana alert fire → POST `/grafana-webhook` → SOAR parse `attack_type` từ alert label |
+| **Grafana Webhook** | Grafana alert fire → POST `/grafana-webhook` → SOAR parse `attack_type` từ alert label (KB1-KB4) |
+| **AI Analyzer** | Scenario test POST `/analyze` → OpenAI→Gemini→Heuristic chain → nếu severity ≥ high → POST `/alerts` → SOAR case |
 
 | Severity | Hành động SOAR |
 |----------|----------------|
@@ -1177,7 +1281,26 @@ curl -s -H "Authorization: Bearer $TOKEN" \
   "http://localhost:18080/transactions?account_id=ACC-1001&limit=5"
 ```
 
-### Cập nhật code SOAR/web-portal (hot-patch qua ConfigMap)
+### AI Analyzer không phản hồi (port 18082)
+
+```bash
+# Kiểm tra pod
+kubectl --context ctx-aws get pod -n plg-stack -l app=ai-analyzer
+
+# Xem log
+kubectl --context ctx-aws logs -n plg-stack deployment/ai-analyzer --tail=30
+
+# Restart nếu cần
+kubectl --context ctx-aws rollout restart deployment/ai-analyzer -n plg-stack
+kubectl --context ctx-aws rollout status deployment/ai-analyzer -n plg-stack
+
+# Kiểm tra port-forward daemon
+bash scripts/open-admin-uis.sh status | grep "AI Analyzer"
+# Nếu daemon không chạy:
+bash scripts/open-admin-uis.sh stop && bash scripts/open-admin-uis.sh
+```
+
+### Cập nhật code SOAR/web-portal/AI Analyzer (hot-patch qua ConfigMap)
 
 Hệ thống dùng ConfigMap để mount code vào pod, không cần rebuild Docker image:
 
@@ -1187,6 +1310,12 @@ kubectl --context ctx-aws create configmap soar-main-patch \
   -n plg-stack --from-file=main.py=services/soar-engine/main.py \
   --dry-run=client -o yaml | kubectl --context ctx-aws apply -f -
 kubectl --context ctx-aws rollout restart deployment/soar-engine -n plg-stack
+
+# Cập nhật ai-analyzer main.py
+kubectl --context ctx-aws create configmap ai-analyzer-patch \
+  -n plg-stack --from-file=main.py=services/ai-analyzer/main.py \
+  --dry-run=client -o yaml | kubectl --context ctx-aws apply -f -
+kubectl --context ctx-aws rollout restart deployment/ai-analyzer -n plg-stack
 
 # Cập nhật web-portal main.py
 kubectl --context ctx-aws create configmap patch-web-portal \
