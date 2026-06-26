@@ -84,18 +84,32 @@ ALLOWED_PLAYBOOKS = {
     "monitor_only",
 }
 
-# Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn)
+# Tên hiển thị thân thiện cho từng loại tấn công (dùng trong email, không dùng "kịch bản")
+ATTACK_DISPLAY_NAMES: dict[str, str] = {
+    "brute_force":          "Brute Force Login (T1110.001)",
+    "credential_stuffing":  "Credential Stuffing (T1110.004)",
+    "jwt_replay":           "JWT Token Replay (T1539)",
+    "fraud_gate_bypass":    "Fraud Gate Bypass (T1078.004)",
+    "lateral_movement":     "Lateral Movement — Invalid SVID (T1021.007)",
+    "cryptomining":         "Cryptomining Detected (T1496)",
+    "port_scan":            "Port Scan Detected (T1046)",
+    "exploit_probe":        "Exploit Probe / Injection (T1203)",
+    "large_response":       "Data Exfiltration — Large Response (T1041)",
+    "access_denied":        "Access Denied Spike (T1078)",
+}
+
+# Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn, không giới hạn)
 SUGGESTED_PLAYBOOKS: dict[str, list[str]] = {
-    "brute_force":          ["revoke_user_sessions", "block_source_ip", "monitor_only"],
-    "credential_stuffing":  ["revoke_user_sessions", "block_source_ip", "monitor_only"],
-    "jwt_replay":           ["revoke_user_sessions", "block_source_ip", "monitor_only"],
-    "fraud_gate_bypass":    ["isolate_workload", "block_source_ip", "monitor_only"],
-    "lateral_movement":     ["isolate_workload", "block_source_ip", "monitor_only"],
-    "cryptomining":         ["quarantine_workload", "block_source_ip", "monitor_only"],
-    "port_scan":            ["block_source_ip", "monitor_only"],
-    "exploit_probe":        ["block_source_ip", "isolate_workload", "monitor_only"],
-    "large_response":       ["restrict_egress", "block_source_ip", "monitor_only"],
-    "access_denied":        ["block_source_ip", "monitor_only"],
+    "brute_force":          ["revoke_user_sessions", "block_source_ip", "isolate_workload", "monitor_only"],
+    "credential_stuffing":  ["revoke_user_sessions", "block_source_ip", "isolate_workload", "monitor_only"],
+    "jwt_replay":           ["revoke_user_sessions", "block_source_ip", "isolate_workload", "monitor_only"],
+    "fraud_gate_bypass":    ["isolate_workload", "restrict_egress", "block_source_ip", "revoke_user_sessions", "monitor_only"],
+    "lateral_movement":     ["isolate_workload", "restrict_egress", "block_source_ip", "revoke_user_sessions", "monitor_only"],
+    "cryptomining":         ["quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
+    "port_scan":            ["block_source_ip", "isolate_workload", "monitor_only"],
+    "exploit_probe":        ["block_source_ip", "isolate_workload", "restrict_egress", "monitor_only"],
+    "large_response":       ["restrict_egress", "quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
+    "access_denied":        ["block_source_ip", "isolate_workload", "monitor_only"],
 }
 
 PLAYBOOK_LABELS: dict[str, str] = {
@@ -106,6 +120,18 @@ PLAYBOOK_LABELS: dict[str, str] = {
     "revoke_user_sessions": "Thu hồi phiên đăng nhập",
     "monitor_only":         "Chỉ theo dõi",
 }
+
+
+def _clean_alert_name(raw: str, attack_type: str = "") -> str:
+    """Trả về tên alert sạch, không có tiền tố 'Kịch bản N —' hay 'Heuristic:'."""
+    import re as _re
+    # Bỏ tiền tố "Kịch bản N — " hoặc "Kịch bản N - "
+    cleaned = _re.sub(r'^Kịch bản \d+\s*[—–\-]+\s*', '', raw).strip()
+    # Nếu vẫn còn hoặc rỗng → dùng display name của attack_type
+    if not cleaned or cleaned == raw:
+        cleaned = ATTACK_DISPLAY_NAMES.get(attack_type, raw)
+    return cleaned
+
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(message)s")
 logger = logging.getLogger(APP_NAME)
@@ -991,7 +1017,7 @@ async def _process_heuristic_alert(alert: SecurityAlert) -> CaseRecord:
         _HITL_QUEUE[case_id] = (case, playbook, target)
         await _send_hitl_email(
             case=case,
-            alert_name=f"Heuristic: {attack}",
+            alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
             mitre=PLAYBOOK_BY_ATTACK.get(attack, "—"),
             log_lines=alert.evidence,
         )
@@ -1403,7 +1429,7 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
             lbs = alert_data.get("labels", {})
             await _send_hitl_email(
                 case       = case,
-                alert_name = lbs.get("alertname", attack),
+                alert_name = _clean_alert_name(lbs.get("alertname", attack), attack),
                 mitre      = lbs.get("mitre", "—"),
                 log_lines  = ann.get("description", "").splitlines(),
             )

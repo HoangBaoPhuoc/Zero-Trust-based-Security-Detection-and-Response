@@ -130,18 +130,18 @@ const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
 let allCases = [];
 let blockedIPs = [];
 
-// Danh sách playbooks gợi ý cho từng loại tấn công
+// Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn tùy ý)
 const SUGGESTED_PLAYBOOKS = {
-  brute_force:          ['revoke_user_sessions', 'block_source_ip', 'monitor_only'],
-  credential_stuffing:  ['revoke_user_sessions', 'block_source_ip', 'monitor_only'],
-  jwt_replay:           ['revoke_user_sessions', 'block_source_ip', 'monitor_only'],
-  fraud_gate_bypass:    ['isolate_workload', 'block_source_ip', 'monitor_only'],
-  lateral_movement:     ['isolate_workload', 'block_source_ip', 'monitor_only'],
-  cryptomining:         ['quarantine_workload', 'block_source_ip', 'monitor_only'],
-  port_scan:            ['block_source_ip', 'monitor_only'],
-  exploit_probe:        ['block_source_ip', 'isolate_workload', 'monitor_only'],
-  large_response:       ['restrict_egress', 'block_source_ip', 'monitor_only'],
-  access_denied:        ['block_source_ip', 'monitor_only'],
+  brute_force:          ['revoke_user_sessions', 'block_source_ip', 'isolate_workload', 'monitor_only'],
+  credential_stuffing:  ['revoke_user_sessions', 'block_source_ip', 'isolate_workload', 'monitor_only'],
+  jwt_replay:           ['revoke_user_sessions', 'block_source_ip', 'isolate_workload', 'monitor_only'],
+  fraud_gate_bypass:    ['isolate_workload', 'restrict_egress', 'block_source_ip', 'revoke_user_sessions', 'monitor_only'],
+  lateral_movement:     ['isolate_workload', 'restrict_egress', 'block_source_ip', 'revoke_user_sessions', 'monitor_only'],
+  cryptomining:         ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  port_scan:            ['block_source_ip', 'isolate_workload', 'monitor_only'],
+  exploit_probe:        ['block_source_ip', 'isolate_workload', 'restrict_egress', 'monitor_only'],
+  large_response:       ['restrict_egress', 'quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  access_denied:        ['block_source_ip', 'isolate_workload', 'monitor_only'],
 };
 const PLAYBOOK_LABELS = {
   isolate_workload:     '🔒 Cô lập dịch vụ',
