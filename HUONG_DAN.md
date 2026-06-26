@@ -633,7 +633,7 @@ PY
 
 **Chuỗi sự kiện:**
 1. 20 log `response_code=401` vào Loki
-2. Grafana alert "Kịch bản 1 — Brute Force Login" → FIRING
+2. Grafana alert "Brute Force Login (T1110.001)" → FIRING
 3. SOAR webhook: `attack_type=brute_force, severity=high` → case `pending_approval`
 4. Email gửi admin với tên alert **"Brute Force Login (T1110.001)"** và 4 nút: `Thu hồi phiên`, `Chặn IP nguồn`, `Cô lập dịch vụ`, `Chỉ theo dõi`
 5. Admin chọn hành động tại email hoặc web portal `/security`
@@ -686,7 +686,7 @@ PY
 
 **Chuỗi sự kiện:**
 1. 5 log `opa_result=false, attack_scenario=lateral_movement` push vào Loki
-2. Grafana alert "Kịch bản 2" → FIRING (phân biệt với KB3 nhờ stream label)
+2. Grafana alert "Lateral Movement — Invalid SVID (T1021.007)" → FIRING (phân biệt với KB3 nhờ stream label)
 3. SOAR: `attack_type=lateral_movement, severity=critical` → case `pending_approval`
 4. Email admin với tên alert **"Lateral Movement — Invalid SVID (T1021.007)"** và 5 nút: `Cô lập dịch vụ`, `Hạn chế lưu lượng ra`, `Chặn IP nguồn`, `Thu hồi phiên`, `Chỉ theo dõi`
 5. Admin chọn → nếu `Cô lập dịch vụ`: payment-service selector bị patch → 503
@@ -739,7 +739,7 @@ PY
 
 **Chuỗi sự kiện:**
 1. 5 log `opa_result=false, attack_scenario=fraud_gate_bypass` push vào Loki
-2. Grafana alert "Kịch bản 3" → FIRING (phân biệt với KB2 nhờ stream label `attack_scenario`)
+2. Grafana alert "Fraud Gate Bypass (T1078.004)" → FIRING (phân biệt với KB2 nhờ stream label `attack_scenario`)
 3. SOAR: `attack_type=fraud_gate_bypass, severity=critical` → case `pending_approval`
 4. Email admin với tên alert **"Fraud Gate Bypass (T1078.004)"** và 5 nút: `Cô lập dịch vụ`, `Hạn chế lưu lượng ra`, `Chặn IP nguồn`, `Thu hồi phiên`, `Chỉ theo dõi`
 5. Admin chọn → nếu `Cô lập dịch vụ`: payment-service selector bị patch → 503
@@ -791,7 +791,7 @@ PY
 
 **Chuỗi sự kiện:**
 1. 5 log `bytes_sent=3100000` (JSON body) push vào Loki
-2. Grafana alert "Kịch bản 4" → FIRING
+2. Grafana alert "Data Exfiltration — Large Response (T1041)" → FIRING
 3. SOAR: `attack_type=large_response, severity=high` → case `pending_approval`
 4. Email admin với tên alert **"Data Exfiltration — Large Response (T1041)"** và 5 nút: `Hạn chế lưu lượng ra`, `Cách ly workload`, `Cô lập dịch vụ`, `Chặn IP nguồn`, `Chỉ theo dõi`
 5. Admin chọn `Hạn chế lưu lượng ra` → core-banking (OpenStack) scale xuống 0 replicas
@@ -949,10 +949,10 @@ for c in cases[-10:]:
 
 | Alert | Severity | attack_type → Playbook đề xuất |
 |-------|----------|-------------------------------|
-| Kịch bản 1 — Brute Force Login | high | brute_force → revoke_user_sessions |
-| Kịch bản 2 — Lateral Movement | critical | lateral_movement → isolate_workload |
-| Kịch bản 3 — Fraud Gate Bypass | critical | fraud_gate_bypass → isolate_workload |
-| Kịch bản 4 — Data Exfiltration | high | large_response → restrict_egress |
+| Brute Force Login (T1110.001) | high | brute_force → revoke_user_sessions |
+| Lateral Movement — Invalid SVID (T1021.007) | critical | lateral_movement → isolate_workload |
+| Fraud Gate Bypass (T1078.004) | critical | fraud_gate_bypass → isolate_workload |
+| Data Exfiltration — Large Response (T1041) | high | large_response → restrict_egress |
 | Access Denied Spike | high | access_denied → block_source_ip |
 | SOAR Engine Health | warning | — (monitor only) |
 
