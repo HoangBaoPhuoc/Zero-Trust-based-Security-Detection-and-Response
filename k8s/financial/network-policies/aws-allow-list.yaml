@@ -41,6 +41,14 @@ spec:
           protocol: TCP
         - port: 6379
           protocol: TCP
+    # SOAR engine (plg-stack) → Redis (financial) for case persistence
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 6379
+          protocol: TCP
   egress:
     - to:
         - namespaceSelector:
@@ -174,6 +182,8 @@ spec:
       ports:
         - port: 15006
           protocol: TCP
+        - port: 6379
+          protocol: TCP
     - to:
         - ipBlock:
             cidr: 10.43.0.1/32
@@ -188,15 +198,16 @@ spec:
         - port: 6443
           protocol: TCP
     # Prometheus scrape OpenStack services via WireGuard (os-k3s-master 192.168.101.11)
+    # 30084=core-banking HTTP, 30086=account-service HTTP, 30087=transaction-service HTTP
     - to:
         - ipBlock:
             cidr: 192.168.101.11/32
       ports:
         - port: 30084
           protocol: TCP
-        - port: 30082
+        - port: 30086
           protocol: TCP
-        - port: 30083
+        - port: 30087
           protocol: TCP
     # SMTP egress — Grafana gửi email alert qua Gmail
     - to:
