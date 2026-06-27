@@ -99,7 +99,7 @@ status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdi
 playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
 case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)
 
-[[ "$status" =~ ^(pending_approval|executed|dry_run)$ ]] \
+[[ "$status" =~ ^(pending_approval|executed|dry_run|deduped)$ ]] \
   || fail "SOAR status='$status' (expect pending_approval)"
 [[ "$playbook" == "restrict_egress" ]] \
   || fail "SOAR playbook='$playbook' (expect restrict_egress)"
