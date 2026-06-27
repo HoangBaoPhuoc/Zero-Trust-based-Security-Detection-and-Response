@@ -246,6 +246,8 @@ curl -s http://localhost:8180/realms/ztlab/.well-known/openid-configuration >/de
   && echo "Keycloak OK" || echo "Keycloak FAIL"
 ```
 
+> **Lưu ý dedup**: SOAR giới hạn 1 case mỗi attack_type trong 5 phút. Nếu chạy cùng kịch bản 2 lần liên tiếp, lần thứ 2 sẽ trả `status=deduped` — script vẫn in `PASS` và trả về case_id gốc. Đây là hành vi đúng, không phải lỗi.
+
 **Mở 3 terminal song song để theo dõi**:
 
 ```bash
@@ -293,15 +295,16 @@ bash tests/grafana_kb1_brute_force.sh
 ### Bước 2: Output terminal mong đợi
 
 ```
-[KB1_brute_force] Bước 1: kiểm tra Keycloak và SOAR...
-[KB1_brute_force] Bước 2: gửi 20 lần đăng nhập sai mật khẩu...
-[KB1_brute_force] Keycloak chặn 20/20 — xác thực Zero Trust hoạt động đúng
-[KB1_brute_force] Bước 3: đẩy envoy-access log vào Loki (Grafana query: job=envoy-access, response_code=401)...
-[KB1_brute_force] 5 log 401 đã vào Loki — Grafana rule sẽ evaluate trong ≤1 phút
-[KB1_brute_force] Bước 4: mô phỏng Grafana 'Brute Force Login' alert → SOAR webhook...
-[KB1_brute_force] Bước 5: kiểm tra SOAR case được tạo...
+[KB1_brute_force] Keycloak chặn 20/20 (401)
 [KB1_brute_force] PASS: KB1 Brute Force | blocked=20/20 | SOAR case=case-XXXXXXXXXXXXXXX status=pending_approval playbook=revoke_user_sessions (T1110.001)
 ```
+
+> Nếu chạy lại trong vòng 5 phút (SOAR dedup window), `status=deduped` — đây là PASS bình thường. Script trả lại case_id gốc.
+>
+> ```
+> [KB1_brute_force] Keycloak chặn 20/20 (401)
+> [KB1_brute_force] PASS: KB1 Brute Force | blocked=20/20 | SOAR case=case-XXXXXXXXXXXXXXX status=deduped playbook=revoke_user_sessions (T1110.001)
+> ```
 
 ### Bước 3: Kiểm tra Grafana
 
@@ -393,19 +396,11 @@ bash tests/grafana_kb2_fraud_gate.sh
 ### Bước 2: Output terminal mong đợi
 
 ```
-[KB2_fraud_gate] Bước 1: kiểm tra API Gateway và SOAR...
-[KB2_fraud_gate] Bước 2: lấy JWT testuser01...
-[KB2_fraud_gate] Bước 3: gửi giao dịch 500,000,000 VND qua TOR channel (fraud_score sẽ ≥75)...
-[KB2_fraud_gate] API Gateway trả về HTTP 403 (expect 403 — fraud gate blocked)
-[KB2_fraud_gate] Fraud gate verdict: ?
-[KB2_fraud_gate] Bước 4: đẩy opa-decisions log vào Loki (Grafana query: opa_result=false, attack_scenario=fraud_gate_bypass)...
-[KB2_fraud_gate] OPA fraud_gate_bypass log đã vào Loki
-[KB2_fraud_gate] Bước 5: mô phỏng Grafana 'Fraud Gate Bypass' alert → SOAR webhook...
-[KB2_fraud_gate] Bước 6: kiểm tra SOAR case...
+[KB2_fraud_gate] POST /payments 500M tor → HTTP 403 (fraud: ?)
 [KB2_fraud_gate] PASS: KB2 Fraud Gate | HTTP 403 blocked | SOAR case=case-XXXXXXXXXXXXXXX status=pending_approval playbook=isolate_workload (T1078.004)
 ```
 
-> `Fraud gate verdict: ?` là bình thường — script lấy verdict từ response lần đầu (trước khi lấy http_code), response lúc đó chưa parse được. Bằng chứng thật nằm ở `HTTP 403` và curl xác minh thủ công bên dưới.
+> `fraud: ?` là bình thường — API response bọc verdict trong `detail.fraud.verdict`. Bằng chứng thật nằm ở `HTTP 403`, xem chi tiết ở bước "Xác minh thủ công" bên dưới.
 
 **Nếu thấy `HTTP 503`** thay vì `403`:
 ```bash
@@ -503,16 +498,9 @@ bash tests/grafana_kb3_lateral_movement.sh
 ### Bước 2: Output terminal mong đợi
 
 ```
-[KB3_lateral_movement] Bước 1: kiểm tra API Gateway và SOAR...
-[KB3_lateral_movement] Bước 2: gửi request với SVID giả...
-[KB3_lateral_movement] API Gateway trả về HTTP 403 (expect 401/403/404)   ← THẬT
-[KB3_lateral_movement] Bước 2b: gửi thêm request không có SVID hợp lệ...
-[KB3_lateral_movement] Lateral movement attempt 2: HTTP 403
-[KB3_lateral_movement] Bước 3: đẩy opa-decisions log vào Loki...
-[KB3_lateral_movement] OPA lateral_movement log đã vào Loki
-[KB3_lateral_movement] Bước 4: mô phỏng Grafana 'Lateral Movement' → SOAR webhook...
-[KB3_lateral_movement] Bước 5: kiểm tra SOAR case...
-[KB3_lateral_movement] PASS: KB3 Lateral Movement | API GW 403 | SOAR case=case-XXXXX status=pending_approval playbook=isolate_workload (T1021.007)
+[KB3_lateral_movement] SVID ztlab.local/notification-service → HTTP 403
+[KB3_lateral_movement] SVID evil.domain/attacker → HTTP 403
+[KB3_lateral_movement] PASS: KB3 Lateral Movement | SVID blocked HTTP 403 | SOAR case=case-XXXXX status=pending_approval playbook=isolate_workload (T1021.007)
 ```
 
 ### Bước 3: Xác minh SVID enforcement thủ công
@@ -590,18 +578,11 @@ bash tests/grafana_kb4_exfiltration.sh
 ### Bước 2: Output terminal mong đợi
 
 ```
-[KB4_exfiltration] Bước 1: kiểm tra API Gateway và SOAR...
-[KB4_exfiltration] Bước 2: lấy JWT testuser01 rồi kéo transaction history lặp lại nhiều lần...
-[KB4_exfiltration] ▶ 10 request bulk data — tổng bytes nhận: 15546 bytes từ API Financial   ← THẬT
-[KB4_exfiltration]   (trong môi trường production, request tương tự tới core-banking sẽ trả response MB-level)
-[KB4_exfiltration] Bước 3: đẩy envoy-access log vào Loki (bytes_sent=15546 đo thực + giả lập core-banking 2MB)...
-[KB4_exfiltration] Log đã vào Loki (real: 15546B từ api-gateway + simulated: 3.5MB từ core-banking)
-[KB4_exfiltration] Bước 4: mô phỏng Grafana 'Data Exfiltration' → SOAR webhook...
-[KB4_exfiltration] Bước 5: kiểm tra SOAR case...
+[KB4_exfiltration] 10 bulk requests → 15546 bytes
 [KB4_exfiltration] PASS: KB4 Exfiltration | real: 15546B từ 10 requests | SOAR case=case-XXXXX status=pending_approval playbook=restrict_egress (T1041)
 ```
 
-**Ghi chú tính trung thực**: `15546 bytes` = đo thực từ `/transactions` và `/accounts/balance`. Core-banking ~3.5MB = inject mô phỏng (Grafana threshold 1MB cần inject để trigger alert trong lab setup thiếu Envoy sidecar thật).
+> `15546 bytes` = đo thực từ 10 lần gọi `/transactions` và `/accounts/balance`. Script cũng inject thêm log mô phỏng core-banking ~3.5MB vào Loki để đạt threshold 1MB của Grafana rule.
 
 ### Bước 3: Đo bytes thực thủ công
 
@@ -677,21 +658,14 @@ bash tests/grafana_kb5_access_denied.sh
 ### Bước 2: Output terminal mong đợi
 
 ```
-[KB5_access_denied] Bước 1: kiểm tra API Gateway và SOAR...
-[KB5_access_denied] Bước 2: lấy JWT merchant01 (role: financial-read only)...
-[KB5_access_denied]   merchant01 roles: ['financial-read']  ← chỉ có financial-read   ← THẬT
-[KB5_access_denied] Bước 3: merchant01 thử POST /payments (cần financial-write) → OPA RBAC từ chối...
-[KB5_access_denied]   POST /payments amount=100000 → HTTP 403  ← OPA RBAC deny         ← THẬT
-[KB5_access_denied]   POST /payments amount=50000  → HTTP 403  ← OPA RBAC deny
-[KB5_access_denied]   POST /payments amount=200000 → HTTP 403  ← OPA RBAC deny
-[KB5_access_denied]   POST /payments amount=75000  → HTTP 403  ← OPA RBAC deny
-[KB5_access_denied]   POST /payments amount=1000000→ HTTP 403  ← OPA RBAC deny
-[KB5_access_denied]   POST /payments amount=5000   → HTTP 403  ← OPA RBAC deny
-[KB5_access_denied] ▶ OPA RBAC từ chối 6/6 request — merchant01 vi phạm least-privilege
-[KB5_access_denied] Bước 4: đẩy OPA deny log vào Loki (format khớp Grafana rule)...
-[KB5_access_denied] 6 OPA deny log đã vào Loki — Grafana rule sẽ fire
-[KB5_access_denied] Bước 5: mô phỏng Grafana 'Access Denied Spike' → SOAR webhook...
-[KB5_access_denied] Bước 6: kiểm tra SOAR case...
+[KB5_access_denied] merchant01 roles: ['financial-read']
+[KB5_access_denied]   POST /payments 100000 → HTTP 403
+[KB5_access_denied]   POST /payments 50000 → HTTP 403
+[KB5_access_denied]   POST /payments 200000 → HTTP 403
+[KB5_access_denied]   POST /payments 75000 → HTTP 403
+[KB5_access_denied]   POST /payments 1000000 → HTTP 403
+[KB5_access_denied]   POST /payments 5000 → HTTP 403
+[KB5_access_denied] OPA RBAC từ chối 6/6 (403)
 [KB5_access_denied] PASS: KB5 Access Denied | OPA RBAC THẬT: 6/6 từ chối | SOAR case=case-XXXXX status=pending_approval playbook=block_source_ip (T1078)
 ```
 
@@ -848,32 +822,23 @@ bash tests/grafana_kb6_privilege_escalation.sh
 ### Bước 4: Output terminal mong đợi
 
 ```
-[KB6_privilege_escalation] Bước 1: kiểm tra SOAR và Loki...
-[KB6_privilege_escalation] Bước 2: kiểm tra THẬT pod security context của api-gateway (ctx-aws)...
 [KB6_privilege_escalation]   Pod: api-gateway-XXXXXXX
-[KB6_privilege_escalation]   id: uid=0(root) gid=0(root) groups=0(root)             ← THẬT
-[KB6_privilege_escalation]   CapEff: 0x00000000a80425fb                             ← THẬT
-[KB6_privilege_escalation]   Capabilities active: ['CHOWN', 'DAC_OVERRIDE', ...]
+[KB6_privilege_escalation]   id: uid=0(root) gid=0(root) groups=0(root)
+[KB6_privilege_escalation]   CapEff: 0x00000000a80425fb
+[KB6_privilege_escalation]   Capabilities active: ['CHOWN', 'DAC_OVERRIDE', 'FOWNER', ...]
 [KB6_privilege_escalation]   ⚠ DANGEROUS caps: ['SETUID', 'DAC_OVERRIDE']
-[KB6_privilege_escalation]   ⚠ CÓ THỂ ĐỌC /etc/shadow (3 dòng) — CAP_DAC_OVERRIDE  ← THẬT
-[KB6_privilege_escalation]   setuid(0): setuid(0) OK                                 ← THẬT
-[KB6_privilege_escalation]   securityContext.runAsNonRoot:  (should be true)         ← THẬT (chưa set)
+[KB6_privilege_escalation]   ⚠ CÓ THỂ ĐỌC /etc/shadow (3 dòng) — CAP_DAC_OVERRIDE bypass permission
+[KB6_privilege_escalation]   setuid(0): setuid(0) OK
+[KB6_privilege_escalation]   runAsNonRoot: 
+[KB6_privilege_escalation]   allowPrivilegeEscalation: 
 [KB6_privilege_escalation] ▶ VI PHẠM Zero Trust workload isolation xác nhận:
 [KB6_privilege_escalation]   • Pod chạy root (uid=0) — vi phạm least-privilege principle
-[KB6_privilege_escalation]   • CAP_DAC_OVERRIDE cho phép đọc /etc/shadow
+[KB6_privilege_escalation]   • CAP_DAC_OVERRIDE cho phép đọc /etc/shadow — leo thang đặc quyền thực tế
 [KB6_privilege_escalation]   • runAsNonRoot không được set — container không bị ràng buộc
-[KB6_privilege_escalation] Bước 3: đẩy audit log thực tế vào Loki...
-[KB6_privilege_escalation] 5 audit finding da vao Loki (du lieu tu kubectl exec thuc te)
-[KB6_privilege_escalation] Bước 4: mô phỏng Grafana 'Privilege Escalation' → SOAR webhook...
-[KB6_privilege_escalation] Bước 5: kiểm tra SOAR case...
-[KB6_privilege_escalation] PASS: KB6 Privilege Escalation | THẬT: uid=0 CapEff=0xa80425fb shadow=true | SOAR case=case-XXXXX status=pending_approval playbook=quarantine_workload (T1611)
-[KB6_privilege_escalation]   Khuyến nghị fix:
-[KB6_privilege_escalation]     securityContext:
-[KB6_privilege_escalation]       runAsNonRoot: true
-[KB6_privilege_escalation]       runAsUser: 1000
-[KB6_privilege_escalation]       allowPrivilegeEscalation: false
-[KB6_privilege_escalation]       capabilities: {drop: [ALL]}
+[KB6_privilege_escalation] PASS: KB6 Privilege Escalation | THẬT: uid=0 CapEff=0x00000000a80425fb shadow=true | SOAR case=case-XXXXX status=pending_approval playbook=quarantine_workload (T1611)
 ```
+
+> `runAsNonRoot:` và `allowPrivilegeEscalation:` hiển thị trống — đây là bằng chứng securityContext chưa được cấu hình (chưa set = container không bị ràng buộc).
 
 ### Bước 5: Xem audit log trong Grafana
 
@@ -1402,6 +1367,14 @@ Vào **http://localhost:3000 → Alerting → Alert rules → folder ZTLab**:
 
 > **Lưu ý dedup**: Nếu thấy `"status": "deduped"` trong SOAR response — đây là hoạt động đúng. Case gốc đã được tạo bởi script hoặc Grafana real alert trước đó.
 
+#### Source_ip trong email HITL
+
+SOAR lấy `source_ip` từ 2 nguồn theo thứ tự ưu tiên:
+1. Label `source_ip` trong Grafana webhook payload (scripts đặt sẵn)
+2. Nếu không có → extract tự động từ Loki log evidence (regex `source_ip":"10.x.x.x"`)
+
+Email HITL hiển thị source_ip trong bảng thông tin tấn công. Nếu extract từ evidence (không phải từ label), sẽ có ghi chú nhỏ `(từ log evidence)`.
+
 #### Xem source_ip trong SOAR case
 
 Sau khi chạy KB script, source_ip sẽ xuất hiện trong SOAR case:
@@ -1427,9 +1400,19 @@ for c in cases[-6:]:
 
 ## 18. Xử lý sự cố thường gặp
 
-### Nhiều alert cùng kịch bản (dedup)
+### Script trả về `status=deduped` — PASS hay FAIL?
 
-Grafana real alert rules cũng fire sau khi log vào Loki (delay ~1 phút). SOAR dedup 5 phút / attack_type để tránh tạo case trùng. Nếu thấy `status=deduped` trong response — bình thường.
+**PASS bình thường.** SOAR dedup 5 phút / attack_type. Nếu chạy lại trong 5 phút (hoặc Grafana real alert fire sau ~1 phút), case đã có → script nhận `status=deduped` và in PASS. Case gốc vẫn còn trong `/cases`.
+
+```bash
+# Xem case gốc
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json; cases=json.load(sys.stdin)
+for c in cases[-3:]: print(c['case_id'], '|', c['attack_type'], '|', c['status'])
+"
+```
+
+Để tạo case mới (reset dedup), đợi 5 phút hoặc chạy kịch bản khác trước.
 
 ### Port-forward mất kết nối
 
@@ -1515,4 +1498,4 @@ bash scripts/deploy-all.sh
 
 ---
 
-*Cập nhật: 2026-06-27 — 6 kịch bản Grafana-only, AI Analyzer disabled, SOAR dedup 5 phút, source_ip trong alert labels*
+*Cập nhật: 2026-06-27 — output scripts gọn (không có "Bước X:"), status=deduped accepted, source_ip extract từ Loki evidence, SOAR dedup 5 phút/attack_type*
