@@ -1,7 +1,7 @@
 # Báo Cáo Demo Hệ Thống ZTLab
 ## Zero Trust Security Detection & Response for Microservices in Multi-Cloud
 
-> **Môn học:** NT114.Q21.ANTT — Bảo mật hệ thống thông tin  
+> **Môn học:** NT114.Q21.ANTT — Đồ án chuyên ngành  
 > **Sinh viên:** Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)  
 > **Giảng viên hướng dẫn:** ThS. Đỗ Thị Phương Uyên  
 > **Ngày thực hiện demo:** 2026-06-27
@@ -69,6 +69,7 @@ Hệ thống Zero Trust được xây dựng từ 4 lớp kiểm soát chính, h
   "exp": 1782555600
 }
 ```
+> 📁 **Nguồn:** Giải mã JWT bằng lệnh `echo $TOKEN | cut -d. -f2 | base64 -d | python3 -m json.tool` — lấy token từ bước đăng nhập Keycloak (POST `/realms/ztlab/protocol/openid-connect/token`)
 
 Trường `roles` này được OPA (lớp tiếp theo) dùng để quyết định người dùng được làm gì.
 
@@ -81,6 +82,7 @@ WARN [org.keycloak.events]
   username="testuser01"
   ipAddress="127.0.0.1"
 ```
+> 📁 **Nguồn:** `kubectl --context ctx-aws logs -n identity <keycloak-pod> | grep LOGIN_ERROR`
 
 Đây là bằng chứng của mỗi lần thử brute force — 20 lần thất bại sẽ có 20 dòng log như vậy.
 
@@ -98,6 +100,7 @@ WARN [org.keycloak.events]
 trust_domain = "ztlab.local"    ← ranh giới tin cậy
 default_x509_svid_ttl = "1h"   ← mỗi chứng chỉ chỉ sống 1 giờ, tự động gia hạn
 ```
+> 📁 **Nguồn:** file `spire/server/server.conf`
 
 SPIRE xác thực node thông qua Kubernetes API (k8s_psat) — không có password cứng nào trong config.
 
@@ -112,6 +115,7 @@ spiffe://ztlab.local/openstack/core-banking
 spiffe://ztlab.local/openstack/account-service
 spiffe://ztlab.local/openstack/transaction-service
 ```
+> 📁 **Nguồn:** file `spire/server/server.conf` (registration entries) — xác minh live bằng `kubectl --context ctx-aws exec -n spire <spire-agent-pod> -- /opt/spire/bin/spire-agent api fetch x509 -socketPath /run/spire/sockets/agent.sock`
 
 Mỗi ID này được gắn vào một chứng chỉ X.509 thực sự. Khi payment-service gọi core-banking, core-banking đọc chứng chỉ của caller và biết chính xác đó là `spiffe://ztlab.local/aws/payment-service` — không thể giả mạo.
 
@@ -126,6 +130,7 @@ msg="Successfully reattested node"
   agent_id="spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/ce6be52e-..."
   node_attestor_type=k8s_psat
 ```
+> 📁 **Nguồn:** `kubectl --context ctx-aws logs -n spire <spire-server-pod> | grep -E "Renewing|reattested"`
 
 Node re-attest mỗi ~25 phút — SPIRE **liên tục** xác minh identity, đây là bằng chứng của nguyên tắc *Continuous Verification*.
 
@@ -144,6 +149,7 @@ Node re-attest mỗi ~25 phút — SPIRE **liên tục** xác minh identity, đ�
 ```yaml
 require_client_certificate: true   ← bắt buộc caller phải trình cert
 ```
+> 📁 **Nguồn:** file `envoy/envoy-sidecar.yaml` — block `transport_socket` → `downstream_tls_context`
 
 **2. Gọi OPA kiểm tra quyền** — sau khi xác thực TLS, Envoy gọi OPA qua gRPC trước khi forward request vào app:
 
@@ -151,6 +157,7 @@ require_client_certificate: true   ← bắt buộc caller phải trình cert
 failure_mode_allow: false   ← nếu OPA lỗi/timeout → TỪ CHỐI, không bao giờ để qua
 timeout: 2s
 ```
+> 📁 **Nguồn:** file `envoy/envoy-sidecar.yaml` — block `http_filters` → `envoy.filters.http.ext_authz`
 
 `failure_mode_allow: false` là một quyết định quan trọng: thà từ chối nhầm còn hơn để lọt request khi hệ thống kiểm soát đang có vấn đề.
 
@@ -168,6 +175,7 @@ timeout: 2s
   "svid": "spiffe://ztlab.local/aws/api-gateway"
 }
 ```
+> 📁 **Nguồn:** `kubectl --context ctx-aws logs -n financial <pod-name> -c envoy` — format JSON được định nghĩa trong `envoy/envoy-sidecar.yaml` → block `access_log`
 
 Trường `svid` cho biết chính xác caller là ai (identity mật mã, không thể giả). Trường `bytes_sent` được dùng để phát hiện data exfiltration. Log này được Promtail thu thập và đẩy vào Loki.
 
@@ -178,6 +186,7 @@ Trường `svid` cho biết chính xác caller là ai (identity mật mã, khôn
 /transactions/execute → core-banking (OpenStack, qua WireGuard)
 /notify             → notification-service
 ```
+> 📁 **Nguồn:** file `envoy/envoy-sidecar.yaml` — listener `:15001` (outbound) → block `route_config` → `virtual_hosts`
 
 ---
 
@@ -190,6 +199,7 @@ Trường `svid` cho biết chính xác caller là ai (identity mật mã, khôn
 ```rego
 default allow = false    ← mặc định từ chối tất cả
 ```
+> 📁 **Nguồn:** file `opa/policies/zta_policy.rego` — dòng đầu tiên của package `zta.authz`
 
 Có nghĩa là: trừ khi có rule nào đó chủ động cho phép, mọi request đều bị từ chối. Đây là *deny-by-default* — nguyên tắc cốt lõi của Zero Trust.
 
@@ -209,6 +219,7 @@ financial-read  → chỉ GET, OPTIONS
 financial-write → GET, OPTIONS, POST, PUT
 security-admin  → GET, OPTIONS, POST, PUT, DELETE
 ```
+> 📁 **Nguồn:** file `opa/policies/zta_policy.rego` — object `permissions` → xem bằng `cat opa/policies/zta_policy.rego | grep -A10 "permissions :="`
 
 Khi merchant01 (chỉ có `financial-read`) thử POST /payments, OPA tra bảng: `permissions["financial-read"]["POST"]` không tồn tại → `role_permits_action = false` → `allow = false` → HTTP 403.
 
@@ -325,6 +336,7 @@ Trong Keycloak, mỗi lần thất bại ghi một dòng log:
 ```
 type="LOGIN_ERROR"  error="invalid_user_credentials"  username="testuser01"
 ```
+> 📁 **Nguồn:** `kubectl --context ctx-aws logs -n identity <keycloak-pod> | grep LOGIN_ERROR | tail -25` — mỗi lần sai password → 1 dòng như thế này
 
 20 lần thất bại = 20 dòng log trong vòng 5 giây — dấu hiệu rõ ràng của brute force.
 
@@ -343,6 +355,7 @@ Script simulate webhook Grafana đến SOAR. SOAR tạo case:
 ```
 SOAR case=case-20260627041323-kb1-17  status=pending_approval  playbook=revoke_user_sessions
 ```
+> 📁 **Nguồn:** output trực tiếp từ `bash tests/grafana_kb1_brute_force.sh` — hoặc xem qua `curl -s http://localhost:18082/cases | python3 -m json.tool`
 
 **④ Admin phê duyệt trên Web Portal:**
 
@@ -356,6 +369,7 @@ Vào http://localhost:18081/security → analyst01/Test1234! → thấy badge **
 [eradicate  ] → ghi nhận sessions đã được xử lý, user phải re-authenticate
 [recover    ] → pending, chờ admin trigger rollback
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases/<case-id>/log | python3 -m json.tool` — log từng phase playbook của SOAR Engine
 
 **Kết quả chứng minh:**
 
@@ -364,6 +378,7 @@ case_id : case-20260627072514-kb1-17
 status  : executed
 [investigate] Loki evidence: 10 log entries matched query for brute_force from 10.0.0.1
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases/case-20260627072514-kb1-17 | python3 -m json.tool`
 
 Hệ thống phát hiện, tạo case, thực thi response hoàn chỉnh. Cuộc tấn công brute force không vào được bất kỳ service nào phía trong — bị chặn ngay tại Identity Provider.
 
@@ -421,6 +436,7 @@ fraud-detection nhận request từ payment-service, tính:
   }
 }
 ```
+> 📁 **Nguồn:** output của `bash tests/grafana_kb2_fraud_gate.sh` — hoặc test thủ công bằng `curl -s -X POST http://localhost:18080/payments -H "Authorization: Bearer $TOKEN" -d '{"amount":500000000,"channel":"tor",...}'`
 
 **⑤ SOAR tạo case, phê duyệt → isolate_workload:**
 
@@ -429,6 +445,7 @@ Sau khi admin phê duyệt, SOAR scale payment-service về 0 replica:
 ```
 [contain] scaled Deployment/payment-service from 1 → 0 replicas
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases/<case-id>/log` — dòng phase `contain` trong playbook `isolate_workload`
 
 Xác nhận:
 ```bash
@@ -494,6 +511,7 @@ curl -s -o /dev/null -w "HTTP %{http_code}\n" \
   "metrics": {"timer_rego_query_eval_ns": 251982}
 }
 ```
+> 📁 **Nguồn:** `kubectl --context ctx-aws logs -n opa <opa-pod> | grep '"result":false'` — OPA ghi decision log cho mọi request bị từ chối
 
 OPA xử lý mỗi request trong ~252 microseconds. Đủ nhanh để không ảnh hưởng performance, đủ chắc để không có request nào lọt.
 
@@ -502,6 +520,7 @@ OPA xử lý mỗi request trong ~252 microseconds. Đủ nhanh để không ả
 ```
 case-20260627042140-bf5e09 | lateral_movement | executed | isolate_workload
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases | python3 -c "import sys,json; [print(c['case_id'],'|',c['attack_type'],'|',c['status'],'|',c.get('playbook','')) for c in json.load(sys.stdin)]"`
 
 ---
 
@@ -534,6 +553,7 @@ Tổng = 15,546 bytes thực đo từ api-gateway
 ```
 [KB4] ▶ 10 request bulk data — tổng bytes nhận: 15546 bytes
 ```
+> 📁 **Nguồn:** output của `bash tests/grafana_kb4_exfiltration.sh` — script đo `bytes_received` thực từ từng curl call
 
 **② Inject log giả lập core-banking (3.5MB) vào Loki:**
 
@@ -548,6 +568,7 @@ Grafana rule cần `bytes_sent > 1,048,576` (1MB). 15KB từ api-gateway không 
 [investigate] Loki evidence: 2 log entries matched query for large_response from 10.0.0.77
 [eradicate  ] created NetworkPolicy/soar-block-f425eca1 — blocked 10.0.0.77/32 in financial
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases/<case-id>/log | python3 -m json.tool` — log 4 phase playbook `restrict_egress`
 
 SOAR đồng thời scale core-banking xuống 0 (cắt nguồn dữ liệu) VÀ tạo NetworkPolicy block IP attacker trong namespace financial. Kẻ tấn công không thể tiếp tục kéo thêm dữ liệu.
 
@@ -582,10 +603,12 @@ bash tests/grafana_kb5_access_denied.sh
   }
 }
 ```
+> 📁 **Nguồn:** script tự decode JWT trong `tests/grafana_kb5_access_denied.sh` — lệnh thủ công: `echo $TOKEN_MERCHANT | cut -d. -f2 | base64 -d | python3 -m json.tool | grep -A5 realm_access`
 
 ```
 [KB5] merchant01 roles: ['financial-read']  ← chỉ có financial-read, không có financial-write
 ```
+> 📁 **Nguồn:** output của `bash tests/grafana_kb5_access_denied.sh`
 
 **② Merchant01 thử POST /payments 6 lần:**
 
@@ -600,6 +623,7 @@ POST /payments amount=1000000 → HTTP 403
 POST /payments amount=5000    → HTTP 403
 ▶ OPA RBAC từ chối 6/6 request
 ```
+> 📁 **Nguồn:** output của `bash tests/grafana_kb5_access_denied.sh` — HTTP status code lấy bằng `curl -o /dev/null -w "%{http_code}"` — OPA log tương ứng xem bằng `kubectl logs -n opa <opa-pod> | grep '"result":false'`
 
 **③ So sánh trực tiếp:**
 
@@ -617,6 +641,7 @@ Cùng một endpoint, cùng JWT hợp lệ, kết quả khác nhau hoàn toàn c
 [investigate] Loki evidence: 10 log entries matched query for access_denied from 10.0.0.99
 [eradicate  ] IP 10.0.0.99 already blocked in contain phase
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases/<case-id>/log | python3 -m json.tool` — playbook `block_source_ip`
 
 IP bị ghi vào Redis với TTL 86,400 giây (24 giờ). api-gateway kiểm tra Redis key `ztlab:blocked_ip:10.0.0.99` trước mỗi request — nếu tồn tại → từ chối ngay, không cần xử lý thêm.
 
@@ -663,6 +688,7 @@ kubectl ... -- head -3 /etc/shadow
 kubectl ... -- get pod -o jsonpath='{.spec.containers[0].securityContext}'
 → {}   ← securityContext hoàn toàn rỗng, không có hardening nào
 ```
+> 📁 **Nguồn:** chạy trực tiếp từng lệnh trên pod đang live — thay `api-gateway-665bb949bd-n6zsh` bằng pod name thực tế lấy từ `kubectl --context ctx-aws get pod -n financial -l app=api-gateway`
 
 **② Giải mã capabilities hex `a80425fb`:**
 
@@ -690,6 +716,7 @@ securityContext:
 [KB6]   • CAP_DAC_OVERRIDE đọc được /etc/shadow — leo thang đặc quyền thực tế
 [KB6]   • runAsNonRoot không được set — container không bị ràng buộc
 ```
+> 📁 **Nguồn:** output của `bash tests/grafana_kb6_privilege_escalation.sh` — script tự chạy các lệnh kubectl exec audit và tổng hợp kết quả
 
 **④ SOAR — quarantine_workload:**
 
@@ -698,6 +725,7 @@ securityContext:
 ```
 [contain] scaled Deployment/api-gateway from 1 → 0 replicas (suspected cryptomining/compromise)
 ```
+> 📁 **Nguồn:** `curl -s http://localhost:18082/cases/<case-id>/log` — playbook `quarantine_workload`, phase `contain`
 
 ```bash
 kubectl --context ctx-aws get deployment api-gateway -n financial
@@ -764,6 +792,7 @@ PASS  KB6  Privilege Escalation (T1611)
 
 PASS=6  FAIL=0  SKIP=0
 ```
+> 📁 **Nguồn:** output của `bash tests/run-all-kb.sh` (chạy tuần tự KB1→KB6) — hoặc chạy riêng từng script trong `tests/grafana_kb*.sh`
 
 ---
 
