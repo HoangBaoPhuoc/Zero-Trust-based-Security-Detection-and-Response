@@ -17,12 +17,10 @@ pass() { printf "[%s] PASS: %s\n" "$SCENARIO" "$*"; }
 fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
-log "Bước 1: kiểm tra API Gateway và SOAR..."
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
 curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 
 # ── 2. Lấy JWT và thực hiện bulk data download ───────────────────────────────
-log "Bước 2: lấy JWT testuser01 rồi kéo transaction history lặp lại nhiều lần..."
 TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234%21&scope=openid" \
@@ -47,11 +45,9 @@ for ep in "${endpoints[@]}"; do
     -H "Authorization: Bearer $TOKEN" 2>/dev/null || echo "0")
   total_bytes=$((total_bytes + sz))
 done
-log "▶ ${#endpoints[@]} request bulk data — tổng bytes nhận: $total_bytes bytes từ API Financial"
-log "  (trong môi trường production, request tương tự tới core-banking sẽ trả response MB-level)"
+log "${#endpoints[@]} bulk requests → $total_bytes bytes"
 
 # ── 3. Đẩy Envoy-format log vào Loki với bytes thực đo ────────────────────────
-log "Bước 3: đẩy envoy-access log vào Loki (bytes_sent=$total_bytes đo thực + giả lập core-banking 2MB)..."
 ts=$(date +%s%N)
 # Log 1: bytes đo thực từ api-gateway
 curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
@@ -72,10 +68,8 @@ curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
       [\"$((ts+2000000))\",\"{\\\"bytes_sent\\\":1572864,\\\"source_ip\\\":\\\"10.0.0.77\\\",\\\"path\\\":\\\"/transactions/dump\\\",\\\"method\\\":\\\"GET\\\",\\\"response_code\\\":200,\\\"note\\\":\\\"simulated_core_banking_response\\\"}\"]
     ]
   }]}" >/dev/null
-log "Log đã vào Loki (real: ${total_bytes}B từ api-gateway + simulated: 3.5MB từ core-banking)"
 
-# ── 4. Mô phỏng Grafana → SOAR webhook ────────────────────────────────────────
-log "Bước 4: mô phỏng Grafana 'Data Exfiltration — Large Response' → SOAR webhook..."
+# ── 4. SOAR webhook ───────────────────────────────────────────────────────────
 fp="kb4-$(date +%s)"
 soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   -H "Content-Type: application/json" \
@@ -101,7 +95,6 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   }")
 
 # ── 5. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-log "Bước 5: kiểm tra SOAR case..."
 status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
 playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
 case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)

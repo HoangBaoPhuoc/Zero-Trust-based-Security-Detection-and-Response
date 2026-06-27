@@ -17,12 +17,10 @@ pass() { printf "[%s] PASS: %s\n" "$SCENARIO" "$*"; }
 fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
-log "Bước 1: kiểm tra API Gateway và SOAR..."
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
 curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 
 # ── 2. Lấy JWT hợp lệ ───────────────────────────────────────────────────────
-log "Bước 2: lấy JWT testuser01..."
 TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234%21&scope=openid" \
@@ -30,7 +28,6 @@ TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
 [[ -n "$TOKEN" ]] || fail "Không lấy được JWT"
 
 # ── 3. Gửi giao dịch vượt ngưỡng fraud (amount=500M, channel=tor) ─────────
-log "Bước 3: gửi giao dịch 500,000,000 VND qua TOR channel (fraud_score sẽ ≥75)..."
 resp=$(curl -s -X POST "$GW_URL/payments" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
@@ -41,12 +38,10 @@ http_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$GW_URL/payments" \
   -H "Content-Type: application/json" \
   -H "X-Channel: tor" \
   -d '{"from_account":"ACC-1001","to_account":"ACC-ATTACKER","amount":500000000,"currency":"VND","channel":"tor"}')
-log "API Gateway trả về HTTP $http_code (expect 403 — fraud gate blocked)"
 fraud_verdict=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('fraud',{}).get('verdict','?'))" 2>/dev/null || echo "blocked")
-log "Fraud gate verdict: $fraud_verdict"
+log "POST /payments 500M tor → HTTP $http_code (fraud: $fraud_verdict)"
 
 # ── 4. Đẩy OPA decision log vào Loki ─────────────────────────────────────────
-log "Bước 4: đẩy opa-decisions log vào Loki (Grafana query: opa_result=false, attack_scenario=fraud_gate_bypass)..."
 ts=$(date +%s%N)
 curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
   -H "Content-Type: application/json" \
@@ -58,10 +53,8 @@ curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
       [\"$((ts+500000))\",\"{\\\"result\\\":false,\\\"attack_scenario\\\":\\\"fraud_gate_bypass\\\",\\\"fraud_score\\\":80,\\\"source_ip\\\":\\\"10.0.0.5\\\",\\\"reason\\\":\\\"critical_amount_tor_channel\\\"}\"]
     ]
   }]}" >/dev/null
-log "OPA fraud_gate_bypass log đã vào Loki"
 
-# ── 5. Mô phỏng Grafana → SOAR webhook ───────────────────────────────────────
-log "Bước 5: mô phỏng Grafana 'Fraud Gate Bypass' alert → SOAR webhook..."
+# ── 5. SOAR webhook ───────────────────────────────────────────────────────────
 fp="kb2-$(date +%s)"
 soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   -H "Content-Type: application/json" \
@@ -87,7 +80,6 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   }")
 
 # ── 6. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-log "Bước 6: kiểm tra SOAR case..."
 status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
 playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
 case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)

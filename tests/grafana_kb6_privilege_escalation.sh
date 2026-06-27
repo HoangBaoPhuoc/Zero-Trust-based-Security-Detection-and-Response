@@ -16,12 +16,10 @@ pass() { printf "[%s] PASS: %s\n" "$SCENARIO" "$*"; }
 fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
-log "Bước 1: kiểm tra SOAR và Loki..."
 curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 curl -fsS "$LOKI_URL/ready" >/dev/null || fail "Loki không khả dụng"
 
 # ── 2. Audit thực tế: kiểm tra pod security context ─────────────────────────
-log "Bước 2: kiểm tra THỰC TẾ pod security context của api-gateway (ctx-aws)..."
 POD=$(kubectl --context ctx-aws get pod -n financial -l app=api-gateway \
   -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 [[ -n "$POD" ]] || fail "Không tìm được pod api-gateway"
@@ -78,8 +76,8 @@ SC_RUN_AS_NON_ROOT=$(kubectl --context ctx-aws get pod "$POD" -n financial \
   -o jsonpath='{.spec.containers[0].securityContext.runAsNonRoot}' 2>/dev/null || echo "null")
 SC_ALLOW_PRIVILEGE=$(kubectl --context ctx-aws get pod "$POD" -n financial \
   -o jsonpath='{.spec.containers[0].securityContext.allowPrivilegeEscalation}' 2>/dev/null || echo "null")
-log "  securityContext.runAsNonRoot: $SC_RUN_AS_NON_ROOT (should be true)"
-log "  securityContext.allowPrivilegeEscalation: $SC_ALLOW_PRIVILEGE (should be false)"
+log "  runAsNonRoot: $SC_RUN_AS_NON_ROOT"
+log "  allowPrivilegeEscalation: $SC_ALLOW_PRIVILEGE"
 
 # Xác định có vi phạm Zero Trust không
 RUNNING_AS_ROOT=false
@@ -96,8 +94,7 @@ else
   SEVERITY="medium"
 fi
 
-# ── 3. Đẩy log audit thực tế vào Loki (Python để tránh bash escaping issues) ─
-log "Bước 3: đẩy audit log thực tế (từ kết quả bước 2) vào Loki..."
+# ── 3. Đẩy log audit vào Loki ────────────────────────────────────────────────
 python3 - <<PYEOF
 import json, urllib.request, time
 loki_url = "${LOKI_URL}"
@@ -126,11 +123,9 @@ req = urllib.request.Request(
     data=json.dumps(payload).encode(),
     headers={"Content-Type": "application/json"}, method="POST")
 urllib.request.urlopen(req, timeout=5)
-print(f"[KB6_privilege_escalation] {len(lines)} audit finding da vao Loki (du lieu tu kubectl exec thuc te)")
 PYEOF
 
-# ── 4. Mô phỏng Grafana → SOAR webhook ───────────────────────────────────────
-log "Bước 4: mô phỏng Grafana 'Privilege Escalation in Container' → SOAR webhook..."
+# ── 4. SOAR webhook ───────────────────────────────────────────────────────────
 fp="kb6-$(date +%s)"
 soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   -H "Content-Type: application/json" \
@@ -154,7 +149,6 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   }")
 
 # ── 5. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-log "Bước 5: kiểm tra SOAR case..."
 status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
 playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
 case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)
