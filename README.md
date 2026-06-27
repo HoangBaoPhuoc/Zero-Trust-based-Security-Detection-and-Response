@@ -112,7 +112,9 @@ bash scripts/run-demo.sh
 
 ---
 
-## 4 Attack Scenarios
+## Attack Scenarios — 20 kịch bản kiểm thử
+
+**Nhóm A — Grafana HITL (KB1-KB4):** Inject log → Grafana alert → SOAR HITL email
 
 | # | Tên | ATT&CK | Phát hiện | SOAR phản ứng (admin chọn) |
 |---|-----|--------|-----------|---------------------------|
@@ -121,14 +123,32 @@ bash scripts/run-demo.sh
 | KB3 | Fraud Gate Bypass | T1078.004 | OPA deny `/transactions/execute` | isolate_workload, restrict_egress, block_source_ip |
 | KB4 | Data Exfiltration | T1041 | Envoy `bytes_sent > 1MB` từ core-banking | restrict_egress, quarantine_workload, block_source_ip |
 
-> **HITL Flow:** Tất cả KB1-KB4 (severity ≥ high) → SOAR tạo case `pending_approval` → email admin với nút hành động → admin chọn playbook → SOAR thực thi trên K8s.
+**Nhóm B — AI Analyzer (SC01-SC20):** POST `/analyze` → 15 patterns → verdict + SOAR case
+
+| # | Tên | ATT&CK | SOAR phản ứng |
+|---|-----|--------|--------------|
+| SC01 | Brute Force | T1110.001 | revoke_user_sessions |
+| SC03 | Lateral Movement | T1021.007 | isolate_workload |
+| SC04 | Fraud Gate Bypass | T1078 | isolate_workload |
+| SC06 | Data Exfiltration | T1041 | restrict_egress |
+| SC10 | Port Scanning | T1046 | block_source_ip |
+| SC11 | Cryptomining | T1496 | quarantine_workload |
+| SC13 | SQL Injection | T1190 | block_source_ip |
+| SC14 | Command Injection | T1059 | block_source_ip |
+| SC15 | Account Manipulation | T1098 | isolate_workload |
+| SC16 | Credential Stuffing | T1078.001 | revoke_user_sessions |
+| SC17 | Impair Defenses | T1562 | quarantine_workload |
+| SC18 | Container Escape | T1611 | quarantine_workload |
+| SC19 | Data Staging | T1074 | restrict_egress |
+| SC20 | JWT Replay | T1539 | revoke_user_sessions |
+
+> **HITL Flow:** severity ≥ high → SOAR tạo case `pending_approval` → email admin → admin chọn playbook → SOAR thực thi trên K8s.
 
 ```bash
-# Chạy từng kịch bản:
-bash scripts/run-demo.sh --kb1
-bash scripts/run-demo.sh --kb2
-bash scripts/run-demo.sh --kb3
-bash scripts/run-demo.sh --kb4
+# Chạy 4 KB scenarios (Grafana):
+bash scripts/run-demo.sh --kb1 --kb2 --kb3 --kb4
+# Chạy toàn bộ 20 scenarios (AI Analyzer):
+python3 tests/scenario_00_full_suite.py
 # Restore sau demo:
 bash scripts/run-demo.sh --restore
 ```

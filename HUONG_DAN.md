@@ -979,11 +979,16 @@ Admin cũng có thể duyệt qua **web portal**:
 | `jwt_replay` | JWT Token Replay (T1539) | revoke_user_sessions, block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
 | `fraud_gate_bypass` | Fraud Gate Bypass (T1078.004) | isolate_workload, restrict_egress, block_source_ip, revoke_user_sessions, monitor_only | payment-service | ctx-aws |
 | `lateral_movement` | Lateral Movement — Invalid SVID (T1021.007) | isolate_workload, restrict_egress, block_source_ip, revoke_user_sessions, monitor_only | payment-service | ctx-aws |
-| `cryptomining` | Cryptomining Detected (T1496) | quarantine_workload, isolate_workload, block_source_ip, monitor_only | transaction-service | ctx-openstack |
+| `cryptomining` | Cryptomining Detected (T1496) | quarantine_workload, isolate_workload, block_source_ip, monitor_only | api-gateway | ctx-aws |
 | `port_scan` | Port Scan Detected (T1046) | block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
 | `exploit_probe` | Exploit Probe / Injection (T1203) | block_source_ip, isolate_workload, restrict_egress, monitor_only | api-gateway | ctx-aws |
 | `large_response` | Data Exfiltration — Large Response (T1041) | restrict_egress, quarantine_workload, isolate_workload, block_source_ip, monitor_only | core-banking | ctx-openstack |
 | `access_denied` | Access Denied Spike (T1078) | block_source_ip, isolate_workload, monitor_only | api-gateway | ctx-aws |
+| `account_manipulation` | Account Manipulation (T1098) | isolate_workload, revoke_user_sessions, block_source_ip, monitor_only | account-service | ctx-openstack |
+| `data_staging` | Data Staging — Bulk Export (T1074) | restrict_egress, quarantine_workload, block_source_ip, monitor_only | account-service | ctx-openstack |
+| `container_escape` | Container Escape Attempt (T1611) | quarantine_workload, isolate_workload, block_source_ip, monitor_only | api-gateway | ctx-aws |
+| `impair_defenses` | Impair Defenses (T1562) | quarantine_workload, isolate_workload, block_source_ip, monitor_only | api-gateway | ctx-aws |
+| `privilege_escalation` | Privilege Escalation in Container (T1611) | quarantine_workload, isolate_workload, block_source_ip, monitor_only | api-gateway | ctx-aws |
 
 ### Mô tả playbook
 
