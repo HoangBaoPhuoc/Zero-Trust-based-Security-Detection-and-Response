@@ -214,6 +214,7 @@ class SecurityAlert(BaseModel):
     log_count: int = 0
     log_hash: str | None = None
     ts: str | None = None
+    human_pre_approved: bool = False  # True khi admin đã duyệt ở AI Analyzer → bỏ qua SOAR HITL
 
 
 class PlaybookStep(BaseModel):
@@ -378,7 +379,9 @@ def _should_execute(alert: SecurityAlert) -> tuple[bool, str]:
 
 
 def _needs_hitl(alert: SecurityAlert) -> bool:
-    """Severity >= SOAR_HITL_SEVERITY yêu cầu admin phê duyệt trước khi thực thi."""
+    """Severity >= SOAR_HITL_SEVERITY yêu cầu admin phê duyệt. Bỏ qua nếu đã được duyệt ở AI Analyzer."""
+    if alert.human_pre_approved:
+        return False
     return SEVERITY_RANK.get(alert.severity, 0) >= SEVERITY_RANK.get(SOAR_HITL_SEVERITY, 3)
 
 

@@ -96,7 +96,8 @@ resp2=$(curl -fsS -X POST "$SOAR_URL/alerts" \
     "attack_type": "port_scan",
     "summary": "nmap SYN scan detected from 10.9.8.99 ports_tried=1024",
     "source_ip": "10.9.8.99",
-    "affected_service": "api-gateway"
+    "affected_service": "api-gateway",
+    "human_pre_approved": true
   }')
 printf '%s\n' "$resp2"
 
@@ -132,7 +133,8 @@ resp3=$(curl -fsS -X POST "$SOAR_URL/alerts" \
     "summary": "20 failed logins in 30s from 203.0.113.5",
     "source_ip": "203.0.113.5",
     "username": "testuser01",
-    "affected_service": "api-gateway"
+    "affected_service": "api-gateway",
+    "human_pre_approved": true
   }')
 printf '%s\n' "$resp3"
 

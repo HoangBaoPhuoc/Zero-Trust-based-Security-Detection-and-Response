@@ -552,6 +552,8 @@ async def forward_alert_to_soar(alert: AlertRecord) -> None:
         "recommended_playbook": alert.recommended_playbook,
         "source": f"ai-analyzer:{alert.source}",
         "ts": alert.ts,
+        "human_pre_approved": True,  # Admin đã duyệt tại AI Analyzer HITL → bỏ qua SOAR HITL
+        "evidence": getattr(alert, "evidence", []) or [],
     }
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if SOAR_API_TOKEN:
