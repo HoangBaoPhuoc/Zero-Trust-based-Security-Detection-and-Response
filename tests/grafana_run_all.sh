@@ -61,7 +61,7 @@ fi
 echo "✓  Tất cả $PASS kịch bản đã PASS"
 echo ""
 echo "Bước tiếp theo:"
-echo "  1. Mở Web Portal  → http://localhost:18081/security  (đăng nhập analyst01 / Analyst2026!)"
+echo "  1. Mở Web Portal  → http://localhost:18081/security  (đăng nhập analyst01 / Test1234!)"
 echo "  2. Xem SOAR cases đã tạo → phê duyệt hoặc từ chối từng playbook"
 echo "  3. Kiểm tra hộp thư  voha2005@gmail.com  → email HITL với log evidence"
 echo "  4. Mở Grafana        → http://localhost:3000  (admin / ZTALab2026!)"

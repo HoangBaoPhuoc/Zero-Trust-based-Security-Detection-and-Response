@@ -89,7 +89,7 @@ AI Analyzer (18082): DISABLED — SOAR_WEBHOOK_URL="" (standalone scoring only)
 |---|---|---|---|
 | **Keycloak Admin Console** | admin | ztlab-admin-2026 | Quản trị realm ztlab |
 | **Grafana** | admin | ZTALab2026! | Admin full access |
-| **Web Portal (demo)** | analyst01 | Analyst2026! | security-analyst + security-admin |
+| **Web Portal (demo)** | analyst01 | Test1234! | security-analyst + security-admin |
 | **Web Portal / API** | testuser01 | Test1234! | financial-read + financial-write |
 | **Web Portal / API** | merchant01 | Test1234! | financial-read ONLY (dùng cho KB5) |
 | **pgAdmin** | admin@ztlab.com | ztlab2026 | Xem database |
@@ -101,7 +101,7 @@ AI Analyzer (18082): DISABLED — SOAR_WEBHOOK_URL="" (standalone scoring only)
 | Dịch vụ | URL | Ghi chú |
 |---|---|---|
 | **Web Portal** | http://localhost:18081 | Login: /login |
-| **Security Dashboard** | http://localhost:18081/security | analyst01 / Analyst2026! |
+| **Security Dashboard** | http://localhost:18081/security | analyst01 / Test1234! |
 | **API Gateway** | http://localhost:18080 | REST API financial |
 | **Keycloak** | http://localhost:8180/admin | Admin Console |
 | **Grafana** | http://localhost:3000 | Alert rules, Loki dashboards |
@@ -258,7 +258,7 @@ for c in cases[-5:]:
 "'
 
 # Terminal 3 — mở browser
-# http://localhost:18081/security  (analyst01 / Analyst2026!)
+# http://localhost:18081/security  (analyst01 / Test1234!)
 # http://localhost:3000            (admin / ZTALab2026!)
 ```
 
@@ -327,7 +327,7 @@ Mở hộp thư **voha2005@gmail.com** → tìm email với:
 ### Bước 5: Phê duyệt trên Web Portal
 
 1. Mở http://localhost:18081/security
-2. Đăng nhập: `analyst01` / `Analyst2026!`
+2. Đăng nhập: `analyst01` / `Test1234!`
 3. Bảng **Security Cases** → tìm case mới nhất:
    - `attack_type = brute_force`
    - `status = ⏳ Chờ duyệt`
@@ -434,7 +434,7 @@ curl -s -o /dev/null -w "Normal payment → HTTP %{http_code}\n" \
 
 ### Bước 4: Phê duyệt Web Portal
 
-1. http://localhost:18081/security → `analyst01` / `Analyst2026!`
+1. http://localhost:18081/security → `analyst01` / `Test1234!`
 2. Tìm case `attack_type=fraud_gate_bypass`, status `⏳ Chờ duyệt`
 3. Click **⚡ Xử lý** → chọn **🔒 Cô lập dịch vụ** (isolate_workload) → Confirm
 
@@ -887,7 +887,7 @@ bash scripts/run-demo.sh --restore
 
 ```
 URL   : http://localhost:18081/security
-Login : analyst01 / Analyst2026!
+Login : analyst01 / Test1234!
 ```
 
 ### Vòng đời case
