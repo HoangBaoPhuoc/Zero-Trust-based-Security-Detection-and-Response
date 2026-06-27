@@ -129,6 +129,3 @@ case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdi
   || fail "SOAR playbook='$playbook' (expect block_source_ip)"
 
 pass "KB5 Access Denied | OPA RBAC THẬT: $denied/${#amounts[@]} từ chối | SOAR case=$case_id status=$status playbook=$playbook (T1078)"
-log "  ✓ Zero Trust enforcement THẬT: merchant01 (financial-read) bị OPA từ chối POST /payments"
-log "  ✓ OPA policy: require role financial-write — không có → HTTP 403"
-log "  block_source_ip: SOAR thêm IP vào Redis blocklist 24h"

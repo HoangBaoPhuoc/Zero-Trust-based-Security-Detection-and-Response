@@ -111,9 +111,3 @@ case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdi
   || fail "SOAR playbook='$playbook' (expect restrict_egress)"
 
 pass "KB4 Exfiltration | real: ${total_bytes}B từ ${#endpoints[@]} requests | SOAR case=$case_id status=$status playbook=$playbook (T1041)"
-log "  Zero Trust: Envoy theo dõi bytes_sent — pattern trích xuất dữ liệu lớn lặp lại → alert"
-log "  restrict_egress: SOAR scale core-banking (OpenStack) → 0 replica, chặn data ra ngoài"
-log ""
-log "  Lưu ý: Tổng bytes thực đo từ api-gateway = ${total_bytes}B."
-log "  Core-banking response (Envoy sidecar trên OpenStack) = simulated 3.5MB."
-log "  Trong production, Promtail sẽ tự capture Envoy log — không cần inject thủ công."

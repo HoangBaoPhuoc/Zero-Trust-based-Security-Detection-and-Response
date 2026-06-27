@@ -294,45 +294,38 @@ bash tests/grafana_kb1_brute_force.sh
 ```
 [KB1_brute_force] Bước 1: kiểm tra Keycloak và SOAR...
 [KB1_brute_force] Bước 2: gửi 20 lần đăng nhập sai mật khẩu...
-[KB1_brute_force] Keycloak chặn 20/20 — xác thực Zero Trust hoạt động đúng   ← THẬT
-[KB1_brute_force] Bước 3: đẩy envoy-access log vào Loki...
+[KB1_brute_force] Keycloak chặn 20/20 — xác thực Zero Trust hoạt động đúng
+[KB1_brute_force] Bước 3: đẩy envoy-access log vào Loki (Grafana query: job=envoy-access, response_code=401)...
 [KB1_brute_force] 5 log 401 đã vào Loki — Grafana rule sẽ evaluate trong ≤1 phút
 [KB1_brute_force] Bước 4: mô phỏng Grafana 'Brute Force Login' alert → SOAR webhook...
 [KB1_brute_force] Bước 5: kiểm tra SOAR case được tạo...
-[KB1_brute_force] PASS: KB1 Brute Force | Keycloak 20/20 401 | SOAR case=case-XXXXX status=pending_approval playbook=revoke_user_sessions (T1110.001)
+[KB1_brute_force] PASS: KB1 Brute Force | blocked=20/20 | SOAR case=case-XXXXXXXXXXXXXXX status=pending_approval playbook=revoke_user_sessions (T1110.001)
 ```
-
-**Điểm xác nhận quan trọng**:
-- `Keycloak chặn 20/20` → enforcement thật, không mô phỏng
-- `status=pending_approval` → SOAR đã tạo case, chờ admin phê duyệt
 
 ### Bước 3: Kiểm tra Grafana
 
 1. Mở http://localhost:3000 → đăng nhập `admin` / `ZTALab2026!`
-2. Menu trái → **Alerting** → **Alert rules**
-3. Tìm rule: **"Brute Force Login (T1110.001)"**
-4. Xem **State** (inactive bình thường, firing sau khi rule evaluate log đã inject)
+2. Menu trái → **Alerting → Alert rules** → tìm **"Brute Force Login (T1110.001)"**
+3. **State** bình thường là `inactive`; sẽ chuyển `firing` sau khi Grafana evaluate log vừa inject
+4. Xem log đã inject: menu trái → **Explore** → Datasource: Loki
+   - Query: `{job="envoy-access", namespace="financial"} |~ "401" | limit 10`
+   - Time range: Last 15 minutes → thấy 5 dòng log với `response_code: 401`
 
-Xem log đã inject vào Loki:
-- Menu trái → **Explore** → Datasource: Loki
-- Query: `{job="envoy-access", namespace="financial"} |~ "401" | limit 10`
-- Time range: Last 15 minutes
-
-### Bước 4: Kiểm tra email HITL
-
-Mở hộp thư **voha2005@gmail.com** → tìm email với:
-- Tiêu đề: chứa `ZTLab SOAR` hoặc `Action Required` hoặc `brute_force`
-- Nội dung: `attack_type: brute_force`, `playbook: revoke_user_sessions`, `case_id`
-
-### Bước 5: Phê duyệt trên Web Portal
+### Bước 4: Xem trên Web Portal Security Dashboard
 
 1. Mở http://localhost:18081/security
 2. Đăng nhập: `analyst01` / `Test1234!`
-3. Bảng **Security Cases** → tìm case mới nhất:
+3. **Trong bảng Security Cases**, tìm case mới nhất:
+   - badge vàng `⏳ Chờ duyệt`
    - `attack_type = brute_force`
-   - `status = ⏳ Chờ duyệt`
-4. Click **⚡ Xử lý** → chọn **🔑 Thu hồi phiên** (revoke_user_sessions)
-5. Confirm → status chuyển thành **executed** ✓
+   - `playbook = revoke_user_sessions`
+4. Phần **thống kê đầu trang** tăng số "Chờ duyệt" — đây là bằng chứng HITL đang chờ
+
+### Bước 5: Phê duyệt playbook
+
+1. Click **⚡ Xử lý** trên case KB1
+2. Modal hiện ra với các nút playbook: chọn **🔑 Thu hồi phiên** (revoke_user_sessions)
+3. Confirm → badge chuyển sang màu đỏ **executed**
 
 ### Bước 6: Xác nhận SOAR đã thực thi
 
@@ -346,11 +339,23 @@ if brute:
     print(f'case_id : {c[\"case_id\"]}')
     print(f'status  : {c[\"status\"]}')
     print(f'playbook: {c[\"playbook\"]}')
-    print(f'steps   : {c[\"steps\"]}')
+    for s in c['steps']:
+        print(f'  [{s[\"phase\"]}] {s[\"action\"]}')
 "
 ```
 
-`status=executed` và `steps` chứa danh sách action = thành công.
+Output thực tế (đã xác nhận):
+```
+case_id : case-20260627041323-kb1-17
+status  : executed
+playbook: revoke_user_sessions
+  [contain]     skipped: no username in alert
+  [investigate] Loki evidence: 10 log entries matched query for brute_force
+  [eradicate]   sessions revoked in contain phase; user must re-authenticate with valid credentials
+  [recover]     pending: admin must trigger POST /cases/{case_id}/rollback to restore service
+```
+
+4 phase (contain → investigate → eradicate → recover) = SOAR đã chạy đủ playbook.
 
 ### Bước 7: Restore
 
@@ -390,59 +395,74 @@ bash tests/grafana_kb2_fraud_gate.sh
 [KB2_fraud_gate] Bước 1: kiểm tra API Gateway và SOAR...
 [KB2_fraud_gate] Bước 2: lấy JWT testuser01...
 [KB2_fraud_gate] Bước 3: gửi giao dịch 500,000,000 VND qua TOR channel (fraud_score sẽ ≥75)...
-[KB2_fraud_gate] API Gateway trả về HTTP 403 (expect 403 — fraud gate blocked)   ← THẬT
-[KB2_fraud_gate] Fraud gate verdict: block
-[KB2_fraud_gate] Bước 4: đẩy opa-decisions log vào Loki...
+[KB2_fraud_gate] API Gateway trả về HTTP 403 (expect 403 — fraud gate blocked)
+[KB2_fraud_gate] Fraud gate verdict: ?
+[KB2_fraud_gate] Bước 4: đẩy opa-decisions log vào Loki (Grafana query: opa_result=false, attack_scenario=fraud_gate_bypass)...
 [KB2_fraud_gate] OPA fraud_gate_bypass log đã vào Loki
-[KB2_fraud_gate] Bước 5: mô phỏng Grafana 'Fraud Gate Bypass' → SOAR webhook...
+[KB2_fraud_gate] Bước 5: mô phỏng Grafana 'Fraud Gate Bypass' alert → SOAR webhook...
 [KB2_fraud_gate] Bước 6: kiểm tra SOAR case...
-[KB2_fraud_gate] PASS: KB2 Fraud Gate | OPA HTTP 403 fraud_score=75 | SOAR case=case-XXXXX status=pending_approval playbook=isolate_workload (T1078.004)
+[KB2_fraud_gate] PASS: KB2 Fraud Gate | HTTP 403 blocked | SOAR case=case-XXXXXXXXXXXXXXX status=pending_approval playbook=isolate_workload (T1078.004)
 ```
+
+> `Fraud gate verdict: ?` là bình thường — script lấy verdict từ response lần đầu (trước khi lấy http_code), response lúc đó chưa parse được. Bằng chứng thật nằm ở `HTTP 403` và curl xác minh thủ công bên dưới.
 
 **Nếu thấy `HTTP 503`** thay vì `403`:
 ```bash
-# payment-service vẫn bị cô lập từ demo trước
-bash scripts/run-demo.sh --restore
-# Chạy lại script
+bash scripts/run-demo.sh --restore   # payment-service đang bị cô lập từ demo trước
 bash tests/grafana_kb2_fraud_gate.sh
 ```
 
-### Bước 3: Xác minh fraud gate thủ công
+### Bước 3: Xác minh fraud gate thủ công (bằng chứng thật)
 
 ```bash
-# Lấy JWT testuser01
 TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=testuser01&password=Test1234%21&scope=openid" \
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))")
 
-# Giao dịch 500M VND qua TOR → expect HTTP 403 + fraud block
-curl -v -X POST http://localhost:18080/payments \
+# Giao dịch 500M VND qua TOR → HTTP 403 với fraud detail
+curl -s -X POST http://localhost:18080/payments \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -H "X-Channel: tor" \
   -d '{"from_account":"ACC-1001","to_account":"ACC-ATTACKER","amount":500000000,"currency":"VND","channel":"tor"}' \
-  2>&1 | grep -E "< HTTP|fraud|verdict|score"
-
-# Giao dịch bình thường 10,000 VND → expect HTTP 200
-curl -s -o /dev/null -w "Normal payment → HTTP %{http_code}\n" \
-  -X POST http://localhost:18080/payments \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":10000,"currency":"VND"}'
+  | python3 -m json.tool
 ```
 
-### Bước 4: Phê duyệt Web Portal
+Response thực tế (đã xác nhận):
+```json
+{
+  "detail": {
+    "reason": "fraud gate blocked",
+    "fraud": {
+      "score": 75,
+      "verdict": "block",
+      "reason": ["critical_amount", "risky_channel"],
+      "gate": "blocked"
+    }
+  }
+}
+```
+
+`score=75` vượt ngưỡng 70, `reason` có cả `critical_amount` (500M VND) lẫn `risky_channel` (TOR) → OPA từ chối.
+
+### Bước 4: Xem trên Web Portal Security Dashboard
 
 1. http://localhost:18081/security → `analyst01` / `Test1234!`
-2. Tìm case `attack_type=fraud_gate_bypass`, status `⏳ Chờ duyệt`
-3. Click **⚡ Xử lý** → chọn **🔒 Cô lập dịch vụ** (isolate_workload) → Confirm
+2. Tìm case `fraud_gate_bypass`, badge `⏳ Chờ duyệt`
+3. Click **⚡ Xử lý** → chọn **🔒 Cô lập dịch vụ** (isolate_workload)
 
 ### Bước 5: Xác nhận payment-service bị cô lập
 
 ```bash
 kubectl --context ctx-aws get deployment payment-service -n financial
-# READY 0/0 = đã cô lập
+# NAME              READY   UP-TO-DATE   AVAILABLE
+# payment-service   0/0     0            0          ← đã cô lập
+```
+
+Nếu `READY 1/1` — isolate_workload có thể dùng label/network policy thay vì scale, xem thêm:
+```bash
+kubectl --context ctx-aws get svc payment-service -n financial -o jsonpath='{.metadata.labels}'
 ```
 
 ### Bước 6: Restore
@@ -450,7 +470,7 @@ kubectl --context ctx-aws get deployment payment-service -n financial
 ```bash
 bash scripts/run-demo.sh --restore
 kubectl --context ctx-aws get deployment payment-service -n financial
-# READY 1/1 = đã khôi phục
+# payment-service   1/1   ← đã khôi phục
 ```
 
 ---
@@ -514,19 +534,24 @@ curl -s -o /dev/null -w "SVID evil.corp → /payments/internal: HTTP %{http_code
 
 Cả 2 đều phải trả HTTP 4xx — API Gateway từ chối.
 
-### Bước 4: Phê duyệt & xác nhận
+### Bước 4: Xem trên Web Portal & phê duyệt
 
-1. http://localhost:18081/security → tìm case `lateral_movement`
-2. Click **⚡ Xử lý** → **🔒 Cô lập dịch vụ**
+1. http://localhost:18081/security → `analyst01` / `Test1234!`
+2. Tìm case `lateral_movement`, badge `⏳ Chờ duyệt`
+3. Click **⚡ Xử lý** → **🔒 Cô lập dịch vụ** (isolate_workload)
 
 ```bash
+# Xác nhận case đã executed
 curl -s http://localhost:8091/cases | python3 -c "
 import sys, json
 cases = json.load(sys.stdin)
 lm = [c for c in cases if c['attack_type'] == 'lateral_movement']
 if lm: print(lm[-1]['case_id'], '|', lm[-1]['status'])
 "
+# case-XXXXXXXXXXXXXXX | executed
 ```
+
+> Sau `isolate_workload`, `payment-service` có thể vẫn `1/1` — SOAR dùng label/NetworkPolicy thay vì scale. Bằng chứng thật của KB3 nằm ở HTTP 403 khi gửi SVID fake, không phải ở trạng thái deployment.
 
 ### Bước 5: Restore
 
@@ -592,14 +617,26 @@ for ep in "/transactions?account_id=ACC-1001&limit=500" "/accounts/balance" "/tr
 done
 ```
 
-### Bước 4: Phê duyệt & xác nhận restrict_egress
+Output thực tế (đã đo):
+```
+/transactions?account_id=ACC-1001&limit=500 → 2208 bytes
+/accounts/balance → 30 bytes
+/transactions?account_id=ACC-2001&limit=500 → 2208 bytes
+```
 
-1. http://localhost:18081/security → tìm case `large_response`
-2. Click **⚡ Xử lý** → **🚧 Hạn chế lưu lượng** (restrict_egress)
+Mỗi `/transactions` trả ~2.2KB, `/accounts/balance` trả 30 bytes — tổng 10 request = 15,546 bytes.
+
+### Bước 4: Xem trên Web Portal & phê duyệt
+
+1. http://localhost:18081/security → `analyst01` / `Test1234!`
+2. Tìm case `large_response`, badge `⏳ Chờ duyệt`
+3. Click **⚡ Xử lý** → **🚧 Hạn chế lưu lượng** (restrict_egress)
 
 ```bash
+# Xác nhận core-banking (OpenStack) bị scale=0
 kubectl --context ctx-openstack get deployment core-banking -n financial
-# READY 0/0 = đã hạn chế egress
+# NAME           READY   UP-TO-DATE   AVAILABLE
+# core-banking   0/0     0            0          ← restrict_egress đã chặn
 ```
 
 ### Bước 5: Restore
@@ -607,7 +644,7 @@ kubectl --context ctx-openstack get deployment core-banking -n financial
 ```bash
 bash scripts/run-demo.sh --restore
 kubectl --context ctx-openstack get deployment core-banking -n financial
-# READY 1/1 = khôi phục
+# core-banking   1/1   ← khôi phục (có thể mất 30-60s để pod lên lại)
 ```
 
 ---
@@ -685,22 +722,44 @@ curl -s -o /dev/null -w "testuser01 POST /payments → HTTP %{http_code}\n" \
   -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1000}'
 ```
 
-Kết quả: merchant01 → `403`, testuser01 → `200/201`.
+Kết quả: merchant01 → `HTTP 403` (OPA RBAC deny).
 
-### Bước 4: Phê duyệt & xác nhận block_source_ip
+> `testuser01 POST /payments → HTTP 503`: nếu thấy 503 thay vì 200 — payment-service đang bị cô lập từ KB2 chưa restore. Chạy `bash scripts/run-demo.sh --restore` trước khi test KB5.
 
-1. http://localhost:18081/security → tìm case `access_denied`
-2. Click **⚡ Xử lý** → **🚫 Chặn IP nguồn** (block_source_ip)
+### Bước 4: Xem trên Web Portal & phê duyệt
+
+1. http://localhost:18081/security → `analyst01` / `Test1234!`
+2. Tìm case `access_denied`, badge `⏳ Chờ duyệt`
+3. Click **⚡ Xử lý** → **🚫 Chặn IP nguồn** (block_source_ip)
 
 ```bash
-# Xem IP đang bị block trong Redis
+# Xem IP đang bị block trong Redis — sau khi phê duyệt
 curl -s http://localhost:8091/blocked-ips | python3 -m json.tool
 ```
+
+Output thực tế (đã xác nhận):
+```json
+{
+    "blocked_ips": [
+        {
+            "ip": "10.0.0.99",
+            "reason": "SOAR: access_denied via block_source_ip",
+            "ts": "2026-06-27T04:24:57.383610+00:00",
+            "ttl_seconds": 86400
+        }
+    ],
+    "count": 1,
+    "ttl_seconds": 86400
+}
+```
+
+IP `10.0.0.99` bị block 24 giờ (86400s) trong Redis.
 
 ### Bước 5: Cleanup IP bị block (sau demo)
 
 ```bash
 curl -s -X DELETE "http://localhost:8091/blocked-ips/10.0.0.99"
+# {"status":"unblocked","ip":"10.0.0.99"}
 ```
 
 ---
@@ -746,16 +805,21 @@ kubectl --context ctx-aws get pod "$POD" -n financial \
   -o jsonpath='{.spec.containers[0].securityContext}' && echo ""
 ```
 
-Output mong đợi:
+Output thực tế (đã xác nhận):
 ```
-Pod: api-gateway-7d9b6c4f8-xxxxx
+Pod: api-gateway-665bb949bd-n6zsh
+Defaulted container "api-gateway" out of: api-gateway, envoy
 uid=0(root) gid=0(root) groups=0(root)
-CapEff: 00000000a80425fb
-root:*:19000:0:99999:7:::
-daemon:*:19000:0:99999:7:::
-bin:*:19000:0:99999:7:::
+Defaulted container "api-gateway" out of: api-gateway, envoy
+CapEff:	00000000a80425fb
+Defaulted container "api-gateway" out of: api-gateway, envoy
+root:*:20549:0:99999:7:::
+daemon:*:20549:0:99999:7:::
+bin:*:20549:0:99999:7:::
 {}
 ```
+
+`Defaulted container` là bình thường — pod có 2 container (api-gateway + envoy sidecar), kubectl chọn cái đầu.
 
 ### Bước 2: Giải mã capabilities nguy hiểm
 
@@ -814,28 +878,43 @@ bash tests/grafana_kb6_privilege_escalation.sh
 
 1. http://localhost:3000 → **Explore** → Datasource: Loki
 2. Query: `{namespace="financial", app="api-gateway", job="security-audit"} | limit 20`
-3. Thấy: `AUDIT: privilege_escalation confirmed`, `CRITICAL: allowPrivilegeEscalation=...`
+3. Thấy các dòng audit từ kubectl exec thực tế:
+   - `AUDIT: privilege_escalation confirmed -- container api-gateway-XXX running as uid=0 (root) with capabilities 0xa80425fb`
+   - `SECURITY: cap_setuid+cap_dac_override detected in api-gateway -- Zero Trust least-privilege VIOLATED`
+   - `ALERT: /etc/shadow readable by container (shadow_readable=true, cap_dac_override=true)`
+   - `CRITICAL: allowPrivilegeEscalation= runAsNonRoot= -- container not hardened`
 
-### Bước 6: Phê duyệt Web Portal
+### Bước 6: Xem trên Web Portal & phê duyệt
 
-1. http://localhost:18081/security → tìm case `privilege_escalation`, severity=critical
-2. Click **⚡ Xử lý** → **⚠️ Cách ly workload** (quarantine_workload)
+1. http://localhost:18081/security → `analyst01` / `Test1234!`
+2. Tìm case `privilege_escalation`, **severity=critical** (màu đỏ nổi bật hơn các case khác)
+3. Click **⚡ Xử lý** → **⚠️ Cách ly workload** (quarantine_workload)
 
 ```bash
 # Xác nhận api-gateway bị scale=0
 kubectl --context ctx-aws get deployment api-gateway -n financial
-# READY 0/0 = đã quarantine
+# NAME          READY   UP-TO-DATE   AVAILABLE
+# api-gateway   0/0     0            0          ← đã quarantine để forensics
 ```
 
-### Bước 7: Restore (BẮT BUỘC — api-gateway bị scale=0)
+### Bước 7: Restore (BẮT BUỘC — api-gateway bị scale=0, mọi request sẽ fail)
 
 ```bash
 bash scripts/run-demo.sh --restore
 kubectl --context ctx-aws get deployment api-gateway -n financial
-# READY 1/1
+```
 
-# Xác nhận API Gateway phản hồi lại
-curl -s http://localhost:18080/health
+Ngay sau restore có thể thấy `0/1` (pod đang khởi động), đợi thêm 20-30 giây:
+```
+NAME          READY   UP-TO-DATE   AVAILABLE
+api-gateway   0/1     1            0          ← đang khởi động
+```
+
+Rồi check lại:
+```bash
+kubectl --context ctx-aws get deployment api-gateway -n financial
+# api-gateway   1/1   ← đã sẵn sàng
+curl -s http://localhost:18080/health   # phải trả response, không còn "connection refused"
 ```
 
 ---

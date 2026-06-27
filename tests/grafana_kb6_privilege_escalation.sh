@@ -165,12 +165,3 @@ case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdi
   || fail "SOAR playbook='$playbook' (expect quarantine_workload)"
 
 pass "KB6 Privilege Escalation | THẬT: uid=0 CapEff=0x${CAPEFF} shadow=$SHADOW_READABLE | SOAR case=$case_id status=$status playbook=$playbook (T1611)"
-log "  ✓ Zero Trust violation THẬT: container không được hardened — root + dangerous capabilities"
-log "  quarantine_workload: SOAR scale api-gateway → 0 để forensics (KHÔNG restore cho đến khi admin phê duyệt)"
-log ""
-log "  Khuyến nghị fix (cho báo cáo):"
-log "    securityContext:"
-log "      runAsNonRoot: true"
-log "      runAsUser: 1000"
-log "      allowPrivilegeEscalation: false"
-log "      capabilities: {drop: [ALL]}"
