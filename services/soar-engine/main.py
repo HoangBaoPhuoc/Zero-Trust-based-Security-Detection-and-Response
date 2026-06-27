@@ -60,6 +60,11 @@ TARGETS_BY_ATTACK = {
     "credential_stuffing":  {"context": "ctx-aws",        "workload": "api-gateway"},
     "access_denied":        {"context": "ctx-aws",        "workload": "api-gateway"},
     "jwt_replay":           {"context": "ctx-aws",        "workload": "api-gateway"},
+    "account_manipulation": {"context": "ctx-openstack",  "workload": "account-service"},
+    "data_staging":         {"context": "ctx-openstack",  "workload": "account-service"},
+    "container_escape":     {"context": "ctx-aws",        "workload": "api-gateway"},
+    "impair_defenses":      {"context": "ctx-aws",        "workload": "api-gateway"},
+    "privilege_escalation": {"context": "ctx-aws",        "workload": "api-gateway"},
 }
 
 PLAYBOOK_BY_ATTACK = {
@@ -73,6 +78,11 @@ PLAYBOOK_BY_ATTACK = {
     "credential_stuffing":  "revoke_user_sessions",
     "access_denied":        "block_source_ip",
     "jwt_replay":           "revoke_user_sessions",
+    "account_manipulation": "isolate_workload",
+    "data_staging":         "restrict_egress",
+    "container_escape":     "quarantine_workload",
+    "impair_defenses":      "quarantine_workload",
+    "privilege_escalation": "quarantine_workload",
 }
 
 ALLOWED_PLAYBOOKS = {
@@ -96,6 +106,11 @@ ATTACK_DISPLAY_NAMES: dict[str, str] = {
     "exploit_probe":        "Exploit Probe / Injection (T1203)",
     "large_response":       "Data Exfiltration — Large Response (T1041)",
     "access_denied":        "Access Denied Spike (T1078)",
+    "account_manipulation": "Account Manipulation (T1098)",
+    "data_staging":         "Data Staging — Bulk Export (T1074)",
+    "container_escape":     "Container Escape Attempt (T1611)",
+    "impair_defenses":      "Impair Defenses (T1562)",
+    "privilege_escalation": "Privilege Escalation in Container (T1611)",
 }
 
 # Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn, không giới hạn)
@@ -110,6 +125,11 @@ SUGGESTED_PLAYBOOKS: dict[str, list[str]] = {
     "exploit_probe":        ["block_source_ip", "isolate_workload", "restrict_egress", "monitor_only"],
     "large_response":       ["restrict_egress", "quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
     "access_denied":        ["block_source_ip", "isolate_workload", "monitor_only"],
+    "account_manipulation": ["isolate_workload", "revoke_user_sessions", "block_source_ip", "monitor_only"],
+    "data_staging":         ["restrict_egress", "quarantine_workload", "block_source_ip", "monitor_only"],
+    "container_escape":     ["quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
+    "impair_defenses":      ["quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
+    "privilege_escalation": ["quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
 }
 
 PLAYBOOK_LABELS: dict[str, str] = {
