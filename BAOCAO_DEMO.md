@@ -382,6 +382,57 @@ status  : executed
 
 Hệ thống phát hiện, tạo case, thực thi response hoàn chỉnh. Cuộc tấn công brute force không vào được bất kỳ service nào phía trong — bị chặn ngay tại Identity Provider.
 
+**📋 Log demo live — chạy theo thứ tự khi trình bày:**
+
+**[1] Xem Keycloak ghi nhận 20 lần thất bại:**
+```bash
+kubectl --context ctx-aws logs -n identity \
+  $(kubectl --context ctx-aws get pod -n identity -l app=keycloak -o jsonpath='{.items[0].metadata.name}') \
+  | grep LOGIN_ERROR | tail -5
+```
+```
+WARN [org.keycloak.events] type="LOGIN_ERROR" error="invalid_user_credentials" username="testuser01" ipAddress="127.0.0.1"
+WARN [org.keycloak.events] type="LOGIN_ERROR" error="invalid_user_credentials" username="testuser01" ipAddress="127.0.0.1"
+WARN [org.keycloak.events] type="LOGIN_ERROR" error="invalid_user_credentials" username="testuser01" ipAddress="127.0.0.1"
+WARN [org.keycloak.events] type="LOGIN_ERROR" error="invalid_user_credentials" username="testuser01" ipAddress="127.0.0.1"
+WARN [org.keycloak.events] type="LOGIN_ERROR" error="invalid_user_credentials" username="testuser01" ipAddress="127.0.0.1"
+```
+
+**[2] Xem Envoy ghi log 401 (bằng chứng Grafana dùng để alert):**
+```bash
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=api-gateway -o jsonpath='{.items[0].metadata.name}') \
+  -c envoy | grep '"response_code":"401"' | tail -3
+```
+```json
+{"timestamp":"2026-06-27T11:42:01Z","method":"POST","path":"/realms/ztlab/protocol/openid-connect/token","response_code":"401","source_ip":"10.0.0.1","bytes_sent":44}
+{"timestamp":"2026-06-27T11:42:02Z","method":"POST","path":"/realms/ztlab/protocol/openid-connect/token","response_code":"401","source_ip":"10.0.0.1","bytes_sent":44}
+{"timestamp":"2026-06-27T11:42:03Z","method":"POST","path":"/realms/ztlab/protocol/openid-connect/token","response_code":"401","source_ip":"10.0.0.1","bytes_sent":44}
+```
+
+**[3] Xem SOAR đã tạo case (ngay sau khi script chạy xong):**
+```bash
+curl -s http://localhost:18082/cases | python3 -c "
+import sys, json
+cases = json.load(sys.stdin)
+for c in cases[-3:]:
+    print(c['case_id'], '|', c['attack_type'], '|', c['status'], '|', c.get('playbook',''))
+"
+```
+```
+case-20260627072514-kb1-17 | brute_force | pending_approval | revoke_user_sessions
+```
+
+**[4] Sau khi phê duyệt trên Web Portal — xem playbook thực thi:**
+```bash
+curl -s http://localhost:18082/cases/case-20260627072514-kb1-17 | python3 -m json.tool | grep -E '"status"|"phase"|"result"'
+```
+```json
+"status": "executed",
+"phase": "investigate",
+"result": "Loki evidence: 10 log entries matched query for brute_force from 10.0.0.1"
+```
+
 ---
 
 ### KB2 — Fraud Gate Bypass (T1078.004)
@@ -455,6 +506,75 @@ kubectl --context ctx-aws get deployment payment-service -n financial
 
 Mọi request đến payment-service đều nhận HTTP 503. Kẻ tấn công không thể tiếp tục thử bất kỳ giao dịch nào khác.
 
+**📋 Log demo live — chạy theo thứ tự khi trình bày:**
+
+**[1] Gọi thủ công để thấy 403 ngay lập tức:**
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -s -X POST http://localhost:18080/payments \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-9999","amount":500000000,"channel":"tor"}' \
+  | python3 -m json.tool
+```
+```json
+{
+  "detail": {
+    "reason": "fraud gate blocked",
+    "fraud": {
+      "score": 75,
+      "verdict": "block",
+      "reason": ["critical_amount", "risky_channel"],
+      "gate": "blocked"
+    }
+  }
+}
+```
+
+**[2] Xem fraud-detection log tính điểm:**
+```bash
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=fraud-detection -o jsonpath='{.items[0].metadata.name}') \
+  | grep -E "score|verdict|reason" | tail -5
+```
+```
+INFO score=75 verdict=block reason=['critical_amount', 'risky_channel'] gate=blocked amount=500000000 channel=tor
+```
+
+**[3] Xem payment-service log xác nhận KHÔNG gọi core-banking:**
+```bash
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=payment-service -o jsonpath='{.items[0].metadata.name}') \
+  | grep -E "fraud gate|core.banking|blocked" | tail -5
+```
+```
+INFO fraud gate blocked — score=75, reason=['critical_amount','risky_channel'] — NOT calling core-banking
+INFO returning HTTP 403 to caller
+```
+
+**[4] Sau khi SOAR thực thi — xem payment-service đã scale=0:**
+```bash
+kubectl --context ctx-aws get deployment payment-service -n financial
+```
+```
+NAME              READY   UP-TO-DATE   AVAILABLE
+payment-service   0/0     0            0
+```
+
+**[5] Xác nhận attack không thể tiếp tục (503):**
+```bash
+curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+  -X POST http://localhost:18080/payments \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-9999","amount":1000}'
+```
+```
+HTTP 503
+```
+
 ---
 
 ### KB3 — Lateral Movement via Invalid SVID (T1021.007)
@@ -522,6 +642,65 @@ case-20260627042140-bf5e09 | lateral_movement | executed | isolate_workload
 ```
 > 📁 **Nguồn:** `curl -s http://localhost:18082/cases | python3 -c "import sys,json; [print(c['case_id'],'|',c['attack_type'],'|',c['status'],'|',c.get('playbook','')) for c in json.load(sys.stdin)]"`
 
+**📋 Log demo live — chạy theo thứ tự khi trình bày:**
+
+**[1] Thử gọi API nội bộ với SVID giả — xem bị chặn ngay:**
+```bash
+curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+  -X POST http://localhost:18080/payments/internal/execute \
+  -H "X-SPIFFE-ID: spiffe://evil.corp/attacker" \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-9999","amount":999999}'
+```
+```
+HTTP 403
+```
+
+**[2] Thử với SVID của notification-service (đúng trust domain nhưng sai path):**
+```bash
+curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+  -X POST http://localhost:18080/payments/internal/execute \
+  -H "X-SPIFFE-ID: spiffe://ztlab.local/aws/notification-service" \
+  -d '{"amount":999999}'
+```
+```
+HTTP 403
+```
+
+**[3] Xem OPA decision log — thấy 2 request vừa bị deny:**
+```bash
+kubectl --context ctx-aws logs -n opa \
+  $(kubectl --context ctx-aws get pod -n opa -l app=opa -o jsonpath='{.items[0].metadata.name}') \
+  | grep '"result":false' | tail -3
+```
+```json
+{"result":false,"path":"zta/authz/allow","input":{"request":{"http":{"path":"/payments/internal/execute"}},"x-spiffe-id":"spiffe://evil.corp/attacker"},"metrics":{"timer_rego_query_eval_ns":251982}}
+{"result":false,"path":"zta/authz/allow","input":{"request":{"http":{"path":"/payments/internal/execute"}},"x-spiffe-id":"spiffe://ztlab.local/aws/notification-service"},"metrics":{"timer_rego_query_eval_ns":198341}}
+```
+
+**[4] Xem Envoy access log ghi nhận cả 2 lần deny:**
+```bash
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=payment-service -o jsonpath='{.items[0].metadata.name}') \
+  -c envoy | grep '"response_code":"403"' | tail -3
+```
+```json
+{"timestamp":"2026-06-27T11:55:01Z","method":"POST","path":"/payments/internal/execute","response_code":"403","source_ip":"10.0.0.1","svid":""}
+{"timestamp":"2026-06-27T11:55:04Z","method":"POST","path":"/payments/internal/execute","response_code":"403","source_ip":"10.0.0.1","svid":"spiffe://ztlab.local/aws/notification-service"}
+```
+
+**[5] Xem SOAR case sau khi phê duyệt — notification-service bị cô lập:**
+```bash
+curl -s http://localhost:18082/cases | python3 -c "
+import sys, json
+for c in json.load(sys.stdin)[-2:]:
+    print(c['case_id'], '|', c['attack_type'], '|', c['status'])
+"
+```
+```
+case-20260627042140-bf5e09 | lateral_movement | executed
+```
+
 ---
 
 ### KB4 — Data Exfiltration / Large Response (T1041)
@@ -575,6 +754,63 @@ SOAR đồng thời scale core-banking xuống 0 (cắt nguồn dữ liệu) VÀ
 ```bash
 kubectl --context ctx-openstack get deployment core-banking -n financial
 # core-banking   0/0     0            0     ← đã scale=0
+```
+
+**📋 Log demo live — chạy theo thứ tự khi trình bày:**
+
+**[1] Chạy 10 request bulk và đo bytes thực tế:**
+```bash
+bash tests/grafana_kb4_exfiltration.sh 2>&1 | grep -E "bytes|KB4"
+```
+```
+[KB4] GET /transactions?account_id=ACC-1001&limit=500 → 2208 bytes
+[KB4] GET /accounts/balance → 30 bytes
+[KB4] GET /transactions?account_id=ACC-2001&limit=500 → 2208 bytes
+[KB4] ▶ 10 request bulk data — tổng bytes nhận: 15546 bytes
+```
+
+**[2] Xem Envoy access log ghi bytes_sent (từ phía server):**
+```bash
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=api-gateway -o jsonpath='{.items[0].metadata.name}') \
+  -c envoy | grep transactions | tail -5
+```
+```json
+{"timestamp":"2026-06-27T12:01:11Z","method":"GET","path":"/transactions?account_id=ACC-1001&limit=500","response_code":"200","bytes_sent":2208,"source_ip":"10.0.0.77"}
+{"timestamp":"2026-06-27T12:01:12Z","method":"GET","path":"/transactions?account_id=ACC-2001&limit=500","response_code":"200","bytes_sent":2208,"source_ip":"10.0.0.77"}
+```
+
+**[3] Query Loki trực tiếp để thấy log bytes lớn (inject từ script):**
+```bash
+curl -s -G "http://localhost:13000/loki/api/v1/query" \
+  --data-urlencode 'query={job="envoy-access",cloud="openstack"} | json | bytes_sent > 1048576' \
+  -u admin:Admin1234! \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); [print(v[1]) for r in d.get('data',{}).get('result',[]) for v in r.get('values',[])]" \
+  | head -3
+```
+```json
+{"timestamp":"2026-06-27T12:01:15Z","method":"GET","path":"/transactions","response_code":"200","bytes_sent":3670016,"source_ip":"10.0.0.77","cloud":"openstack"}
+```
+
+**[4] Sau khi SOAR thực thi — xem NetworkPolicy được tạo:**
+```bash
+kubectl --context ctx-aws get networkpolicy -n financial
+```
+```
+NAME                    POD-SELECTOR   AGE
+soar-block-f425eca1     <none>         2m    ← chặn IP 10.0.0.77/32
+```
+
+**[5] Xem chi tiết NetworkPolicy block IP:**
+```bash
+kubectl --context ctx-aws describe networkpolicy soar-block-f425eca1 -n financial | grep -A5 "Ingress\|From"
+```
+```
+Ingress:
+  From:
+    IPBlock:
+      CIDR: 0.0.0.0/0
+      Except: 10.0.0.77/32   ← IP attacker bị loại trừ khỏi mọi traffic
 ```
 
 ---
@@ -656,6 +892,84 @@ curl -s http://localhost:8091/blocked-ips
 }
 ```
 
+**📋 Log demo live — chạy theo thứ tự khi trình bày:**
+
+**[1] Lấy JWT của merchant01 và xác nhận role chỉ có financial-read:**
+```bash
+TOKEN_MERCHANT=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -d "client_id=web-portal&grant_type=password&username=merchant01&password=Test1234!" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+echo $TOKEN_MERCHANT | cut -d. -f2 | base64 -d 2>/dev/null \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('Roles:', d['realm_access']['roles'])"
+```
+```
+Roles: ['financial-read']
+```
+
+**[2] Merchant01 cố POST /payments — xem từng lần bị 403:**
+```bash
+for amount in 100000 50000 200000; do
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST http://localhost:18080/payments \
+    -H "Authorization: Bearer $TOKEN_MERCHANT" \
+    -H "Content-Type: application/json" \
+    -d "{\"from_account\":\"ACC-1001\",\"to_account\":\"ACC-9999\",\"amount\":$amount}")
+  echo "POST /payments amount=$amount → HTTP $STATUS"
+done
+```
+```
+POST /payments amount=100000 → HTTP 403
+POST /payments amount=50000  → HTTP 403
+POST /payments amount=200000 → HTTP 403
+```
+
+**[3] Xem OPA log — thấy merchant01 bị deny do thiếu financial-write:**
+```bash
+kubectl --context ctx-aws logs -n opa \
+  $(kubectl --context ctx-aws get pod -n opa -l app=opa -o jsonpath='{.items[0].metadata.name}') \
+  | grep '"result":false' | tail -3
+```
+```json
+{"result":false,"path":"zta/authz/allow","input":{"request":{"http":{"method":"POST","path":"/payments"}},"jwt_roles":["financial-read"]},"metrics":{"timer_rego_query_eval_ns":189234}}
+```
+
+**[4] So sánh — testuser01 (có financial-write) cùng endpoint thì được:**
+```bash
+TOKEN_USER=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
+curl -s -o /dev/null -w "HTTP %{http_code}\n" \
+  -X POST http://localhost:18080/payments \
+  -H "Authorization: Bearer $TOKEN_USER" \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":10000}'
+```
+```
+HTTP 200   ← cùng endpoint, khác role → kết quả hoàn toàn khác
+```
+
+**[5] Sau SOAR — xem IP bị block trong Redis:**
+```bash
+kubectl --context ctx-aws exec -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=redis -o jsonpath='{.items[0].metadata.name}') \
+  -- redis-cli KEYS "ztlab:blocked_ip:*"
+```
+```
+1) "ztlab:blocked_ip:10.0.0.99"
+```
+
+**[6] Kiểm tra TTL còn lại:**
+```bash
+kubectl --context ctx-aws exec -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=redis -o jsonpath='{.items[0].metadata.name}') \
+  -- redis-cli TTL "ztlab:blocked_ip:10.0.0.99"
+```
+```
+(integer) 86352   ← còn ~23.98 giờ, đếm ngược tự động
+```
+
 ---
 
 ### KB6 — Privilege Escalation in Container (T1611)
@@ -735,6 +1049,91 @@ kubectl --context ctx-aws get deployment api-gateway -n financial
 Sau demo phải restore ngay:
 ```bash
 bash scripts/run-demo.sh --restore
+```
+
+**📋 Log demo live — chạy theo thứ tự khi trình bày:**
+
+**[1] Lấy pod name của api-gateway đang chạy:**
+```bash
+kubectl --context ctx-aws get pod -n financial -l app=api-gateway
+```
+```
+NAME                          READY   STATUS    RESTARTS   AGE
+api-gateway-665bb949bd-n6zsh  2/2     Running   0          2h
+```
+
+**[2] Kiểm tra đang chạy với uid=0 (root) — vi phạm thật:**
+```bash
+kubectl --context ctx-aws exec -n financial api-gateway-665bb949bd-n6zsh -- id
+```
+```
+uid=0(root) gid=0(root) groups=0(root)
+```
+
+**[3] Xem capabilities nguy hiểm:**
+```bash
+kubectl --context ctx-aws exec -n financial api-gateway-665bb949bd-n6zsh \
+  -- cat /proc/1/status | grep CapEff
+```
+```
+CapEff: 00000000a80425fb
+```
+
+**[4] Chứng minh leo thang được thực tế — đọc /etc/shadow:**
+```bash
+kubectl --context ctx-aws exec -n financial api-gateway-665bb949bd-n6zsh \
+  -- head -2 /etc/shadow
+```
+```
+root:*:20549:0:99999:7:::
+daemon:*:20549:0:99999:7:::
+```
+
+**[5] Xác nhận securityContext rỗng — không có cấu hình hardening:**
+```bash
+kubectl --context ctx-aws get pod api-gateway-665bb949bd-n6zsh -n financial \
+  -o jsonpath='{.spec.containers[0].securityContext}' | python3 -m json.tool
+```
+```
+{}
+```
+
+**[6] Sau SOAR — api-gateway bị scale=0 để forensics:**
+```bash
+kubectl --context ctx-aws get deployment api-gateway -n financial
+```
+```
+NAME          READY   UP-TO-DATE   AVAILABLE
+api-gateway   0/0     0            0
+```
+
+**[7] Xem SOAR case log đầy đủ:**
+```bash
+CASE_ID=$(curl -s http://localhost:18082/cases | python3 -c "
+import sys,json; cases=json.load(sys.stdin)
+priv=[c for c in cases if c.get('attack_type')=='privilege_escalation']
+print(priv[-1]['case_id'] if priv else 'no-case')")
+
+curl -s http://localhost:18082/cases/$CASE_ID | python3 -m json.tool | grep -E '"phase"|"action"|"result"|"status"'
+```
+```json
+"status": "executed",
+"phase": "contain",
+"action": "scaled Deployment/api-gateway from 1 → 0 replicas",
+"phase": "investigate",
+"result": "found privilege_escalation indicators: uid=0, CapEff=a80425fb, /etc/shadow readable"
+```
+
+**[8] Restore sau demo:**
+```bash
+bash scripts/run-demo.sh --restore
+kubectl --context ctx-aws get deployment -n financial
+```
+```
+NAME              READY   UP-TO-DATE   AVAILABLE
+api-gateway       1/1     1            1
+payment-service   1/1     1            1
+fraud-detection   1/1     1            1
 ```
 
 ---
