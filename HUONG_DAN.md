@@ -884,26 +884,26 @@ bash tests/scenario_20_replay_attack.sh      # SC20 — JWT Replay Attack (T1539
 
 | # | Tên | ATT&CK | Phát hiện | Kết quả mong đợi |
 |---|-----|--------|-----------|-----------------|
-| SC01 | Brute Force Login | T1110.001 | AI: brute_force | severity=high, playbook=revoke_user_sessions |
-| SC02 | JWT Token Forgery | T1550.001 | GW: 401/403 | api-gateway từ chối JWT giả signature |
-| SC03 | Lateral Movement | T1021.007 | AI: lateral_movement | severity=critical, playbook=isolate_workload |
-| SC04 | Fraud Gate Bypass | T1078 | AI: fraud_gate_bypass | severity=critical, playbook=isolate_workload |
-| SC05 | High-Velocity Flood | T1496/T1110 | Fraud: velocity block | fraud score ≥ 75 → blocked sau ~30 req |
-| SC06 | Data Exfiltration | T1041 | AI: large_response | severity=high, playbook=restrict_egress |
-| SC07 | SVID Expiry | T1552.004 | SPIRE: health check | SPIRE healthy, SVIDs ≥ 5 đã đăng ký |
-| SC08 | Unauthorized Cross-Cloud | T1021.007 | OPA/mTLS: block | Request thiếu SVID/fraud-gate bị chặn |
-| SC09 | Privilege Escalation | T1611 | K8s: security ctx | Container chạy non-root, sudo bị block |
-| SC10 | Port Scanning | T1046 | AI: port_scan | severity=medium, playbook=block_source_ip |
-| SC11 | Cryptomining | T1496 | AI: cryptomining | severity=critical, playbook=quarantine_workload |
-| SC12 | SOAR 4-step Response | TA0040/TA0006 | SOAR: pipeline | isolate → block → revoke → rollback PASS |
-| SC13 | SQL Injection | T1190 | API+AI: exploit_probe | 400/422 + AI detect inject pattern |
-| SC14 | Command Injection | T1059 | API+AI: exploit_probe | 400/422 + AI detect shell metachar |
-| SC15 | Account Manipulation | T1098 | OPA+AI: block | 403 + AI detect account_manipulation |
-| SC16 | Credential Stuffing | T1078.001 | AI: credential_stuffing | severity=high, playbook=revoke_user_sessions |
-| SC17 | Impair Defenses | T1562 | Net+AI: impair_defenses | Security infra inaccessible từ ngoài |
-| SC18 | Container Escape | T1611 | K8s+AI: container_escape | Host FS/socket inaccessible, AI detect |
-| SC19 | Data Staging | T1074/T1020 | AI: data_staging | severity=high, playbook=restrict_egress |
-| SC20 | JWT Replay Attack | T1539/T1550 | GW+AI: jwt_replay | Expired/stolen JWT rejected + AI detect |
+| SC01 | Brute Force Login | T1110.001 | API GW + AI | severity=high, playbook=revoke_user_sessions |
+| SC02 | JWT Token Forgery | T1550.001 | API GW | api-gateway từ chối JWT algorithm=none/HS256 giả |
+| SC03 | Lateral Movement | T1021.007 | Envoy/OPA + AI | severity=**high**, playbook=isolate_workload |
+| SC04 | Fraud Gate Bypass | T1078 | OPA + Core Banking | severity=**critical**, playbook=isolate_workload |
+| SC05 | High-Velocity Flood | T1496/T1110 | Fraud Detection | severity=**medium**, fraud score ≥ 75 → blocked |
+| SC06 | Data Exfiltration | T1041 | AI | severity=high, playbook=restrict_egress |
+| SC07 | SVID Expiry | T1552.004 | Envoy/SPIRE | SPIRE healthy, SVIDs ≥ 5 đã đăng ký |
+| SC08 | Unauthorized Cross-Cloud | T1021.007 | OPA + AI | severity=high, playbook=isolate_workload |
+| SC09 | Privilege Escalation | T1611 | K8s + **AI** | severity=**critical**, playbook=quarantine_workload |
+| SC10 | Port Scanning | T1046 | AI | severity=**medium**, playbook=block_source_ip |
+| SC11 | Cryptomining | T1496 | AI | severity=**high**, playbook=quarantine_workload |
+| SC12 | SOAR 4-step Response | TA0040/TA0006 | SOAR Engine | isolate → block → revoke → rollback PASS |
+| SC13 | SQL Injection | T1190 | Envoy/AI | severity=high, playbook=block_source_ip |
+| SC14 | Command Injection | T1059 | AI | severity=high, playbook=block_source_ip |
+| SC15 | Account Manipulation | T1098 | Core Banking + AI | severity=high, playbook=isolate_workload |
+| SC16 | Credential Stuffing | T1078.001 | API GW + AI | severity=high, playbook=revoke_user_sessions |
+| SC17 | Impair Defenses | T1562 | AI | severity=**critical**, playbook=quarantine_workload |
+| SC18 | Container Escape | T1611 | AI | severity=**critical**, playbook=quarantine_workload |
+| SC19 | Data Staging | T1074/T1020 | AI | severity=high, playbook=restrict_egress |
+| SC20 | JWT Replay Attack | T1539 | API GW/Envoy | severity=high, playbook=revoke_user_sessions |
 
 #### Kiểm tra kết quả AI Analyzer
 

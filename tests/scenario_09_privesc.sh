@@ -4,6 +4,7 @@
 set -euo pipefail
 
 AWS_CTX="${AWS_CTX:-ctx-aws}"
+AI_URL="${AI_URL:-http://localhost:18082}"
 NS="financial"
 SCENARIO="scenario_09_privesc"
 
@@ -50,4 +51,26 @@ if echo "$privileged" | grep -q "true"; then
   fail "container is running with privileged=true — critical security issue"
 fi
 
-pass "no privilege escalation path found in api-gateway container (T1611)"
+log "injecting privilege escalation attempt log to AI Analyzer..."
+curl -fsS "$AI_URL/health" >/dev/null || fail "AI Analyzer unreachable at $AI_URL"
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+response=$(curl -fsS -X POST "$AI_URL/analyze" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source": "scenario_09_privesc",
+    "logs": [
+      {"timestamp": "'"$ts"'",
+       "message": "privilege_escalation setuid binary executed pid=1234 binary=/usr/bin/sudo container=api-gateway cap_sys_admin=requested node=ip-10-10-1-11",
+       "labels": {"namespace":"financial","app":"api-gateway","job":"kubernetes-pods"}},
+      {"timestamp": "'"$ts"'",
+       "message": "container_privilege_escalation_attempt cap_net_admin=requested seccomp=unconfined source_ip=10.10.1.50",
+       "labels": {"namespace":"financial","app":"api-gateway","job":"kubernetes-pods"}}
+    ]
+  }' 2>/dev/null)
+verdict=$(printf '%s' "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('verdict','?'))" 2>/dev/null || echo "?")
+severity=$(printf '%s' "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('severity','?'))" 2>/dev/null || echo "?")
+[[ "$verdict" == "malicious" || "$verdict" == "suspicious" ]] \
+  || fail "AI expected malicious/suspicious for privilege_escalation, got $verdict"
+log "AI Analyzer detected privilege escalation — verdict=$verdict severity=$severity"
+
+pass "privilege escalation blocked at container level; AI detected attack verdict=$verdict severity=$severity (T1611)"

@@ -6,8 +6,8 @@
 set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
-AI_URL="${AI_URL:-http://localhost:8090}"
-LOKI_URL="${LOKI_URL:-http://localhost:3100}"
+AI_URL="${AI_URL:-http://localhost:18082}"
+LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
 SCENARIO="scenario_17_impair_defenses"
 

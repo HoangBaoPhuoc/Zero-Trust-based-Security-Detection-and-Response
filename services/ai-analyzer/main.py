@@ -386,14 +386,17 @@ def heuristic_analyze(logs: list[LogEntry]) -> AnalyzeResult:
     flattened = " ".join(_flatten_log(entry) for entry in logs)
     primary = _primary_attack_type(unique_reasons)
 
-    critical_attacks = {"fraud_gate_bypass", "lateral_movement", "cryptomining", "container_escape", "privilege_escalation"}
-    high_attacks = {"large_response", "brute_force", "credential_stuffing", "data_staging", "impair_defenses", "account_manipulation"}
+    # Severity theo Bảng 5.1 báo cáo NT114
+    critical_attacks = {"fraud_gate_bypass", "container_escape", "privilege_escalation", "impair_defenses"}
+    high_attacks = {"large_response", "brute_force", "credential_stuffing", "data_staging",
+                    "cryptomining", "account_manipulation", "lateral_movement"}
+    medium_attacks = {"port_scan", "access_denied"}
 
     if critical_attacks & set(unique_reasons):
         severity = "critical"
     elif high_attacks & set(unique_reasons):
         severity = "high"
-    elif len(unique_reasons) == 1 and unique_reasons == ["access_denied"]:
+    elif medium_attacks & set(unique_reasons):
         severity = "medium"
     else:
         severity = "high"
