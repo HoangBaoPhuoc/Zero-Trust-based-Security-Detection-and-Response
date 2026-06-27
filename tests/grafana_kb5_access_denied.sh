@@ -17,12 +17,10 @@ pass() { printf "[%s] PASS: %s\n" "$SCENARIO" "$*"; }
 fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
-log "Bước 1: kiểm tra API Gateway và SOAR..."
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
 curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 
 # ── 2. Lấy JWT merchant01 (financial-read only) ───────────────────────────────
-log "Bước 2: lấy JWT merchant01 (role: financial-read only)..."
 MERCHANT_TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=merchant01&password=Test1234%21&scope=openid" \
@@ -34,10 +32,9 @@ import sys,base64,json
 p=sys.stdin.read().strip(); p+='='*((4-len(p)%4)%4)
 d=json.loads(base64.urlsafe_b64decode(p))
 print(d.get('realm_access',{}).get('roles',[]))" 2>/dev/null || echo "unknown")
-log "  merchant01 roles: $roles  ← chỉ có financial-read, không có financial-write"
+log "merchant01 roles: $roles"
 
 # ── 3. merchant01 thử POST /payments → OPA RBAC deny thật ───────────────────
-log "Bước 3: merchant01 thử POST /payments (cần financial-write) → OPA RBAC từ chối..."
 denied=0
 amounts=(100000 50000 200000 75000 1000000 5000)
 for amount in "${amounts[@]}"; do
@@ -47,22 +44,13 @@ for amount in "${amounts[@]}"; do
     -d "{\"from_account\":\"ACC-4001\",\"to_account\":\"ACC-2001\",\"amount\":$amount}" \
     2>/dev/null || echo "000")
   [[ "$code" == "403" ]] && denied=$((denied+1))
-  log "  POST /payments amount=$amount → HTTP $code  ← OPA RBAC deny (financial-write required)"
+  log "  POST /payments $amount → HTTP $code"
 done
 
 [[ $denied -ge 4 ]] || fail "Chỉ $denied/${#amounts[@]} request bị OPA từ chối (cần ≥4)"
-log "▶ OPA RBAC từ chối $denied/${#amounts[@]} request — merchant01 vi phạm least-privilege"
+log "OPA RBAC từ chối $denied/${#amounts[@]} (403)"
 
-# Lấy response body để hiển thị lý do
-deny_reason=$(curl -s -X POST "$GW_URL/payments" \
-  -H "Authorization: Bearer $MERCHANT_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"from_account":"ACC-4001","to_account":"ACC-2001","amount":1000}' 2>/dev/null) || deny_reason="{}"
-parsed=$(echo "$deny_reason" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d)" 2>/dev/null) || parsed="(see HTTP 403)"
-log "  OPA response: $parsed"
-
-# ── 4. Đẩy OPA deny log vào Loki (Python để tránh bash escaping issues) ──────
-log "Bước 4: đẩy OPA deny log vào Loki (format khớp Grafana rule)..."
+# ── 4. Đẩy OPA deny log vào Loki ─────────────────────────────────────────────
 python3 - <<PYEOF
 import json, urllib.request, time
 loki_url = "${LOKI_URL}"
@@ -90,11 +78,9 @@ req = urllib.request.Request(
     data=json.dumps(payload).encode(),
     headers={"Content-Type": "application/json"}, method="POST")
 urllib.request.urlopen(req, timeout=5)
-print(f"[KB5_access_denied] 6 OPA deny log đã vào Loki — Grafana rule sẽ fire")
 PYEOF
 
-# ── 5. Mô phỏng Grafana → SOAR webhook ────────────────────────────────────────
-log "Bước 5: mô phỏng Grafana 'Access Denied Spike' → SOAR webhook..."
+# ── 5. SOAR webhook ───────────────────────────────────────────────────────────
 fp="kb5-$(date +%s)"
 soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   -H "Content-Type: application/json" \
@@ -119,7 +105,6 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
   }")
 
 # ── 6. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-log "Bước 6: kiểm tra SOAR case..."
 status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null || echo "?")
 playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null || echo "?")
 case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null || echo "?")
