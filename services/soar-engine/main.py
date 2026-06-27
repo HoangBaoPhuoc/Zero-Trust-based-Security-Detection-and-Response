@@ -85,6 +85,24 @@ PLAYBOOK_BY_ATTACK = {
     "privilege_escalation": "quarantine_workload",
 }
 
+MITRE_BY_ATTACK: dict[str, str] = {
+    "brute_force":          "T1110.001",
+    "credential_stuffing":  "T1110.004",
+    "jwt_replay":           "T1539",
+    "fraud_gate_bypass":    "T1078.004",
+    "lateral_movement":     "T1021.007",
+    "cryptomining":         "T1496",
+    "port_scan":            "T1046",
+    "exploit_probe":        "T1203",
+    "large_response":       "T1041",
+    "access_denied":        "T1078",
+    "account_manipulation": "T1098",
+    "data_staging":         "T1074",
+    "container_escape":     "T1611",
+    "impair_defenses":      "T1562",
+    "privilege_escalation": "T1611",
+}
+
 ALLOWED_PLAYBOOKS = {
     "isolate_workload",
     "restrict_egress",
@@ -761,6 +779,65 @@ async def _investigate_loki(attack_type: str, workload: str | None, source_ip: s
         return f"Loki query failed: {exc}"
 
 
+_LOKI_SEARCH_TERMS: dict[str, str] = {
+    "brute_force":          "401|403|login.fail|authentication.fail|invalid.credentials|login_attempt",
+    "credential_stuffing":  "401|403|login.fail|too.many|credential.stuff|multiple.fail",
+    "jwt_replay":           "jwt.replay|token.reuse|duplicate.jti|jti.already.used|token_reuse",
+    "fraud_gate_bypass":    "fraud_gate|fraud_score|bypass|gate=failed|fraud_gate_bypass",
+    "lateral_movement":     "svid|denied|lateral|spiffe|invalid.svid|lateral_movement",
+    "cryptomining":         "xmrig|stratum|cryptomin|cpu.spike|mining",
+    "port_scan":            "port.scan|nmap|syn.scan|masscan|port_scan",
+    "exploit_probe":        "sqlmap|union.select|cmd.injection|payload|exploit",
+    "large_response":       "bytes_sent|data.exfil|large.response|exfiltrat",
+    "access_denied":        "denied|403|unauthorized|access.denied|opa.deny",
+    "account_manipulation": "account.manip|role.change|privilege.grant|account_manipulation|T1098",
+    "data_staging":         "bulk.export|data.staging|large.query|bulk_export|staging",
+    "container_escape":     "container.escape|cap_sys_admin|cap_net_admin|seccomp|privileged|escape",
+    "impair_defenses":      "impair.defense|disable.log|opa.admin|prometheus.scrape|loki.push|impair",
+    "privilege_escalation": "privilege.escalat|setuid|sudo|cap_sys_admin|privesc|escalat",
+}
+
+
+async def _fetch_loki_lines(
+    attack_type: str,
+    source_ip: str | None,
+    workload: str | None,
+    limit: int = 8,
+) -> list[str]:
+    """Fetch actual log lines from Loki matching the attack pattern. Returns list of strings."""
+    end_ns = time.time_ns()
+    start_ns = end_ns - 30 * 60 * 10**9  # last 30 minutes
+
+    parts = []
+    if workload:
+        parts.append(f'app="{workload}"')
+    base = "{" + ", ".join(parts) + "}" if parts else '{namespace="financial"}'
+
+    term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
+    if source_ip:
+        term = f"{source_ip}|{term}"
+    query = f'{base} |~ "(?i)({term})"'
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            resp = await h.get(
+                f"{LOKI_URL}/loki/api/v1/query_range",
+                params={"query": query, "start": start_ns, "end": end_ns, "limit": limit},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            lines: list[str] = []
+            for stream in data.get("data", {}).get("result", []):
+                app = stream.get("stream", {}).get("app", "?")
+                for _, raw_line in stream.get("values", []):
+                    lines.append(f"[{app}] {raw_line[:200]}")
+                    if len(lines) >= limit:
+                        return lines
+            return lines
+    except Exception:
+        return []
+
+
 # ── 4-step playbook runner ───────────────────────────────────────────────────
 
 async def _run_steps(
@@ -1035,11 +1112,15 @@ async def _process_heuristic_alert(alert: SecurityAlert) -> CaseRecord:
 
     if status == "pending_approval":
         _HITL_QUEUE[case_id] = (case, playbook, target)
+        evidence = list(alert.evidence)
+        if len(evidence) < 3:
+            loki_lines = await _fetch_loki_lines(attack, alert.source_ip, target.get("workload"))
+            evidence = loki_lines + evidence
         await _send_hitl_email(
             case=case,
             alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
-            mitre=PLAYBOOK_BY_ATTACK.get(attack, "—"),
-            log_lines=alert.evidence,
+            mitre=MITRE_BY_ATTACK.get(attack, "—"),
+            log_lines=evidence,
         )
     return result
 
@@ -1293,11 +1374,15 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
     result = await record_case(case)
     if status == "pending_approval":
         _HITL_QUEUE[case_id] = (case, playbook, target)
+        evidence = list(alert.evidence)
+        if len(evidence) < 3:
+            loki_lines = await _fetch_loki_lines(attack, alert.source_ip, target.get("workload"))
+            evidence = loki_lines + evidence
         await _send_hitl_email(
             case=case,
             alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
-            mitre=PLAYBOOK_BY_ATTACK.get(attack, "—"),
-            log_lines=alert.evidence,
+            mitre=MITRE_BY_ATTACK.get(attack, "—"),
+            log_lines=evidence,
         )
     if result.status == "failed":
         raise HTTPException(status_code=500, detail=result.model_dump())
@@ -1457,13 +1542,18 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
 
         if status == "pending_approval":
             _HITL_QUEUE[case_id] = (case, playbook, target)
-            ann = alert_data.get("annotations", {})
             lbs = alert_data.get("labels", {})
+            ann = alert_data.get("annotations", {})
+            loki_lines = await _fetch_loki_lines(attack, alert.source_ip, target.get("workload"))
+            desc_lines = [l for l in ann.get("description", "").splitlines() if l.strip()]
+            evidence = loki_lines if loki_lines else desc_lines
+            if not evidence:
+                evidence = [f"Grafana alert fired: {lbs.get('alertname', attack)} — no Loki evidence in last 30 min"]
             await _send_hitl_email(
                 case       = case,
                 alert_name = _clean_alert_name(lbs.get("alertname", attack), attack),
-                mitre      = lbs.get("mitre", "—"),
-                log_lines  = ann.get("description", "").splitlines(),
+                mitre      = lbs.get("mitre", MITRE_BY_ATTACK.get(attack, "—")),
+                log_lines  = evidence,
             )
 
         logger.warning(json.dumps({"event_type": "grafana_soar_triggered", "case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status}))
