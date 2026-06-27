@@ -142,6 +142,11 @@ const SUGGESTED_PLAYBOOKS = {
   exploit_probe:        ['block_source_ip', 'isolate_workload', 'restrict_egress', 'monitor_only'],
   large_response:       ['restrict_egress', 'quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
   access_denied:        ['block_source_ip', 'isolate_workload', 'monitor_only'],
+  account_manipulation: ['isolate_workload', 'revoke_user_sessions', 'block_source_ip', 'monitor_only'],
+  data_staging:         ['restrict_egress', 'quarantine_workload', 'block_source_ip', 'monitor_only'],
+  container_escape:     ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  impair_defenses:      ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  privilege_escalation: ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
 };
 const PLAYBOOK_LABELS = {
   isolate_workload:     '🔒 Cô lập dịch vụ',

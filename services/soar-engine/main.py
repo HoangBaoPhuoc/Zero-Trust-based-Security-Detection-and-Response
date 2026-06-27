@@ -1250,6 +1250,10 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
     if playbook == "monitor_only" or not eligible:
         status = "skipped"
         reason = reason if playbook != "monitor_only" else f"no automated playbook for attack_type={alert.attack_type}"
+    elif _needs_hitl(alert):
+        status = "pending_approval"
+        action = f"awaiting admin approval for playbook {playbook}"
+        reason = f"severity={alert.severity} >= hitl_threshold={SOAR_HITL_SEVERITY}"
     else:
         try:
             action, steps = await _run_steps(
@@ -1287,6 +1291,14 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
         ts=_now_iso(),
     )
     result = await record_case(case)
+    if status == "pending_approval":
+        _HITL_QUEUE[case_id] = (case, playbook, target)
+        await _send_hitl_email(
+            case=case,
+            alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
+            mitre=PLAYBOOK_BY_ATTACK.get(attack, "—"),
+            log_lines=alert.evidence,
+        )
     if result.status == "failed":
         raise HTTPException(status_code=500, detail=result.model_dump())
     return result
