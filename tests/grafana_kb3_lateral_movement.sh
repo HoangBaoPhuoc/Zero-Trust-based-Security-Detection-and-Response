@@ -7,7 +7,6 @@
 set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
-SOAR_URL="${SOAR_URL:-http://localhost:8091}"
 LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 SCENARIO="KB3_lateral_movement"
 
@@ -17,7 +16,6 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
-curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 
 # ── 2. Gửi request giả mạo SVID (lateral movement) ─────────────────────────
 code=$(curl -s -o /dev/null -w "%{http_code}" \
@@ -48,38 +46,4 @@ curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
     ]
   }]}" >/dev/null
 
-# ── 4. SOAR webhook ───────────────────────────────────────────────────────────
-fp="kb3-$(date +%s)"
-soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"status\": \"firing\",
-    \"alerts\": [{
-      \"status\": \"firing\",
-      \"labels\": {
-        \"alertname\": \"Lateral Movement — Invalid SVID (T1021.007)\",
-        \"severity\": \"critical\",
-        \"attack_type\": \"lateral_movement\",
-        \"mitre\": \"T1021.007\",
-        \"category\": \"security\",
-        \"source_ip\": \"10.10.1.11\"
-      },
-      \"annotations\": {
-        \"summary\": \"OPA từ chối SVID ngoài trust domain — nghi ngờ lateral movement\",
-        \"description\": \"svid=spiffe://evil.domain/attacker/service source_ip=10.10.1.11 path=/transactions/execute\"
-      },
-      \"fingerprint\": \"$fp\"
-    }]
-  }")
-
-# ── 5. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
-playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
-case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)
-
-[[ "$status" =~ ^(pending_approval|executed|dry_run|deduped)$ ]] \
-  || fail "SOAR status='$status' (expect pending_approval)"
-[[ "$playbook" == "isolate_workload" ]] \
-  || fail "SOAR playbook='$playbook' (expect isolate_workload)"
-
-pass "KB3 Lateral Movement | SVID blocked HTTP $code | SOAR case=$case_id status=$status playbook=$playbook (T1021.007)"
+pass "KB3 | SVID blocked HTTP $code/$code2 | logs → Loki (Grafana fire trong ≤1 phút)"

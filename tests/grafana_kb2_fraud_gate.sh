@@ -8,7 +8,6 @@ set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
 KC_URL="${KC_URL:-http://localhost:8180}"
-SOAR_URL="${SOAR_URL:-http://localhost:8091}"
 LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 SCENARIO="KB2_fraud_gate"
 
@@ -18,7 +17,6 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
-curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 
 # ── 2. Lấy JWT hợp lệ ───────────────────────────────────────────────────────
 TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
@@ -54,39 +52,4 @@ curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
     ]
   }]}" >/dev/null
 
-# ── 5. SOAR webhook ───────────────────────────────────────────────────────────
-fp="kb2-$(date +%s)"
-soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"status\": \"firing\",
-    \"alerts\": [{
-      \"status\": \"firing\",
-      \"labels\": {
-        \"alertname\": \"Fraud Gate Bypass (T1078.004)\",
-        \"severity\": \"critical\",
-        \"attack_type\": \"fraud_gate_bypass\",
-        \"mitre\": \"T1078.004\",
-        \"category\": \"security\",
-        \"gap\": \"gap2\",
-        \"source_ip\": \"10.0.0.5\"
-      },
-      \"annotations\": {
-        \"summary\": \"Fraud gate bypass attempt — amount=500000000 channel=tor fraud_score=75\",
-        \"description\": \"source_ip=10.0.0.5 amount=500000000 channel=tor fraud_score=75 path=/transactions/execute\"
-      },
-      \"fingerprint\": \"$fp\"
-    }]
-  }")
-
-# ── 6. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
-playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
-case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)
-
-[[ "$status" =~ ^(pending_approval|executed|dry_run|deduped)$ ]] \
-  || fail "SOAR status='$status' (expect pending_approval)"
-[[ "$playbook" == "isolate_workload" ]] \
-  || fail "SOAR playbook='$playbook' (expect isolate_workload)"
-
-pass "KB2 Fraud Gate | HTTP $http_code blocked | SOAR case=$case_id status=$status playbook=$playbook (T1078.004)"
+pass "KB2 | HTTP $http_code (fraud gate) | logs → Loki (Grafana fire trong ≤1 phút)"

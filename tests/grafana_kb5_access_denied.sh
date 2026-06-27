@@ -8,7 +8,6 @@ set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
 KC_URL="${KC_URL:-http://localhost:8180}"
-SOAR_URL="${SOAR_URL:-http://localhost:8091}"
 LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 SCENARIO="KB5_access_denied"
 
@@ -18,7 +17,6 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
-curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 
 # ── 2. Lấy JWT merchant01 (financial-read only) ───────────────────────────────
 MERCHANT_TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
@@ -80,38 +78,4 @@ req = urllib.request.Request(
 urllib.request.urlopen(req, timeout=5)
 PYEOF
 
-# ── 5. SOAR webhook ───────────────────────────────────────────────────────────
-fp="kb5-$(date +%s)"
-soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"status\": \"firing\",
-    \"alerts\": [{
-      \"status\": \"firing\",
-      \"labels\": {
-        \"alertname\": \"Access Denied Spike\",
-        \"severity\": \"high\",
-        \"attack_type\": \"access_denied\",
-        \"mitre\": \"T1078\",
-        \"category\": \"security\",
-        \"source_ip\": \"10.0.0.99\"
-      },
-      \"annotations\": {
-        \"summary\": \"OPA RBAC deny spike — merchant01 bị từ chối $denied/${#amounts[@]} POST /payments\",
-        \"description\": \"source_ip=10.0.0.99 count=$denied window=1m reason=missing_financial_write_role subject=merchant01\"
-      },
-      \"fingerprint\": \"$fp\"
-    }]
-  }")
-
-# ── 6. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null || echo "?")
-playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null || echo "?")
-case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null || echo "?")
-
-[[ "$status" =~ ^(pending_approval|executed|dry_run|deduped)$ ]] \
-  || fail "SOAR status='$status' (expect pending_approval)"
-[[ "$playbook" == "block_source_ip" ]] \
-  || fail "SOAR playbook='$playbook' (expect block_source_ip)"
-
-pass "KB5 Access Denied | OPA RBAC THẬT: $denied/${#amounts[@]} từ chối | SOAR case=$case_id status=$status playbook=$playbook (T1078)"
+pass "KB5 | OPA RBAC từ chối $denied/${#amounts[@]} (403) | logs → Loki (Grafana fire trong ≤1 phút)"

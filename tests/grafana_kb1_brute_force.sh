@@ -7,7 +7,6 @@
 set -euo pipefail
 
 KC_URL="${KC_URL:-http://localhost:8180}"
-SOAR_URL="${SOAR_URL:-http://localhost:8091}"
 LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 SCENARIO="KB1_brute_force"
 
@@ -18,8 +17,6 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
 curl -fsS "$KC_URL/realms/ztlab/.well-known/openid-configuration" >/dev/null \
   || fail "Keycloak không khả dụng tại $KC_URL"
-curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' \
-  || fail "SOAR Engine không khả dụng tại $SOAR_URL"
 
 # ── 2. Sinh traffic tấn công thật ────────────────────────────────────────────
 blocked=0
@@ -43,38 +40,4 @@ for seq in 0 1 2 3 4; do
         \"{\\\"response_code\\\":401,\\\"source_ip\\\":\\\"10.0.0.1\\\",\\\"method\\\":\\\"POST\\\",\\\"path\\\":\\\"/api/login\\\",\\\"bytes_sent\\\":0}\"]]}]}" >/dev/null
 done
 
-# ── 4. SOAR webhook ───────────────────────────────────────────────────────────
-fp="kb1-$(date +%s)"
-soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"status\": \"firing\",
-    \"alerts\": [{
-      \"status\": \"firing\",
-      \"labels\": {
-        \"alertname\": \"Brute Force Login (T1110.001)\",
-        \"severity\": \"high\",
-        \"attack_type\": \"brute_force\",
-        \"mitre\": \"T1110.001\",
-        \"category\": \"security\",
-        \"source_ip\": \"10.0.0.1\"
-      },
-      \"annotations\": {
-        \"summary\": \"$blocked failed logins from 10.0.0.1 in 60s\",
-        \"description\": \"source_ip=10.0.0.1 count=$blocked window=60s target_user=testuser01\"
-      },
-      \"fingerprint\": \"$fp\"
-    }]
-  }")
-
-# ── 5. Kiểm tra SOAR case ────────────────────────────────────────────────────
-status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
-playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
-case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)
-
-[[ "$status" =~ ^(pending_approval|executed|dry_run|deduped)$ ]] \
-  || fail "SOAR status='$status' (expect pending_approval)"
-[[ "$playbook" == "revoke_user_sessions" ]] \
-  || fail "SOAR playbook='$playbook' (expect revoke_user_sessions)"
-
-pass "KB1 Brute Force | blocked=$blocked/20 | SOAR case=$case_id status=$status playbook=$playbook (T1110.001)"
+pass "KB1 | blocked=$blocked/20 | logs → Loki (Grafana fire trong ≤1 phút)"

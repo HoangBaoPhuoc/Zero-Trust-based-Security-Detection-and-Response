@@ -246,7 +246,7 @@ curl -s http://localhost:8180/realms/ztlab/.well-known/openid-configuration >/de
   && echo "Keycloak OK" || echo "Keycloak FAIL"
 ```
 
-> **Lưu ý dedup**: SOAR giới hạn 1 case mỗi attack_type trong 5 phút. Nếu chạy cùng kịch bản 2 lần liên tiếp, lần thứ 2 sẽ trả `status=deduped` — script vẫn in `PASS` và trả về case_id gốc. Đây là hành vi đúng, không phải lỗi.
+> **Lưu ý**: Script chỉ sinh traffic thật và inject log vào Loki. **Case trong Web Portal được tạo bởi Grafana real alert** (~1 phút sau khi script kết thúc). SOAR giới hạn 1 case mỗi attack_type trong 5 phút — nếu chạy cùng kịch bản 2 lần liên tiếp, chỉ 1 case được tạo.
 
 **Mở 3 terminal song song để theo dõi**:
 
@@ -296,15 +296,10 @@ bash tests/grafana_kb1_brute_force.sh
 
 ```
 [KB1_brute_force] Keycloak chặn 20/20 (401)
-[KB1_brute_force] PASS: KB1 Brute Force | blocked=20/20 | SOAR case=case-XXXXXXXXXXXXXXX status=pending_approval playbook=revoke_user_sessions (T1110.001)
+[KB1_brute_force] PASS: KB1 | blocked=20/20 | logs → Loki (Grafana fire trong ≤1 phút)
 ```
 
-> Nếu chạy lại trong vòng 5 phút (SOAR dedup window), `status=deduped` — đây là PASS bình thường. Script trả lại case_id gốc.
->
-> ```
-> [KB1_brute_force] Keycloak chặn 20/20 (401)
-> [KB1_brute_force] PASS: KB1 Brute Force | blocked=20/20 | SOAR case=case-XXXXXXXXXXXXXXX status=deduped playbook=revoke_user_sessions (T1110.001)
-> ```
+> Case `brute_force` sẽ xuất hiện trong Web Portal trong vòng ~1 phút sau khi script kết thúc.
 
 ### Bước 3: Kiểm tra Grafana
 
@@ -397,7 +392,7 @@ bash tests/grafana_kb2_fraud_gate.sh
 
 ```
 [KB2_fraud_gate] POST /payments 500M tor → HTTP 403 (fraud: ?)
-[KB2_fraud_gate] PASS: KB2 Fraud Gate | HTTP 403 blocked | SOAR case=case-XXXXXXXXXXXXXXX status=pending_approval playbook=isolate_workload (T1078.004)
+[KB2_fraud_gate] PASS: KB2 | HTTP 403 (fraud gate) | logs → Loki (Grafana fire trong ≤1 phút)
 ```
 
 > `fraud: ?` là bình thường — API response bọc verdict trong `detail.fraud.verdict`. Bằng chứng thật nằm ở `HTTP 403`, xem chi tiết ở bước "Xác minh thủ công" bên dưới.
@@ -500,7 +495,7 @@ bash tests/grafana_kb3_lateral_movement.sh
 ```
 [KB3_lateral_movement] SVID ztlab.local/notification-service → HTTP 403
 [KB3_lateral_movement] SVID evil.domain/attacker → HTTP 403
-[KB3_lateral_movement] PASS: KB3 Lateral Movement | SVID blocked HTTP 403 | SOAR case=case-XXXXX status=pending_approval playbook=isolate_workload (T1021.007)
+[KB3_lateral_movement] PASS: KB3 | SVID blocked HTTP 403/403 | logs → Loki (Grafana fire trong ≤1 phút)
 ```
 
 ### Bước 3: Xác minh SVID enforcement thủ công
@@ -579,7 +574,7 @@ bash tests/grafana_kb4_exfiltration.sh
 
 ```
 [KB4_exfiltration] 10 bulk requests → 15546 bytes
-[KB4_exfiltration] PASS: KB4 Exfiltration | real: 15546B từ 10 requests | SOAR case=case-XXXXX status=pending_approval playbook=restrict_egress (T1041)
+[KB4_exfiltration] PASS: KB4 | 10 requests → 15546B | logs → Loki (Grafana fire trong ≤1 phút)
 ```
 
 > `15546 bytes` = đo thực từ 10 lần gọi `/transactions` và `/accounts/balance`. Script cũng inject thêm log mô phỏng core-banking ~3.5MB vào Loki để đạt threshold 1MB của Grafana rule.
@@ -666,7 +661,7 @@ bash tests/grafana_kb5_access_denied.sh
 [KB5_access_denied]   POST /payments 1000000 → HTTP 403
 [KB5_access_denied]   POST /payments 5000 → HTTP 403
 [KB5_access_denied] OPA RBAC từ chối 6/6 (403)
-[KB5_access_denied] PASS: KB5 Access Denied | OPA RBAC THẬT: 6/6 từ chối | SOAR case=case-XXXXX status=pending_approval playbook=block_source_ip (T1078)
+[KB5_access_denied] PASS: KB5 | OPA RBAC từ chối 6/6 (403) | logs → Loki (Grafana fire trong ≤1 phút)
 ```
 
 ### Bước 3: So sánh merchant01 vs testuser01 thủ công
@@ -835,7 +830,7 @@ bash tests/grafana_kb6_privilege_escalation.sh
 [KB6_privilege_escalation]   • Pod chạy root (uid=0) — vi phạm least-privilege principle
 [KB6_privilege_escalation]   • CAP_DAC_OVERRIDE cho phép đọc /etc/shadow — leo thang đặc quyền thực tế
 [KB6_privilege_escalation]   • runAsNonRoot không được set — container không bị ràng buộc
-[KB6_privilege_escalation] PASS: KB6 Privilege Escalation | THẬT: uid=0 CapEff=0x00000000a80425fb shadow=true | SOAR case=case-XXXXX status=pending_approval playbook=quarantine_workload (T1611)
+[KB6_privilege_escalation] PASS: KB6 | uid=0 CapEff=0x00000000a80425fb shadow=true | logs → Loki (Grafana fire trong ≤1 phút)
 ```
 
 > `runAsNonRoot:` và `allowPrivilegeEscalation:` hiển thị trống — đây là bằng chứng securityContext chưa được cấu hình (chưa set = container không bị ràng buộc).
@@ -1400,19 +1395,19 @@ for c in cases[-6:]:
 
 ## 18. Xử lý sự cố thường gặp
 
-### Script trả về `status=deduped` — PASS hay FAIL?
+### Không thấy case trong Web Portal sau khi chạy script
 
-**PASS bình thường.** SOAR dedup 5 phút / attack_type. Nếu chạy lại trong 5 phút (hoặc Grafana real alert fire sau ~1 phút), case đã có → script nhận `status=deduped` và in PASS. Case gốc vẫn còn trong `/cases`.
+Script chỉ sinh traffic thật và inject log vào Loki — **case được tạo bởi Grafana real alert**, không phải script. Đợi **≤1 phút** để Grafana evaluate rule và gửi webhook tới SOAR.
 
 ```bash
-# Xem case gốc
+# Xem Grafana alert state (có rule nào đang firing không?)
 curl -s http://localhost:8091/cases | python3 -c "
 import sys,json; cases=json.load(sys.stdin)
 for c in cases[-3:]: print(c['case_id'], '|', c['attack_type'], '|', c['status'])
 "
 ```
 
-Để tạo case mới (reset dedup), đợi 5 phút hoặc chạy kịch bản khác trước.
+Nếu đã đợi >2 phút mà không thấy case: vào Grafana → Alerting → Alert rules → kiểm tra rule tương ứng có state `firing` không. Nếu `inactive`, log chưa match threshold.
 
 ### Port-forward mất kết nối
 
