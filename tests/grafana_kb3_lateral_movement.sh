@@ -67,7 +67,8 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
         \"severity\": \"critical\",
         \"attack_type\": \"lateral_movement\",
         \"mitre\": \"T1021.007\",
-        \"category\": \"security\"
+        \"category\": \"security\",
+        \"source_ip\": \"10.10.1.11\"
       },
       \"annotations\": {
         \"summary\": \"OPA từ chối SVID ngoài trust domain — nghi ngờ lateral movement\",

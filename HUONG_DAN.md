@@ -25,7 +25,8 @@
 14. [SOAR Engine — Phê duyệt & quản lý case](#14-soar-engine--phê-duyệt--quản-lý-case)
 15. [Grafana — Alert rules & dashboards](#15-grafana--alert-rules--dashboards)
 16. [Restore hệ thống về trạng thái bình thường](#16-restore-hệ-thống-về-trạng-thái-bình-thường)
-17. [Xử lý sự cố thường gặp](#17-xử-lý-sự-cố-thường-gặp)
+17. [Demo log thực tế — Envoy, OPA, SPIRE/SPIFFE](#17-demo-log-thực-tế--envoy-opa-spirespiffe)
+18. [Xử lý sự cố thường gặp](#18-xử-lý-sự-cố-thường-gặp)
 
 ---
 
@@ -1106,7 +1107,329 @@ curl -s http://localhost:8091/health | python3 -c "import sys,json; print(json.l
 
 ---
 
-## 17. Xử lý sự cố thường gặp
+## 17. Demo log thực tế — Envoy, OPA, SPIRE/SPIFFE
+
+Phần này hướng dẫn xem và giải thích log thực tế từ 3 lớp Zero Trust enforcement trong hệ thống.
+
+---
+
+### 17.1 Envoy Access Log (mTLS proxy)
+
+Envoy sidecar ghi JSON log mỗi request, kể cả service-to-service. Log được Promtail đẩy vào Loki với label `job=envoy-access`.
+
+#### Xem log trực tiếp từ pod
+
+```bash
+# API Gateway Envoy log (inbound + outbound)
+kubectl --context ctx-aws logs -n financial deployment/api-gateway -c envoy --tail=20
+
+# payment-service Envoy log
+kubectl --context ctx-aws logs -n financial deployment/payment-service -c envoy --tail=20
+```
+
+#### Format JSON của mỗi dòng log
+
+```json
+{
+  "timestamp": "2026-06-27T06:48:51.871Z",
+  "method": "POST",
+  "path": "/payments",
+  "response_code": 403,
+  "response_time": 12,
+  "upstream": "127.0.0.1:8080",
+  "source_ip": "10.42.0.1",
+  "bytes_sent": 87,
+  "svid": "spiffe://ztlab.local/aws/api-gateway",
+  "trace_id": "a1b2c3d4"
+}
+```
+
+**Các trường quan trọng**:
+- `source_ip` — IP nguồn của request (attacker IP xuất hiện ở đây)
+- `response_code` — 401=brute force, 403=OPA deny, 200=pass
+- `svid` — SPIFFE SVID của caller (null nếu không có mTLS)
+- `bytes_sent` — KB4 data exfiltration phát hiện qua field này (>1MB)
+
+#### Query Loki để tìm log tấn công
+
+```bash
+# Lệnh xem từ terminal (thay TIME_RANGE bằng "1h", "30m", v.v.)
+curl -sG http://localhost:13100/loki/api/v1/query_range \
+  --data-urlencode 'query={job="envoy-access"} | json | response_code=`401`' \
+  --data-urlencode 'limit=20' \
+  --data-urlencode 'start=0' | \
+  python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for s in d.get('data',{}).get('result',[]):
+    for ts, line in s.get('values',[]):
+        j=json.loads(line)
+        print(f'  [{j.get(\"timestamp\",\"?\")}] {j.get(\"method\")} {j.get(\"path\")} → {j.get(\"response_code\")} src={j.get(\"source_ip\")} svid={j.get(\"svid\")}')
+" 2>/dev/null
+```
+
+**Trong Grafana UI** (http://localhost:3000):
+1. Explore → Loki datasource
+2. Log browser: `{job="envoy-access"} | json | response_code=`401``
+3. Click field `source_ip` để group brute force theo IP
+4. Field `bytes_sent > 1048576` để tìm data exfiltration
+
+#### Ý nghĩa Zero Trust
+
+| Scenario | Log pattern | Giải thích |
+|---|---|---|
+| KB1 Brute Force | `response_code=401` × nhiều lần | Keycloak từ chối, Envoy log lại |
+| KB3 Lateral Move | `svid=spiffe://evil.domain/...` | SVID ngoài trust domain bị OPA reject |
+| KB4 Exfiltration | `bytes_sent > 1048576` | Volume data lớn bất thường |
+| KB5 Access Denied | `response_code=403` path=/payments | OPA RBAC deny, merchant01 thiếu role |
+
+---
+
+### 17.2 OPA Decision Log (authorization engine)
+
+OPA nhận mỗi request từ Envoy ext_authz, evaluate policy `zta/authz/allow`, ghi decision log.
+
+#### Xem OPA log trực tiếp
+
+```bash
+kubectl --context ctx-aws logs -n financial deployment/opa-server --tail=20 | \
+  python3 -c "
+import sys,json
+for line in sys.stdin:
+    line=line.strip()
+    if not line: continue
+    try:
+        d=json.loads(line)
+        if d.get('msg')=='Decision Log':
+            inp = d.get('input',{}).get('attributes',{})
+            req = inp.get('request',{}).get('http',{})
+            src = inp.get('source',{}).get('address',{}).get('socketAddress',{})
+            print(f'  [{d[\"time\"]}] decision={d[\"path\"]} result={d[\"result\"]}')
+            print(f'    method={req.get(\"method\")} path={req.get(\"path\")} src={src.get(\"address\")}:{src.get(\"portValue\")}')
+            print()
+    except:
+        pass
+" 2>/dev/null
+```
+
+#### Giải thích format OPA decision log
+
+```json
+{
+  "decision_id": "9fa5ffff-...",
+  "path": "zta/authz/allow",
+  "result": true,
+  "input": {
+    "attributes": {
+      "source": {"address": {"socketAddress": {"address": "10.42.0.1"}}},
+      "request": {
+        "http": {
+          "method": "POST",
+          "path": "/payments",
+          "headers": {
+            "authorization": "Bearer eyJ...",
+            "x-fraud-gate": "approved",
+            "x-fraud-score": "10"
+          }
+        }
+      }
+    }
+  },
+  "metrics": {"timer_rego_query_eval_ns": 109835}
+}
+```
+
+**Khi bị DENY** (`result=false`): Log xuất hiện trong Loki với label `opa_result=false` → trigger Grafana rules.
+
+#### Xem OPA policy đang áp dụng
+
+```bash
+# Xem policy rego hiện tại
+OPA_POD=$(kubectl --context ctx-aws get pod -n financial -l app=opa-server \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# List policies
+kubectl --context ctx-aws exec -n financial "$OPA_POD" -- \
+  curl -s http://localhost:8181/v1/policies | \
+  python3 -c "import sys,json; [print(p['id']) for p in json.load(sys.stdin)['result']]"
+
+# Xem nội dung policy chính
+kubectl --context ctx-aws exec -n financial "$OPA_POD" -- \
+  curl -s http://localhost:8181/v1/policies/zta | \
+  python3 -c "import sys,json; print(json.load(sys.stdin)['result']['raw'][:2000])"
+```
+
+#### Test OPA manually (debug)
+
+```bash
+# Test xem OPA có cho phép request không
+OPA_POD=$(kubectl --context ctx-aws get pod -n financial -l app=opa-server \
+  -o jsonpath='{.items[0].metadata.name}')
+
+kubectl --context ctx-aws exec -n financial "$OPA_POD" -- \
+  curl -s -X POST http://localhost:8181/v1/data/zta/authz/allow \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": {
+      "attributes": {
+        "request": {
+          "http": {
+            "method": "POST",
+            "path": "/payments",
+            "headers": {"x-roles": "financial-read"}
+          }
+        }
+      }
+    }
+  }' | python3 -m json.tool
+```
+
+**Kết quả mong đợi**: `{"result": false}` — POST /payments với role `financial-read` bị từ chối (chứng minh least-privilege).
+
+---
+
+### 17.3 SPIRE/SPIFFE — mTLS Identity
+
+SPIRE cấp X.509-SVID cho mỗi service workload. Envoy sidecar dùng SVID để thiết lập mTLS.
+
+#### Xem SVID đang được cấp
+
+```bash
+# SPIRE agent — xem log gia hạn SVID
+kubectl --context ctx-aws logs -n spire deployment/spire-server --tail=20 | \
+  grep "attestation\|svid\|renew\|entry" | head -10
+
+kubectl --context ctx-aws logs -n spire daemonset/spire-agent --tail=20 | \
+  grep "Renew\|SVID\|spiffe" | head -10
+```
+
+**Output mẫu thực tế**:
+```
+Renewing X509-SVID  spiffe_id=spiffe://ztlab.local/aws/payment-service   expires_at=2026-06-27T07:15:54Z
+Renewing X509-SVID  spiffe_id=spiffe://ztlab.local/aws/api-gateway        expires_at=2026-06-27T07:06:17Z
+Renewing X509-SVID  spiffe_id=spiffe://ztlab.local/openstack/core-banking expires_at=2026-06-27T07:20:11Z
+```
+
+Mỗi SVID tồn tại ~30 phút, tự động gia hạn. SPIRE server xác thực qua k8s PSAT (Pod Service Account Token).
+
+#### Xem SPIRE entries (workload registrations)
+
+```bash
+# List tất cả SPIFFE IDs đã đăng ký
+kubectl --context ctx-aws exec -n spire deployment/spire-server -- \
+  /opt/spire/bin/spire-server entry show 2>/dev/null | \
+  grep -E "SPIFFE ID|Parent|Selector" | head -30
+```
+
+**Các SPIFFE IDs trong hệ thống**:
+```
+spiffe://ztlab.local/aws/api-gateway
+spiffe://ztlab.local/aws/payment-service
+spiffe://ztlab.local/aws/fraud-detection
+spiffe://ztlab.local/aws/notification-service
+spiffe://ztlab.local/openstack/core-banking
+spiffe://ztlab.local/openstack/transaction-service
+spiffe://ztlab.local/openstack/account-service
+```
+
+#### Xem SVID hiện tại trong Envoy (live cert)
+
+```bash
+# Xem SVID đang được Envoy dùng cho payment-service
+PAY_POD=$(kubectl --context ctx-aws get pod -n financial -l app=payment-service \
+  -o jsonpath='{.items[0].metadata.name}')
+
+# Cert chain qua Envoy admin API
+kubectl --context ctx-aws exec -n financial "$PAY_POD" -c envoy -- \
+  curl -s http://localhost:9901/certs 2>/dev/null | \
+  python3 -c "
+import sys,json
+d=json.load(sys.stdin)
+for cert in d.get('certificates',[])[:2]:
+    for chain in cert.get('cert_chain',[])[:1]:
+        print('SVID Subject:', chain.get('subject_alt_names'))
+        print('Expires:', chain.get('expiration_time'))
+        print()
+" 2>/dev/null
+```
+
+#### Chứng minh mTLS với KB3
+
+KB3 (Lateral Movement) dùng SVID fake để chứng minh OPA từ chối:
+- SVID hợp lệ: `spiffe://ztlab.local/aws/payment-service` → OPA allow
+- SVID fake: `spiffe://evil.domain/attacker/service` → OPA deny (ngoài trust domain `ztlab.local`)
+- Không có SVID: Envoy từ chối ở TLS layer (không có cert hợp lệ)
+
+#### Log từ SPIRE server khi agent tái xác thực
+
+```bash
+kubectl --context ctx-aws logs -n spire deployment/spire-server 2>/dev/null | \
+  grep "attestation request completed" | tail -5
+```
+
+```
+Agent attestation request completed  agent_id=spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/ce6be52e-...
+                                     method=AttestAgent  node_attestor_type=k8s_psat
+```
+
+Mỗi node re-attest mỗi ~25 phút — SPIRE xác nhận node identity liên tục (Continuous Verification).
+
+---
+
+### 17.4 Grafana Alert Rules — xác nhận đang hoạt động
+
+Grafana alert rules THẬT chạy mỗi 1 phút, evaluate log từ Loki, và gửi webhook tới SOAR.
+
+#### Xem trạng thái 6 alert rules
+
+Vào **http://localhost:3000 → Alerting → Alert rules → folder ZTLab**:
+
+| Alert Rule | Severity | Trigger | SOAR Playbook |
+|---|---|---|---|
+| Brute Force Login | high | `{job="envoy-access"} \| json \| response_code=401` count>5/1m | revoke_user_sessions |
+| Fraud Gate Bypass | critical | `{job="opa-decisions",attack_scenario="fraud_gate_bypass"}` count>0/5m | isolate_workload |
+| Lateral Movement | critical | `{job="opa-decisions",attack_scenario="lateral_movement"}` count>0/5m | isolate_workload |
+| Data Exfiltration | high | `{job="envoy-access"} \| json \| bytes_sent>1048576` count>0/5m | restrict_egress |
+| Access Denied Spike | high | `{job="opa-decisions"} \| json \| result="deny"` by source_ip/1m | block_source_ip |
+| Privilege Escalation | critical | `{namespace="financial"} \|~ "privilege_escalation\|setuid"` count>0/5m | quarantine_workload |
+
+#### Cách Grafana thực sự gửi alert
+
+1. KB script đẩy log vào Loki → Grafana evaluate rule mỗi 1 phút
+2. Rule fire → Grafana gửi webhook đến `http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook`
+3. SOAR tạo case (dedup trong 5 phút — mỗi attack_type chỉ tạo 1 case)
+4. Script CŨNG mô phỏng webhook → case này sẽ bị dedup nếu đã có trong 5 phút
+
+> **Lưu ý dedup**: Nếu thấy `"status": "deduped"` trong SOAR response — đây là hoạt động đúng. Case gốc đã được tạo bởi script hoặc Grafana real alert trước đó.
+
+#### Xem source_ip trong SOAR case
+
+Sau khi chạy KB script, source_ip sẽ xuất hiện trong SOAR case:
+
+```bash
+curl -s http://localhost:8091/cases | python3 -c "
+import sys,json
+cases=json.load(sys.stdin)
+for c in cases[-6:]:
+    print(f'  {c[\"case_id\"][:35]} | {c[\"attack_type\"]:20} | sev={c[\"severity\"]:8} | src={c.get(\"source_ip\",\"N/A\")}')
+"
+```
+
+**Các source_ip cố định theo KB**:
+- KB1: `10.0.0.1` (brute force attacker)
+- KB2: `10.0.0.5` (fraud transaction)
+- KB3: `10.10.1.11` (lateral movement từ internal)
+- KB4: `10.0.0.77` (data exfiltration)
+- KB5: `10.0.0.99` (merchant01 access denied)
+- KB6: N/A (privilege escalation in container, không có source IP)
+
+---
+
+## 18. Xử lý sự cố thường gặp
+
+### Nhiều alert cùng kịch bản (dedup)
+
+Grafana real alert rules cũng fire sau khi log vào Loki (delay ~1 phút). SOAR dedup 5 phút / attack_type để tránh tạo case trùng. Nếu thấy `status=deduped` trong response — bình thường.
 
 ### Port-forward mất kết nối
 
@@ -1192,4 +1515,4 @@ bash scripts/deploy-all.sh
 
 ---
 
-*Cập nhật: 2026-06-27 — 6 kịch bản Grafana-only, AI Analyzer disabled (SOAR_WEBHOOK_URL="")*
+*Cập nhật: 2026-06-27 — 6 kịch bản Grafana-only, AI Analyzer disabled, SOAR dedup 5 phút, source_ip trong alert labels*

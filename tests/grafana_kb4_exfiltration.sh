@@ -89,7 +89,8 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
         \"attack_type\": \"large_response\",
         \"mitre\": \"T1041\",
         \"category\": \"security\",
-        \"gap\": \"gap1\"
+        \"gap\": \"gap1\",
+        \"source_ip\": \"10.0.0.77\"
       },
       \"annotations\": {
         \"summary\": \"${#endpoints[@]} bulk requests trong 5 phút — tổng $total_bytes bytes từ financial API\",

@@ -20,22 +20,21 @@ User (browser)      │                                                         
   │                 │      │ WireGuard + SPIRE mTLS cross-cloud                │
   │                 │      └──────────────────────────────────────────────────►│── OpenStack K3s
   │                 │                                                           │  core-banking
-  │                 │  Promtail → Loki → Grafana (6 dashboards, 4 alert rules) │  account-service
-  │                 │                       │ attack detected                   │  transaction-service
+  │                 │  Promtail → Loki → Grafana (6 alert rules)               │  account-service
+  │                 │                       │ attack detected (webhook thật)    │  transaction-service
   │                 │                       ▼                                   │  (spiffe://ztlab.local/openstack/*)
-  │                 │               SOAR Engine (HITL)                          │
+  │                 │               SOAR Engine (HITL · dedup 5min)             │
   │                 │        pending_approval → email admin                     │
   │                 │    isolate · restrict · revoke · block · quarantine       │
   │                 └───────────────────────────────────────────────────────────┘
 ```
 
 **Stack:**
-- **Identity:** Keycloak OIDC/PKCE, SPIFFE/SPIRE X.509 SVIDs (trust domain `ztlab.local`)
+- **Identity:** Keycloak OIDC/PKCE, SPIFFE/SPIRE X.509 SVIDs (trust domain `ztlab.local`, gia hạn ~30 phút)
 - **Policy:** Envoy sidecar + OPA ext_authz gRPC — JWT verify, RBAC, fraud gate, SVID check
 - **Services:** FastAPI microservices trên K3s (AWS + OpenStack), Redis, PostgreSQL
-- **Observability:** Promtail → Loki (90 ngày) → Grafana (6 dashboards, 4 security alert rules)
-- **AI Detection:** AI Analyzer — provider chain OpenAI → Gemini → Heuristic, 15 attack patterns, `/analyze` API
-- **Security Ops:** SOAR Engine — HITL (Human-in-the-Loop), 6 playbooks, email với action buttons
+- **Observability:** Promtail → Loki → Grafana (6 alert rules thật, gửi webhook mỗi 1 phút khi fire)
+- **Security Ops:** SOAR Engine — HITL, 6 playbooks, email HITL với action buttons, dedup 5 phút/attack_type
 
 ---
 
@@ -112,43 +111,42 @@ bash scripts/run-demo.sh
 
 ---
 
-## Attack Scenarios — 20 kịch bản kiểm thử
+## 6 Kịch bản tấn công Zero Trust (Grafana → SOAR)
 
-**Nhóm A — Grafana HITL (KB1-KB4):** Inject log → Grafana alert → SOAR HITL email
+Mỗi kịch bản chứng minh 1 lớp Zero Trust enforcement thật, detection qua Grafana alert rules, phản ứng qua SOAR HITL.
 
-| # | Tên | ATT&CK | Phát hiện | SOAR phản ứng (admin chọn) |
-|---|-----|--------|-----------|---------------------------|
-| KB1 | Brute Force Login | T1110.001 | Envoy 401 count > ngưỡng / 1m | revoke_user_sessions, block_source_ip, isolate_workload |
-| KB2 | Lateral Movement | T1021.007 | OPA deny SVID ngoài trust domain | isolate_workload, restrict_egress, block_source_ip |
-| KB3 | Fraud Gate Bypass | T1078.004 | OPA deny `/transactions/execute` | isolate_workload, restrict_egress, block_source_ip |
-| KB4 | Data Exfiltration | T1041 | Envoy `bytes_sent > 1MB` từ core-banking | restrict_egress, quarantine_workload, block_source_ip |
+| # | Tên | ATT&CK | Enforcement THẬT | Phát hiện Grafana | SOAR Playbook |
+|---|-----|--------|------------------|-------------------|---------------|
+| KB1 | Brute Force Login | T1110.001 | Keycloak từ chối 20/20 sai pass (401) | Envoy 401 count/1m by source_ip | revoke_user_sessions |
+| KB2 | Fraud Gate Bypass | T1078.004 | OPA fraud gate block amount=500M (503) | OPA deny: attack_scenario=fraud_gate_bypass | isolate_workload |
+| KB3 | Lateral Movement | T1021.007 | API GW từ chối SVID fake (403) | OPA deny: attack_scenario=lateral_movement | isolate_workload |
+| KB4 | Data Exfiltration | T1041 | Envoy đo bytes_sent thật từ 10 bulk req | Envoy bytes_sent>1MB count/5m | restrict_egress |
+| KB5 | Access Denied Spike | T1078 | OPA RBAC từ chối merchant01 POST /payments (403) | OPA deny: result=deny by source_ip | block_source_ip |
+| KB6 | Privilege Escalation | T1611 | kubectl exec xác nhận uid=0, /etc/shadow readable | Log audit: privilege_escalation keyword | quarantine_workload |
 
-**Nhóm B — AI Analyzer (SC01-SC20):** POST `/analyze` → 15 patterns → verdict + SOAR case
+> **HITL Flow:** severity ≥ high → SOAR tạo case `pending_approval` → email voha2005@gmail.com → admin duyệt tại Web Portal /security → playbook thực thi trên K8s.
 
-| # | Tên | ATT&CK | SOAR phản ứng |
-|---|-----|--------|--------------|
-| SC01 | Brute Force | T1110.001 | revoke_user_sessions |
-| SC03 | Lateral Movement | T1021.007 | isolate_workload |
-| SC04 | Fraud Gate Bypass | T1078 | isolate_workload |
-| SC06 | Data Exfiltration | T1041 | restrict_egress |
-| SC10 | Port Scanning | T1046 | block_source_ip |
-| SC11 | Cryptomining | T1496 | quarantine_workload |
-| SC13 | SQL Injection | T1190 | block_source_ip |
-| SC14 | Command Injection | T1059 | block_source_ip |
-| SC15 | Account Manipulation | T1098 | isolate_workload |
-| SC16 | Credential Stuffing | T1078.001 | revoke_user_sessions |
-| SC17 | Impair Defenses | T1562 | quarantine_workload |
-| SC18 | Container Escape | T1611 | quarantine_workload |
-| SC19 | Data Staging | T1074 | restrict_egress |
-| SC20 | JWT Replay | T1539 | revoke_user_sessions |
-
-> **HITL Flow:** severity ≥ high → SOAR tạo case `pending_approval` → email admin → admin chọn playbook → SOAR thực thi trên K8s.
+> **Dedup:** SOAR giới hạn 1 case/attack_type/5 phút. Grafana real alert fire ~1 phút sau khi log vào Loki — nếu case đã có từ script, alert của Grafana sẽ bị dedup (status=deduped).
 
 ```bash
-# Chạy 4 KB scenarios (Grafana):
-bash scripts/run-demo.sh --kb1 --kb2 --kb3 --kb4
-# Chạy toàn bộ 20 scenarios (AI Analyzer):
-python3 tests/scenario_00_full_suite.py
-# Restore sau demo:
+# Chạy 1 kịch bản:
+bash tests/grafana_kb1_brute_force.sh
+bash tests/grafana_kb2_fraud_gate.sh
+# ... kb3, kb4, kb5, kb6
+
+# Chạy tất cả 6 kịch bản:
+bash tests/grafana_run_all.sh
+
+# Restore sau demo (xóa cả soar-block NetworkPolicies):
 bash scripts/run-demo.sh --restore
 ```
+
+## Demo log hệ thống
+
+| Log | Lệnh xem | Ý nghĩa |
+|-----|----------|---------|
+| Envoy access | `kubectl logs -n financial deploy/api-gateway -c envoy` | source_ip, response_code, bytes_sent, svid |
+| OPA decision | `kubectl logs -n financial deploy/opa-server` | result=true/false, path, input attributes |
+| SPIRE agent | `kubectl logs -n spire daemonset/spire-agent` | SVID renewal mỗi ~30 phút |
+| SOAR cases | `curl http://localhost:8091/cases` | attack_type, severity, source_ip, status |
+| Grafana Loki | http://localhost:3000 → Explore | Query: `{job="envoy-access"} \| json \| response_code=401` |

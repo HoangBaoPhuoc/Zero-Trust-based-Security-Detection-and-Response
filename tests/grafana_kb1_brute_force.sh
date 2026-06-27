@@ -61,11 +61,12 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
         \"severity\": \"high\",
         \"attack_type\": \"brute_force\",
         \"mitre\": \"T1110.001\",
-        \"category\": \"security\"
+        \"category\": \"security\",
+        \"source_ip\": \"10.0.0.1\"
       },
       \"annotations\": {
         \"summary\": \"$blocked failed logins from 10.0.0.1 in 60s\",
-        \"description\": \"source_ip=10.0.0.1 count=$blocked window=60s\"
+        \"description\": \"source_ip=10.0.0.1 count=$blocked window=60s target_user=testuser01\"
       },
       \"fingerprint\": \"$fp\"
     }]
