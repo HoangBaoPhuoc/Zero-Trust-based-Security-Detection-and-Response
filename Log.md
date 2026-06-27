@@ -2,6 +2,10 @@
 
 > Tìm các log từ chối xác thực do Keycloak trả về và được Envoy ghi nhận.
 
+```loki
+{job="envoy-access"} | json | response_code=`401`
+```
+
 ![][image1]
 
 - **Loại sự kiện (Event Type):** LOGIN_ERROR - nỗ lực đăng nhập thất bại.
@@ -54,23 +58,25 @@
 
 ![][image4]
 
-OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_score rất cao (75 và 80), vượt xa ngưỡng an toàn cho phép (ngưỡng block là 70).
+- **Fraud score:** OPA tính toán được fraud_score rất cao (75 và 80), vượt xa ngưỡng an toàn cho phép (ngưỡng block là 70).
 
-**Nguyên nhân chặn (Reasoning):** Giao dịch có dấu hiệu bất thường nghiêm trọng, kết hợp giữa số tiền quá lớn (amount: 500000000) và sử dụng kênh mạng rủi ro (reason: critical_amount_tor_channel).
+- **Nguyên nhân chặn (Reasoning):** Giao dịch có dấu hiệu bất thường nghiêm trọng, kết hợp giữa số tiền quá lớn (amount: 500000000) và sử dụng kênh mạng rủi ro (reason: critical_amount_tor_channel).
 
-**Quyết định (Decision):** Dù kẻ tấn công (IP: 10.0.0.5) có thể đang sở hữu JWT hợp lệ, OPA vẫn lập tức ra phán quyết result: false (Từ chối).
+- **Quyết định (Decision):** Dù kẻ tấn công (IP: 10.0.0.5) có thể đang sở hữu JWT hợp lệ, OPA vẫn lập tức ra phán quyết result: false (Từ chối).
 
-**Ý nghĩa Zero Trust:** Trực tiếp chứng minh nguyên tắc Verify Explicitly — không chỉ xác thực người dùng (Authentication) mà còn phải thẩm định mức độ tin cậy của từng hành động cụ thể trước khi cấp quyền (Authorization).
+- **Ý nghĩa Zero Trust:** Trực tiếp chứng minh nguyên tắc Verify Explicitly — không chỉ xác thực người dùng (Authentication) mà còn phải thẩm định mức độ tin cậy của từng hành động cụ thể trước khi cấp quyền (Authorization).
 
 ![][image5]
 
-**Thiếu hụt định danh (svid: null):** Các request nhắm thẳng vào các API nội bộ cực kỳ nhạy cảm như /payments/internal/execute và /transactions/execute. Tuy nhiên, trường svid (SPIFFE Verifiable Identity Document) hoàn toàn trống (null).
+- **Thiếu hụt định danh (svid: null):** Các request nhắm thẳng vào các API nội bộ cực kỳ nhạy cảm như /payments/internal/execute và /transactions/execute. Tuy nhiên, trường svid (SPIFFE Verifiable Identity Document) hoàn toàn trống (null).
 
-**Chặn đứng tức thời (response_code: 403 & upstream: null):** Do không có chứng chỉ mTLS hợp lệ từ SPIRE cấp phát, Envoy Proxy đã lập tức trả về mã lỗi 403 Forbidden. Chú ý trường upstream: null và bytes_sent: 0 chứng tỏ request đã bị "bóp nghẹt" ngay tại vỏ bọc Sidecar, hoàn toàn chưa được chạm đến Application Container bên trong. Thời gian xử lý chỉ mất từ 1-2ms (response_time: 1).
+- **Chặn đứng tức thời (response_code: 403 & upstream: null):** Do không có chứng chỉ mTLS hợp lệ từ SPIRE cấp phát, Envoy Proxy đã lập tức trả về mã lỗi 403 Forbidden. Chú ý trường upstream: null và bytes_sent: 0 chứng tỏ request đã bị "bóp nghẹt" ngay tại vỏ bọc Sidecar, hoàn toàn chưa được chạm đến Application Container bên trong. Thời gian xử lý chỉ mất từ 1-2ms (response_time: 1).
 
-**Ý nghĩa Zero Trust:** Trực tiếp chứng minh nguyên tắc Assume Breach (Giả định đã bị xâm phạm). Dù kẻ tấn công đã vào được mạng nội bộ, chúng vẫn không thể gọi chéo giữa các microservices vì hệ thống áp dụng Micro-segmentation bằng danh tính mật mã (SPIFFE/SPIRE) thay vì dựa vào dải IP mạng.
+- **Ý nghĩa Zero Trust:** Trực tiếp chứng minh nguyên tắc Assume Breach (Giả định đã bị xâm phạm). Dù kẻ tấn công đã vào được mạng nội bộ, chúng vẫn không thể gọi chéo giữa các microservices vì hệ thống áp dụng Micro-segmentation bằng danh tính mật mã (SPIFFE/SPIRE) thay vì dựa vào dải IP mạng.
 
 ![][image6]
+
+**Phân tích cơ chế kỹ thuật**
 
 - **Cơ chế đánh giá rủi ro (Risk Assessment):** Hệ thống tích hợp OPA thực hiện bóc tách ngữ cảnh (contextual analysis) cho mỗi yêu cầu giao dịch. Dù kẻ tấn công sở hữu JWT hợp lệ từ Keycloak, yêu cầu vẫn bị đánh giá lại thông qua bộ lọc Fraud Gate.
 
@@ -85,6 +91,12 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 - Playbook: isolate_workload.
 
 - Kết quả: Ngay khi OPA trả về verdict: "block", SOAR Engine tự động nhận diện hành vi tấn công và kích hoạt lệnh cách ly payment-service khỏi mạng lưới thông qua thay đổi nhãn (label) trên Kubernetes, ngăn chặn triệt để khả năng khai thác tiếp diễn của kẻ tấn công.
+
+**Đánh giá dựa trên nguyên tắc Zero Trust**
+
+- **Verify Explicitly (Xác minh tường minh):** Có JWT hợp lệ chưa đủ. Mọi giao dịch đều bị OPA đánh giá lại theo ngữ cảnh — số tiền, kênh, lịch sử — trước khi được chấp thuận.
+
+- **Assume Breach (Giả định đã bị xâm phạm):** Hệ thống không tin tưởng traffic nội bộ. Envoy chặn ngay request không có SVID hợp lệ, kể cả khi kẻ tấn công đã vào được trong mạng.
 
 ## KB3 — Lateral Movement
 
@@ -126,7 +138,7 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 - **Trạng thái luồng dữ liệu:** "upstream": null và "bytes_sent": 0.
 
-**Phân tích chuyên sâu cơ chế bảo vệ**
+**Phân tích cơ chế kỹ thuật**
 
 - **Cắt đứt chuỗi tấn công tức thời:** Ngay khi phát hiện request không có svid hợp lệ, Envoy Proxy đã lập tức trả về mã lỗi 403. Thời gian xử lý chỉ mất 1-2ms, cho thấy hiệu năng xử lý cực cao của Sidecar mà không làm tăng độ trễ (latency) của toàn hệ thống.
 
@@ -160,11 +172,13 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 ![][image10]
 
-**Cơ chế phát hiện:** Hệ thống thiết lập ngưỡng cảnh báo tại lớp Egress thông qua việc giám sát trường bytes_sent trong log của Envoy. Các request tới endpoint /transactions/dump và /accounts/export ghi nhận dung lượng dữ liệu truyền tải lần lượt là ~1.57 MB và ~2.09 MB. Việc vượt ngưỡng định trước (1MB) xác lập hành vi trích xuất dữ liệu (data exfiltration) bất thường từ hệ thống.
+**Phân tích cơ chế kỹ thuật**
 
-**Cơ chế thực thi (Enforcement):** Hệ thống giám sát PLG (Promtail-Loki-Grafana) đóng vai trò bộ cảm biến, liên tục đối chiếu lưu lượng thực tế với chính sách an ninh. Khi phát hiện sai lệch (anomaly), hệ thống chuyển trạng thái sang cảnh báo nguy hiểm, minh chứng cho nguyên tắc Assume Breach — kiểm soát chặt chẽ mọi dữ liệu rời khỏi phạm vi an toàn.
+- **Cơ chế phát hiện:** Hệ thống thiết lập ngưỡng cảnh báo tại lớp Egress thông qua việc giám sát trường bytes_sent trong log của Envoy. Các request tới endpoint /transactions/dump và /accounts/export ghi nhận dung lượng dữ liệu truyền tải lần lượt là ~1.57 MB và ~2.09 MB. Việc vượt ngưỡng định trước (1MB) xác lập hành vi trích xuất dữ liệu (data exfiltration) bất thường từ hệ thống.
 
-**Đánh giá Zero Trust:** Mặc dù kẻ tấn công sử dụng các đường dẫn hợp lệ, việc kiểm soát dựa trên lưu lượng (volume-based monitoring) đã chặn đứng thành công hành vi lợi dụng đặc quyền để đánh cắp khối lượng lớn dữ liệu tài chính.
+- **Cơ chế thực thi (Enforcement):** Hệ thống giám sát PLG (Promtail-Loki-Grafana) đóng vai trò bộ cảm biến, liên tục đối chiếu lưu lượng thực tế với chính sách an ninh. Khi phát hiện sai lệch (anomaly), hệ thống chuyển trạng thái sang cảnh báo nguy hiểm, minh chứng cho nguyên tắc Assume Breach — kiểm soát chặt chẽ mọi dữ liệu rời khỏi phạm vi an toàn.
+
+- **Kết quả:** Mặc dù kẻ tấn công sử dụng các đường dẫn hợp lệ, việc kiểm soát dựa trên lưu lượng (volume-based monitoring) đã chặn đứng thành công hành vi lợi dụng đặc quyền để đánh cắp khối lượng lớn dữ liệu tài chính.
 
 ![][image11]
 
@@ -188,13 +202,13 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 - Tổng lưu lượng cho 10 yêu cầu: 15,546 bytes (~15.5 KB).
 
-**Phân tích kỹ thuật và Ý nghĩa:**
+**Phân tích kỹ thuật**
 
 - **Xây dựng đường cơ sở:** Việc xác định dung lượng trung bình (baseline) là cơ sở quan trọng để cấu hình các quy tắc cảnh báo (Alerting Rules) trên hệ thống giám sát. Trong thực tế, các yêu cầu hợp lệ chỉ tiêu thụ khoảng 15.5 KB cho 10 request.
 
 - **Phát hiện bất thường (Anomaly Detection):** Khi kẻ tấn công thực hiện trích xuất dữ liệu, tổng lưu lượng sẽ tăng vọt (spike) lên tới hàng Megabytes (ví dụ: các file dump hoặc export trả về ~1.5 MB đến ~2 MB mỗi request). Việc giám sát sự chênh lệch (delta) giữa baseline (15.5 KB) và lưu lượng thực tế (hàng MB) cho phép hệ thống nhận diện tức thì hành vi *Data Exfiltration* mà không cần dựa vào chữ ký tấn công (signature-based).
 
-**Đánh giá Zero Trust:**
+**Đánh giá dựa trên nguyên tắc Zero Trust**
 
 - **Hậu quả của Automated Response:** Các log này là "bằng chứng thực thi" (Execution Evidence), xác nhận quy trình phản ứng sự cố tự động (Incident Response) đã chuyển đổi trạng thái hạ tầng từ *an toàn/chờ xử lý* sang *cô lập/ngăn chặn* thành công.
 
@@ -210,11 +224,13 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 ![][image13]
 
-**Cơ chế phát hiện:** Hệ thống ghi nhận chuỗi 6 yêu cầu (spike) từ cùng một địa chỉ IP (10.0.0.99) nhắm tới endpoint /payments với phương thức POST. Việc OPA liên tục đưa ra quyết định result: "deny" phản ánh chính sách Default Deny được thực thi nghiêm ngặt tại tầng ứng dụng.
+- **Cơ chế phát hiện:** Hệ thống ghi nhận chuỗi 6 yêu cầu (spike) từ cùng một địa chỉ IP (10.0.0.99) nhắm tới endpoint /payments với phương thức POST. Việc OPA liên tục đưa ra quyết định result: "deny" phản ánh chính sách Default Deny được thực thi nghiêm ngặt tại tầng ứng dụng.
 
-**Nguyên nhân chặn (Reasoning):** Phân tích ngữ cảnh xác thực cho thấy chủ thể merchant01 chỉ sở hữu vai trò financial-read (quyền đọc). Trong khi đó, chính sách OPA yêu cầu vai trò financial-write (quyền ghi) để thực thi phương thức POST cho giao dịch thanh toán. Log chỉ rõ: subject_roles: ["financial-read"] đối chiếu với required_roles: ["financial-write"] là không khớp.
+- **Nguyên nhân chặn (Reasoning):** Phân tích ngữ cảnh xác thực cho thấy chủ thể merchant01 chỉ sở hữu vai trò financial-read (quyền đọc). Trong khi đó, chính sách OPA yêu cầu vai trò financial-write (quyền ghi) để thực thi phương thức POST cho giao dịch thanh toán. Log chỉ rõ: subject_roles: ["financial-read"] đối chiếu với required_roles: ["financial-write"] là không khớp.
 
 ![][image14]
+
+**Phân tích cơ chế kỹ thuật**
 
 **Cơ chế thực thi RBAC:** Hệ thống sử dụng OPA để thực hiện kiểm tra quyền truy cập dựa trên thuộc tính (ABAC) và vai trò (RBAC). Mọi yêu cầu gửi tới API Gateway đều được OPA bóc tách thông tin định danh (claims) trong JWT.
 
@@ -226,7 +242,9 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 **Tầm quan trọng của trạng thái hệ thống:** Kết quả HTTP 503 đối với testuser01 trong quá trình test là một "chỉ dấu" quan trọng, xác nhận rằng dịch vụ đang trong trạng thái bị cô lập (Isolated) bởi SOAR từ các kịch bản trước đó. Việc chạy lệnh restore (--restore) là bước kiểm chứng bắt buộc để khôi phục trạng thái hoạt động bình thường, minh chứng tính **Khả thi và tính nhất quán** của hệ thống sau sự cố.
 
-**Đánh giá Zero Trust:** Kịch bản này minh chứng trực tiếp cho nguyên tắc Least Privilege (Quyền tối thiểu). Hệ thống không chỉ xác thực người dùng mà còn kiểm soát quyền truy cập chi tiết đến từng thao tác (Action-level Authorization), ngăn chặn hành vi vượt quyền (privilege abuse) dù tài khoản đó là hợp lệ.
+**Đánh giá dựa trên nguyên tắc Zero Trust**
+
+Kịch bản này minh chứng trực tiếp cho nguyên tắc Least Privilege (Quyền tối thiểu). Hệ thống không chỉ xác thực người dùng mà còn kiểm soát quyền truy cập chi tiết đến từng thao tác (Action-level Authorization), ngăn chặn hành vi vượt quyền (privilege abuse) dù tài khoản đó là hợp lệ.
 
 ## KB6 — Privilege Escalation
 
@@ -238,11 +256,11 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 ![][image15]
 
-**Cơ chế phát hiện:** Hệ thống giám sát thực hiện kiểm thử an ninh (security audit) dựa trên môi trường thực tế của workload. Các chỉ số kỹ thuật ghi nhận pod api-gateway đang vận hành với định danh người dùng uid=0 (root) và sở hữu các capabilities đặc quyền nguy hiểm gồm CAP_SETUID và CAP_DAC_OVERRIDE.
+- **Cơ chế phát hiện:** Hệ thống giám sát thực hiện kiểm thử an ninh (security audit) dựa trên môi trường thực tế của workload. Các chỉ số kỹ thuật ghi nhận pod api-gateway đang vận hành với định danh người dùng uid=0 (root) và sở hữu các capabilities đặc quyền nguy hiểm gồm CAP_SETUID và CAP_DAC_OVERRIDE.
 
-**Nguyên nhân vi phạm:** Việc sở hữu CAP_DAC_OVERRIDE cho phép container bỏ qua các kiểm tra quyền truy cập hệ thống file, dẫn đến việc tệp nhạy cảm /etc/shadow bị lộ. Đồng thời, CAP_SETUID tạo điều kiện cho kẻ tấn công thực thi lệnh setuid(0) để chiếm quyền điều khiển tuyệt đối trên node vật lý, minh chứng cho sự thất bại trong việc áp dụng nguyên tắc **Least Privilege** tại tầng hạ tầng.
+- **Nguyên nhân vi phạm:** Việc sở hữu CAP_DAC_OVERRIDE cho phép container bỏ qua các kiểm tra quyền truy cập hệ thống file, dẫn đến việc tệp nhạy cảm /etc/shadow bị lộ. Đồng thời, CAP_SETUID tạo điều kiện cho kẻ tấn công thực thi lệnh setuid(0) để chiếm quyền điều khiển tuyệt đối trên node vật lý, minh chứng cho sự thất bại trong việc áp dụng nguyên tắc **Least Privilege** tại tầng hạ tầng.
 
-**Đánh giá Zero Trust:** Kịch bản này phản ánh lỗ hổng trong quá trình cấu hình (hardening) workload. Việc không thiết lập các thuộc tính runAsNonRoot: true và allowPrivilegeEscalation: false trong Security Context đã biến container trở thành một "bàn đạp" hoàn hảo cho kẻ tấn công thực hiện leo thang đặc quyền.
+- **Lỗ hổng cấu hình:** Việc không thiết lập các thuộc tính runAsNonRoot: true và allowPrivilegeEscalation: false trong Security Context đã biến container trở thành một "bàn đạp" hoàn hảo cho kẻ tấn công thực hiện leo thang đặc quyền.
 
 ![][image16]
 
@@ -254,15 +272,17 @@ OPA đã bóc tách ngữ cảnh giao dịch và tính toán được fraud_scor
 
 ![][image17]
 
-**User ID:** uid=0(root) — Container đang chạy với quyền root.
+- **User ID:** uid=0(root) — Container đang chạy với quyền root.
 
-**Capabilities:** CapEff: 00000000a80425fb (Giải mã: SETUID, DAC_OVERRIDE, SYS_ADMIN).
+- **Capabilities:** CapEff: 00000000a80425fb (Giải mã: SETUID, DAC_OVERRIDE, SYS_ADMIN).
 
-**Dữ liệu nhạy cảm:** Đọc thành công /etc/shadow (dòng đầu tiên: root:*:20549...).
+- **Dữ liệu nhạy cảm:** Đọc thành công /etc/shadow (dòng đầu tiên: root:*:20549...).
 
-**Security Context:** {} (Trống — chưa áp dụng thiết lập hardening).
+- **Security Context:** {} (Trống — chưa áp dụng thiết lập hardening).
 
-**Rủi ro leo thang đặc quyền (Privilege Escalation):** Kết quả uid=0(root) khẳng định ứng dụng đang vận hành với đặc quyền cao nhất trong container. Kết hợp với CAP_SETUID, kẻ tấn công có thể thay đổi UID của tiến trình để chiếm quyền điều khiển các file/dịch vụ khác trên node vật lý.
+**Phân tích cơ chế kỹ thuật**
+
+- **Rủi ro leo thang đặc quyền (Privilege Escalation):** Kết quả uid=0(root) khẳng định ứng dụng đang vận hành với đặc quyền cao nhất trong container. Kết hợp với CAP_SETUID, kẻ tấn công có thể thay đổi UID của tiến trình để chiếm quyền điều khiển các file/dịch vụ khác trên node vật lý.
 
 **Vi phạm tính toàn vẹn (Integrity Violation):** Việc đọc được tệp /etc/shadow thông qua CAP_DAC_OVERRIDE là bằng chứng trực tiếp cho thấy cơ chế kiểm soát truy cập file của hệ điều hành đã bị vô hiệu hóa hoàn toàn đối với container này.
 
@@ -274,7 +294,7 @@ Việc sử dụng script Python để giải mã mask a80425fb là phương ph�
 
 Việc phát hiện DANGEROUS: ['DAC_OVERRIDE', 'SETUID'] trong tập hợp các capabilities đang hoạt động (Active) là hồi chuông cảnh báo về khả năng thực hiện *Container Escape* — thoát khỏi sự cô lập của container để tấn công vào nhân hệ điều hành (Kernel).
 
-**Đánh giá Zero Trust:**
+**Đánh giá dựa trên nguyên tắc Zero Trust**
 
 - **Defense-in-Depth (Phòng thủ chiều sâu):** Không dừng lại ở việc chặn (403), hệ thống đã thực hiện bước phản ứng mạnh mẽ hơn là cô lập (Isolation) để bảo vệ hạ tầng.
 
