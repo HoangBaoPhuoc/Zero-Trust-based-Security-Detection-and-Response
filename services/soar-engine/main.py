@@ -1269,8 +1269,8 @@ async def startup() -> None:
         logger.info(json.dumps({"event_type": "redis_connected", "url": REDIS_URL}))
     except Exception as exc:
         logger.warning(json.dumps({"event_type": "redis_connect_failed", "error": str(exc)}))
-    asyncio.create_task(_heuristic_poll())
-    logger.info(json.dumps({"event_type": "heuristic_poller_started", "interval_s": _HEURISTIC_POLL_INTERVAL}))
+    # heuristic poller disabled — Grafana real alert là trigger duy nhất
+    logger.info(json.dumps({"event_type": "heuristic_poller_disabled", "reason": "grafana-only mode"}))
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
