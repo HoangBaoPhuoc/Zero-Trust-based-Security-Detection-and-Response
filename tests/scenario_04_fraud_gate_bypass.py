@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Scenario 04 — Fraud Gate Bypass (T1078)
+"""Scenario 04 — Fraud Gate Bypass (T1078.004)
 Calls /payments with amount=500M VND via 'tor' channel → fraud score=75 → blocked.
-Also injects a fraud_gate_bypass log to AI Analyzer and verifies detection.
+Collects real evidence from fraud-detection AUDIT log, payment-service AUDIT log,
+and API Gateway Envoy access log.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
 import urllib.error
 
-GW_URL = os.environ.get("GW_URL", "http://localhost:18080")
-KC_URL = os.environ.get("KC_URL", "http://localhost:8180")
-AI_URL = os.environ.get("AI_URL", "http://localhost:18082")
+GW_URL  = os.environ.get("GW_URL",  "http://localhost:18080")
+KC_URL  = os.environ.get("KC_URL",  "http://localhost:8180")
+K8S_CTX = os.environ.get("K8S_CTX", "ctx-aws")
+NS      = "financial"
 SCENARIO = "scenario_04_fraud_gate_bypass"
 
 
@@ -25,13 +28,9 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
-def http_post(url: str, body: dict | str, headers: dict, form: bool = False) -> tuple[int, str]:
-    if form:
-        data = body.encode() if isinstance(body, str) else body
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    else:
-        data = json.dumps(body).encode()
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+def http_post(url: str, body, headers: dict, form: bool = False) -> tuple[int, str]:
+    data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
+    req  = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return resp.status, resp.read().decode()
@@ -39,7 +38,36 @@ def http_post(url: str, body: dict | str, headers: dict, form: bool = False) -> 
         return exc.code, exc.read().decode()
 
 
-# Health
+def kubectl_logs(pod: str, container: str, tail: int = 200) -> list[str]:
+    result = subprocess.run(
+        ["kubectl", "--context", K8S_CTX, "logs", "-n", NS, pod, "-c", container,
+         f"--tail={tail}"],
+        capture_output=True, text=True
+    )
+    return result.stdout.splitlines()
+
+
+def get_pod(label: str) -> str:
+    result = subprocess.run(
+        ["kubectl", "--context", K8S_CTX, "get", "pods", "-n", NS,
+         "-l", label, "-o", "jsonpath={.items[0].metadata.name}"],
+        capture_output=True, text=True
+    )
+    return result.stdout.strip()
+
+
+# ── 1. Resolve pods ───────────────────────────────────────────────────────────
+log("resolving pods...")
+gw_pod    = get_pod("app=api-gateway")
+pay_pod   = get_pod("app=payment-service")
+fraud_pod = get_pod("app=fraud-detection")
+
+for name, pod in [("api-gateway", gw_pod), ("payment-service", pay_pod), ("fraud-detection", fraud_pod)]:
+    if not pod:
+        fail(f"{name} pod not found")
+    log(f"{name} pod: {pod}")
+
+# ── 2. Health check ───────────────────────────────────────────────────────────
 log("checking API Gateway health...")
 try:
     with urllib.request.urlopen(f"{GW_URL}/health", timeout=10) as r:
@@ -47,7 +75,7 @@ try:
 except Exception as exc:
     fail(f"API Gateway unreachable: {exc}")
 
-# Get a valid JWT
+# ── 3. Get JWT ────────────────────────────────────────────────────────────────
 log("getting JWT from Keycloak...")
 token = ""
 try:
@@ -60,44 +88,82 @@ try:
     if status == 200:
         token = json.loads(body).get("access_token", "")
     else:
-        log(f"WARNING: Keycloak returned {status}, using no token")
+        log(f"WARNING: Keycloak returned {status}, proceeding without token")
 except Exception as exc:
-    log(f"WARNING: Keycloak unreachable ({exc}), continuing without token")
+    log(f"WARNING: Keycloak unreachable ({exc}), proceeding without token")
 
-# Test 1: amount=500M VND via tor → score=75 → block
-log("test 1: sending 500M VND via tor channel (score=75, should block)...")
+# ── 4. Attack: amount=500M VND via tor channel ────────────────────────────────
+log("sending 500M VND via tor channel (expected: fraud score=75 → 403 block)...")
 headers = {"Content-Type": "application/json"}
 if token:
     headers["Authorization"] = f"Bearer {token}"
+
 status, body = http_post(
     f"{GW_URL}/payments",
-    {"from_account": "ACC-1001", "to_account": "ACC-2001", "amount": 500_000_000, "currency": "VND", "channel": "tor"},
+    {"from_account": "ACC-1001", "to_account": "ACC-2001",
+     "amount": 500_000_000, "currency": "VND", "channel": "tor"},
     headers,
 )
-log(f"response HTTP {status}: {body[:120]}")
+log(f"response HTTP {status}: {body[:200]}")
 if status not in (400, 403):
-    log(f"WARNING: expected 403 fraud block, got {status} (fraud detection may not be active or amount threshold differs)")
+    fail(f"expected 403 fraud block, got {status}")
 
-# Test 2: AI detection via inject
-log("test 2: injecting fraud_gate_bypass log to AI Analyzer...")
-ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-ai_status, ai_body = http_post(
-    f"{AI_URL}/analyze",
-    {
-        "source": "scenario_04_fraud_gate_bypass",
-        "logs": [
-            {"timestamp": ts, "message": "fraud_gate_bypass detected service=payment-service source_ip=10.9.8.7 X-Fraud-Gate=missing attempt to execute transaction without fraud validation", "labels": {"namespace": "financial", "app": "payment-service", "job": "envoy-access"}},
-            {"timestamp": ts, "message": "opa_deny path=/transactions/execute reason=fraud_gate_missing svid=spiffe://ztlab.local/aws/payment-service", "labels": {"namespace": "financial", "app": "opa-server", "job": "opa-decisions"}},
-        ],
-    },
-    {"Content-Type": "application/json"},
-)
-if ai_status != 200:
-    fail(f"AI Analyzer returned {ai_status}: {ai_body[:200]}")
-result = json.loads(ai_body)
-verdict = result.get("verdict", "?")
-log(f"AI verdict={verdict} attack={result.get('attack_type','?')} playbook={result.get('recommended_playbook','?')}")
-if verdict not in ("malicious", "suspicious"):
-    fail(f"expected malicious/suspicious, got {verdict}")
+# ── 5. Collect real log evidence ──────────────────────────────────────────────
+time.sleep(2)
 
-print(f"[{SCENARIO}] PASS: fraud gate bypass blocked HTTP {status}; AI verdict={verdict} (T1078)")
+# fraud-detection AUDIT: fraud_score_computed event
+fraud_evidence = ""
+for line in kubectl_logs(fraud_pod, "fraud-detection", tail=200):
+    try:
+        j = json.loads(line)
+        if j.get("event") == "fraud_score_computed" and j.get("verdict") == "block":
+            fraud_evidence = (
+                f"event={j['event']} amount={j.get('amount')} "
+                f"fraud_score={j.get('fraud_score')} verdict={j.get('verdict')} "
+                f"reason={j.get('reason')}"
+            )
+    except Exception:
+        pass
+
+# payment-service AUDIT: payment_blocked_fraud event
+pay_evidence = ""
+for line in kubectl_logs(pay_pod, "payment-service", tail=100):
+    try:
+        j = json.loads(line)
+        if j.get("event") == "payment_blocked_fraud":
+            pay_evidence = (
+                f"event={j['event']} fraud_score={j.get('fraud_score')} "
+                f"trace_id={j.get('trace_id')} gate={j.get('fraud',{}).get('gate')}"
+            )
+    except Exception:
+        pass
+
+# API Gateway Envoy access log: last /payments 403 entry
+envoy_evidence = ""
+for line in kubectl_logs(gw_pod, "envoy", tail=500):
+    try:
+        j = json.loads(line)
+        if j.get("path", "").startswith("/payments") and "metrics" not in j.get("path", ""):
+            envoy_evidence = (
+                f"response_code={j.get('response_code')} path={j.get('path')} "
+                f"source_ip={j.get('source_ip')} bytes_sent={j.get('bytes_sent')} "
+                f"response_time={j.get('response_time')}ms"
+            )
+    except Exception:
+        pass
+
+log(f"fraud-detection evidence: {fraud_evidence or 'NOT FOUND'}")
+log(f"payment-service evidence: {pay_evidence or 'NOT FOUND'}")
+log(f"Envoy evidence:           {envoy_evidence or 'NOT FOUND'}")
+
+# ── 6. Assert evidence ────────────────────────────────────────────────────────
+if not fraud_evidence:
+    fail("fraud_score_computed AUDIT log not found in fraud-detection")
+score_val = next((int(p.split("=")[1]) for p in fraud_evidence.split() if p.startswith("fraud_score=")), 0)
+if score_val < 70:
+    fail(f"expected fraud_score >= 70 (block threshold) in fraud-detection log, got: {fraud_evidence}")
+if not pay_evidence:
+    fail("payment_blocked_fraud AUDIT log not found in payment-service")
+
+print(f"[{SCENARIO}] PASS: fraud gate blocked HTTP {status}; "
+      f"fraud_score={score_val} (>= block threshold 70) verified in fraud-detection + payment-service logs (T1078.004)")
