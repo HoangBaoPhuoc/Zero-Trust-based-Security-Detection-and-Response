@@ -89,4 +89,3 @@ case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdi
   || fail "SOAR playbook='$playbook' (expect isolate_workload)"
 
 pass "KB3 Lateral Movement | SVID blocked HTTP $code | SOAR case=$case_id status=$status playbook=$playbook (T1021.007)"
-log "→ SPIFFE mTLS: chỉ SVID trong trust domain ztlab.local mới được phép giao tiếp service-to-service"

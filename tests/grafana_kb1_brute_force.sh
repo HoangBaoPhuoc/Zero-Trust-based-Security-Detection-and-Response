@@ -83,5 +83,3 @@ case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdi
   || fail "SOAR playbook='$playbook' (expect revoke_user_sessions)"
 
 pass "KB1 Brute Force | blocked=$blocked/20 | SOAR case=$case_id status=$status playbook=$playbook (T1110.001)"
-log "→ Kiểm tra Web Portal http://localhost:18081/security để phê duyệt/từ chối"
-log "→ Admin nhận email HITL tại voha2005@gmail.com nếu SMTP được cấu hình"

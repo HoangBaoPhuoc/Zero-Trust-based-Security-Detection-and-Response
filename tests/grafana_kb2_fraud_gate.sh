@@ -97,5 +97,3 @@ case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdi
   || fail "SOAR playbook='$playbook' (expect isolate_workload)"
 
 pass "KB2 Fraud Gate | HTTP $http_code blocked | SOAR case=$case_id status=$status playbook=$playbook (T1078.004)"
-log "→ OPA từ chối: giao dịch vượt ngưỡng fraud_score vì amount+channel vi phạm policy"
-log "→ Admin nhận email HITL để phê duyệt isolate_workload"
