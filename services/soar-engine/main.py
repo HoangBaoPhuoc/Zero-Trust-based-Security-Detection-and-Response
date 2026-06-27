@@ -404,6 +404,11 @@ def _hitl_email_html(case: CaseRecord, alert_name: str, mitre: str, log_lines: l
     severity_color = {"low": "#4CAF50", "medium": "#FF9800", "high": "#F44336", "critical": "#9C27B0"}.get(case.severity, "#F44336")
     logs_html = "".join(f"<li style='font-size:12px;color:#555;word-break:break-all'>{l}</li>" for l in log_lines[:10]) or "<li>Không có log evidence</li>"
 
+    # Extract source_ip from Loki evidence if not in case record
+    display_source_ip = case.source_ip or _source_ip_from_evidence(log_lines)
+    source_ip_label = display_source_ip or "—"
+    source_ip_note = " <span style='font-size:10px;color:#888'>(từ log evidence)</span>" if (display_source_ip and not case.source_ip) else ""
+
     # Các hành động phản ứng được gợi ý cho loại tấn công này
     suggested = SUGGESTED_PLAYBOOKS.get(case.attack_type, ["block_source_ip", "monitor_only"])
     action_colors = {
@@ -439,7 +444,7 @@ def _hitl_email_html(case: CaseRecord, alert_name: str, mitre: str, log_lines: l
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">MITRE ATT&CK</td><td style="padding:6px 12px">{mitre}</td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Loại tấn công</td><td style="padding:6px 12px"><code>{case.attack_type}</code></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Target</td><td style="padding:6px 12px">{case.target_context or '—'} / {case.target_workload or '—'}</td></tr>
-      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Source IP</td><td style="padding:6px 12px"><code>{case.source_ip or '—'}</code></td></tr>
+      <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Source IP</td><td style="padding:6px 12px"><code>{source_ip_label}</code>{source_ip_note}</td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Case ID</td><td style="padding:6px 12px"><code style="font-size:11px">{case.case_id}</code></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Thời gian</td><td style="padding:6px 12px">{case.ts}</td></tr>
     </table>
@@ -990,11 +995,22 @@ def rollback_playbook(case: CaseRecord) -> str:
 # ── Heuristic analysis functions ────────────────────────────────────────────
 
 def _extract_source_ip_from_line(line: str) -> str | None:
-    m = re.search(r"source_ip[=: ]+(\d{1,3}(?:\.\d{1,3}){3})", line)
+    # Handles JSON ("source_ip":"10.x"), k=v (source_ip=10.x), label (source_ip: 10.x)
+    m = re.search(r'source_ip[=:"\s]+(\d{1,3}(?:\.\d{1,3}){3})', line)
     if m:
         return m.group(1)
+    # Fallback: public non-RFC1918 IP in line
     m = re.search(r"\b((?!10\.|127\.|172\.1[6-9]\.|172\.2\d\.|172\.3[01]\.|192\.168\.)\d{1,3}(?:\.\d{1,3}){3})\b", line)
     return m.group(1) if m else None
+
+
+def _source_ip_from_evidence(lines: list[str]) -> str | None:
+    """Extract first source_ip found across Loki log evidence lines."""
+    for line in lines:
+        ip = _extract_source_ip_from_line(line)
+        if ip:
+            return ip
+    return None
 
 
 async def _heuristic_analyze() -> None:
@@ -1123,6 +1139,17 @@ async def _process_heuristic_alert(alert: SecurityAlert) -> CaseRecord:
         if len(evidence) < 3:
             loki_lines = await _fetch_loki_lines(attack, alert.source_ip, target.get("workload"))
             evidence = loki_lines + evidence
+
+        # Enrich case.source_ip from Loki evidence if not in alert
+        if not case.source_ip:
+            enrich_ip = _source_ip_from_evidence(evidence)
+            if enrich_ip:
+                case = case.model_copy(update={"source_ip": enrich_ip})
+                CASES[case_id] = case
+                persist_case(case)
+                _HITL_QUEUE[case_id] = (case, playbook, target)
+                result = case
+
         await _send_hitl_email(
             case=case,
             alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
@@ -1385,6 +1412,17 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
         if len(evidence) < 3:
             loki_lines = await _fetch_loki_lines(attack, alert.source_ip, target.get("workload"))
             evidence = loki_lines + evidence
+
+        # Enrich case.source_ip from evidence if not in alert
+        if not case.source_ip:
+            enrich_ip = _source_ip_from_evidence(evidence)
+            if enrich_ip:
+                case = case.model_copy(update={"source_ip": enrich_ip})
+                CASES[case_id] = case
+                persist_case(case)
+                _HITL_QUEUE[case_id] = (case, playbook, target)
+                result = case
+
         await _send_hitl_email(
             case=case,
             alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
@@ -1584,6 +1622,16 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
             evidence = loki_lines if loki_lines else desc_lines
             if not evidence:
                 evidence = [f"Grafana alert fired: {lbs.get('alertname', attack)} — no Loki evidence in last 30 min"]
+
+            # Enrich case.source_ip from Loki evidence if not provided in alert labels
+            if not case.source_ip:
+                enrich_ip = _source_ip_from_evidence(evidence)
+                if enrich_ip:
+                    case = case.model_copy(update={"source_ip": enrich_ip})
+                    CASES[case_id] = case
+                    persist_case(case)
+                    _HITL_QUEUE[case_id] = (case, playbook, target)
+
             await _send_hitl_email(
                 case       = case,
                 alert_name = _clean_alert_name(lbs.get("alertname", attack), attack),
