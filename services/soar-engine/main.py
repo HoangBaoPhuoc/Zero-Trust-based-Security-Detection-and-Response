@@ -244,6 +244,7 @@ class CaseRecord(BaseModel):
     dry_run: bool
     steps: list[PlaybookStep] = Field(default_factory=list)
     ts: str
+    email_sent: bool = False
 
 
 CASES: dict[str, CaseRecord] = {}
@@ -484,15 +485,17 @@ def _smtp_send(subject: str, html: str) -> None:
         s.sendmail(SMTP_FROM or SMTP_USER, ADMIN_EMAIL, msg.as_string())
 
 
-async def _send_hitl_email(case: CaseRecord, alert_name: str, mitre: str, log_lines: list[str]) -> None:
+async def _send_hitl_email(case: CaseRecord, alert_name: str, mitre: str, log_lines: list[str]) -> bool:
     subject = f"[ZTLab SOAR — {case.severity.upper()}] {alert_name} — Cần phê duyệt phản ứng"
     html    = _hitl_email_html(case, alert_name, mitre, log_lines)
     loop = asyncio.get_event_loop()
     try:
         await loop.run_in_executor(None, _smtp_send, subject, html)
         logger.info(json.dumps({"event_type": "hitl_email_sent", "case_id": case.case_id, "to": ADMIN_EMAIL}))
+        return True
     except Exception as exc:
         logger.error(json.dumps({"event_type": "hitl_email_failed", "case_id": case.case_id, "error": str(exc)}))
+        return False
 
 
 # ── Kubernetes API helpers ───────────────────────────────────────────────────
@@ -1151,12 +1154,18 @@ async def _process_heuristic_alert(alert: SecurityAlert) -> CaseRecord:
                 _HITL_QUEUE[case_id] = (case, playbook, target)
                 result = case
 
-        await _send_hitl_email(
+        sent = await _send_hitl_email(
             case=case,
             alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
             mitre=MITRE_BY_ATTACK.get(attack, "—"),
             log_lines=evidence,
         )
+        if sent:
+            case = case.model_copy(update={"email_sent": True})
+            CASES[case_id] = case
+            persist_case(case)
+            _HITL_QUEUE[case_id] = (case, playbook, target)
+            result = case
     return result
 
 
@@ -1266,6 +1275,40 @@ async def startup() -> None:
         logger.warning(json.dumps({"event_type": "redis_connect_failed", "error": str(exc)}))
     # heuristic poller disabled — Grafana real alert là trigger duy nhất
     logger.info(json.dumps({"event_type": "heuristic_poller_disabled", "reason": "grafana-only mode"}))
+
+    # Restore HITL queue for ALL pending cases (approve/deny links always work after restart)
+    # Re-send email only for recent cases (≤2h) that never got a notification
+    _now_dt = datetime.now(timezone.utc)
+    pending = [c for c in CASES.values() if c.status == "pending_approval"]
+    restored = 0
+    resent = 0
+    for case in pending:
+        playbook = case.playbook
+        target = {
+            "context": case.target_context,
+            "workload": case.target_workload,
+            "namespace": case.target_namespace,
+        }
+        _HITL_QUEUE[case.case_id] = (case, playbook, target)
+        restored += 1
+        if not case.email_sent:
+            try:
+                case_dt = datetime.fromisoformat(case.ts)
+                age_h = (_now_dt - case_dt).total_seconds() / 3600
+            except Exception:
+                age_h = 99
+            if age_h <= 2:
+                alert_name = ATTACK_DISPLAY_NAMES.get(case.attack_type, case.attack_type.replace("_", " ").title())
+                mitre = MITRE_BY_ATTACK.get(case.attack_type, "—")
+                loki_lines = await _fetch_loki_lines(case.attack_type, case.source_ip, case.target_workload)
+                sent = await _send_hitl_email(case=case, alert_name=alert_name, mitre=mitre, log_lines=loki_lines)
+                if sent:
+                    updated = case.model_copy(update={"email_sent": True})
+                    CASES[case.case_id] = updated
+                    persist_case(updated)
+                    _HITL_QUEUE[case.case_id] = (updated, playbook, target)
+                    resent += 1
+    logger.info(json.dumps({"event_type": "soar_startup_restore", "pending_cases": len(pending), "hitl_queue_restored": restored, "emails_resent": resent}))
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -1424,12 +1467,18 @@ async def alerts(alert: SecurityAlert, authorization: str | None = Header(defaul
                 _HITL_QUEUE[case_id] = (case, playbook, target)
                 result = case
 
-        await _send_hitl_email(
+        sent = await _send_hitl_email(
             case=case,
             alert_name=ATTACK_DISPLAY_NAMES.get(attack, attack.replace("_", " ").title()),
             mitre=MITRE_BY_ATTACK.get(attack, "—"),
             log_lines=evidence,
         )
+        if sent:
+            case = case.model_copy(update={"email_sent": True})
+            CASES[case_id] = case
+            persist_case(case)
+            _HITL_QUEUE[case_id] = (case, playbook, target)
+            result = case
     if result.status == "failed":
         raise HTTPException(status_code=500, detail=result.model_dump())
     return result
@@ -1633,12 +1682,17 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
                     persist_case(case)
                     _HITL_QUEUE[case_id] = (case, playbook, target)
 
-            await _send_hitl_email(
+            sent = await _send_hitl_email(
                 case       = case,
                 alert_name = _clean_alert_name(lbs.get("alertname", attack), attack),
                 mitre      = lbs.get("mitre", MITRE_BY_ATTACK.get(attack, "—")),
                 log_lines  = evidence,
             )
+            if sent:
+                case = case.model_copy(update={"email_sent": True})
+                CASES[case_id] = case
+                persist_case(case)
+                _HITL_QUEUE[case_id] = (case, playbook, target)
 
         logger.warning(json.dumps({"event_type": "grafana_soar_triggered", "case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status}))
         results.append({"case_id": case_id, "attack_type": attack, "playbook": playbook, "status": status})

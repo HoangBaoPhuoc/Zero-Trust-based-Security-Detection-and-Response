@@ -501,14 +501,14 @@ bash tests/grafana_kb3_lateral_movement.sh
 ### Bước 3: Xác minh SVID enforcement thủ công
 
 ```bash
-# Thử 1: notification-service gọi /payments/internal (không được phép)
+# Demo 1: notification-service gọi /payments/internal (không được phép)
 curl -s -o /dev/null -w "SVID notif-svc → /payments/internal: HTTP %{http_code}\n" \
   -X POST http://localhost:18080/payments/internal/execute \
   -H "Content-Type: application/json" \
   -H "X-SPIFFE-ID: spiffe://ztlab.local/aws/notification-service" \
   -d '{"from_account":"ACC-1001","to_account":"ACC-ATTACKER","amount":999999}'
 
-# Thử 2: SVID từ ngoài trust domain
+# Demo 2: SVID từ ngoài trust domain
 curl -s -o /dev/null -w "SVID evil.corp → /payments/internal: HTTP %{http_code}\n" \
   -X POST http://localhost:18080/payments/internal/execute \
   -H "Content-Type: application/json" \
