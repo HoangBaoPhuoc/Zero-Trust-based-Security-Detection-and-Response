@@ -5,7 +5,7 @@
 # MITRE: TA0040 Impact / TA0006 Credential Access
 set -euo pipefail
 
-AI_URL="${AI_URL:-http://127.0.0.1:8090}"
+AI_URL="${AI_URL:-http://localhost:18082}"
 SOAR_URL="${SOAR_URL:-http://127.0.0.1:8091}"
 GW_URL="${GW_URL:-http://127.0.0.1:18080}"
 
