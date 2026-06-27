@@ -785,4 +785,378 @@ bash scripts/run-demo.sh --restore
 
 ---
 
+## VIII. Cách Lấy Log và Code Được Đề Cập Trong Báo Cáo
+
+Phần này hướng dẫn cách tự tay lấy từng loại log hoặc đoạn code xuất hiện trong báo cáo — để kiểm chứng hoặc trình bày live.
+
+---
+
+### 8.1 Log Keycloak — Sự Kiện Đăng Nhập (KB1)
+
+**Lấy từ:** pod Keycloak trên namespace `identity`
+
+```bash
+# Xem log đăng nhập thất bại (brute force)
+kubectl --context ctx-aws logs -n identity \
+  $(kubectl --context ctx-aws get pod -n identity -l app=keycloak -o jsonpath='{.items[0].metadata.name}') \
+  | grep LOGIN_ERROR | tail -20
+
+# Xem log đăng nhập thành công
+kubectl --context ctx-aws logs -n identity \
+  $(kubectl --context ctx-aws get pod -n identity -l app=keycloak -o jsonpath='{.items[0].metadata.name}') \
+  | grep '"type":"LOGIN"' | tail -10
+```
+
+**Kết quả trông như thế nào:**
+```
+WARN [org.keycloak.events]
+  type="LOGIN_ERROR"
+  error="invalid_user_credentials"
+  username="testuser01"
+  ipAddress="127.0.0.1"
+```
+
+---
+
+### 8.2 JWT — Giải Mã Xem Role Người Dùng
+
+**JWT là gì:** Chuỗi base64 gồm 3 phần cách nhau bởi dấu `.`. Phần giữa (payload) chứa role và metadata — giải mã không cần key.
+
+**Lấy JWT thực tế:**
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -d "client_id=web-portal&grant_type=password&username=testuser01&password=Test1234!" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+echo $TOKEN
+```
+
+**Giải mã phần payload (không cần key):**
+```bash
+# Lấy phần giữa (index 1), base64 decode
+echo $TOKEN | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool
+```
+
+**Output:**
+```json
+{
+  "preferred_username": "testuser01",
+  "realm_access": {
+    "roles": ["financial-read", "financial-write"]
+  },
+  "iss": "http://keycloak.ztlab.local:8180/realms/ztlab",
+  "exp": 1782555600
+}
+```
+
+**So sánh merchant01 (chỉ có financial-read):**
+```bash
+TOKEN_MERCHANT=$(curl -s -X POST http://localhost:8180/realms/ztlab/protocol/openid-connect/token \
+  -d "client_id=web-portal&grant_type=password&username=merchant01&password=Test1234!" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+echo $TOKEN_MERCHANT | cut -d. -f2 | base64 -d 2>/dev/null | python3 -m json.tool | grep -A5 realm_access
+```
+
+---
+
+### 8.3 Log Envoy Sidecar — Access Log Mỗi Request
+
+**Lấy từ:** container `envoy` (container thứ 2) trong pod của từng service
+
+```bash
+# Log access Envoy của api-gateway (JSON, mỗi dòng 1 request)
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=api-gateway -o jsonpath='{.items[0].metadata.name}') \
+  -c envoy --tail=20
+
+# Lọc chỉ lấy request bị từ chối (HTTP 401, 403)
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=api-gateway -o jsonpath='{.items[0].metadata.name}') \
+  -c envoy | grep '"response_code":"40'
+
+# Lọc theo path cụ thể
+kubectl --context ctx-aws logs -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=payment-service -o jsonpath='{.items[0].metadata.name}') \
+  -c envoy | grep /payments | tail -10
+```
+
+**Một dòng log JSON trông như thế này:**
+```json
+{
+  "timestamp": "2026-06-27T11:43:37Z",
+  "method": "POST",
+  "path": "/payments",
+  "response_code": 200,
+  "response_time": 3,
+  "source_ip": "10.42.0.1",
+  "bytes_sent": 74,
+  "svid": "spiffe://ztlab.local/aws/api-gateway"
+}
+```
+
+Trường `svid` chứng minh caller là ai (identity mật mã từ SPIRE — không thể giả mạo).
+
+---
+
+### 8.4 Log OPA — Quyết Định Cho Phép / Từ Chối
+
+**Lấy từ:** pod opa-server trên namespace `opa`
+
+```bash
+# Xem tất cả quyết định OPA gần nhất
+kubectl --context ctx-aws logs -n opa \
+  $(kubectl --context ctx-aws get pod -n opa -l app=opa -o jsonpath='{.items[0].metadata.name}') \
+  | grep '"result"' | tail -20
+
+# Chỉ lấy các quyết định TỪ CHỐI (result: false)
+kubectl --context ctx-aws logs -n opa \
+  $(kubectl --context ctx-aws get pod -n opa -l app=opa -o jsonpath='{.items[0].metadata.name}') \
+  | python3 -c "
+import sys, json
+for line in sys.stdin:
+    try:
+        d = json.loads(line)
+        if d.get('result') == False:
+            print(json.dumps(d, indent=2))
+    except: pass
+" | head -40
+```
+
+**Log OPA từ chối trông như thế này:**
+```json
+{
+  "result": false,
+  "path": "zta/authz/allow",
+  "input": {
+    "request": {"http": {"path": "/transactions/execute", "method": "POST"}},
+    "x-spiffe-id": "spiffe://evil.corp/attacker"
+  },
+  "metrics": {"timer_rego_query_eval_ns": 251982}
+}
+```
+
+**Xem policy Rego đang chạy:**
+```bash
+cat opa/policies/zta_policy.rego
+```
+
+---
+
+### 8.5 SPIRE — Chứng Chỉ Đang Hoạt Động
+
+**Xem SVID của từng workload qua SPIRE Agent:**
+```bash
+# Liệt kê tất cả SVID đang được cấp
+kubectl --context ctx-aws exec -n spire \
+  $(kubectl --context ctx-aws get pod -n spire -l app=spire-agent -o jsonpath='{.items[0].metadata.name}') \
+  -- /opt/spire/bin/spire-agent api fetch x509 \
+  -socketPath /run/spire/sockets/agent.sock 2>&1 | grep "SPIFFE ID"
+```
+
+**Xem log SPIRE Server (gia hạn chứng chỉ, re-attest):**
+```bash
+kubectl --context ctx-aws logs -n spire \
+  $(kubectl --context ctx-aws get pod -n spire -l app=spire-server -o jsonpath='{.items[0].metadata.name}') \
+  | grep -E "Renewing|reattested|Registered" | tail -15
+```
+
+**Output gia hạn tự động mỗi ~30 phút:**
+```
+msg="Renewing X509-SVID"
+  spiffe_id="spiffe://ztlab.local/aws/payment-service"
+  expires_at="2026-06-27T12:43:16Z"
+```
+
+---
+
+### 8.6 Loki — Query Log Trực Tiếp (Grafana / curl)
+
+**Xem qua Grafana UI (cách dễ nhất):**
+- Vào http://localhost:13000 → admin/Admin1234!
+- Explore → Data source: Loki
+- Nhập LogQL query vào ô query
+
+**Các query quan trọng:**
+
+```logql
+# Tất cả access log Envoy trong 1 giờ qua
+{job="envoy-access"} | json | line_format "{{.timestamp}} {{.method}} {{.path}} → {{.response_code}}"
+
+# Chỉ HTTP 401 (brute force)
+{job="envoy-access"} | json | response_code=`401`
+
+# OPA deny
+{job="opa-decisions"} | json | result=`false`
+
+# Fraud gate bypass (OPA deny tại /transactions/execute)
+{job="opa-decisions", opa_result="false"} | json | request_path=`/transactions/execute`
+
+# Data exfiltration — response > 1MB từ OpenStack
+{job="envoy-access", cloud="openstack"} | json | bytes_sent > 1048576
+```
+
+**Query bằng curl (không cần mở browser):**
+```bash
+# Ví dụ: lấy 5 log OPA deny gần nhất
+curl -s -G "http://localhost:13000/loki/api/v1/query_range" \
+  --data-urlencode 'query={job="opa-decisions"} | json | result=`false`' \
+  --data-urlencode "start=$(date -d '1 hour ago' +%s)000000000" \
+  --data-urlencode "end=$(date +%s)000000000" \
+  --data-urlencode "limit=5" \
+  -u admin:Admin1234! \
+  | python3 -m json.tool | grep '"line"' | head -10
+```
+
+---
+
+### 8.7 SOAR — Xem Case và Trạng Thái
+
+**API SOAR (không cần auth):**
+```bash
+# Danh sách tất cả case
+curl -s http://localhost:18082/cases | python3 -m json.tool
+
+# Case mới nhất
+curl -s http://localhost:18082/cases | python3 -c "
+import sys, json
+cases = json.load(sys.stdin)
+if cases:
+    print(json.dumps(cases[-1], indent=2))
+"
+
+# Xem chi tiết case theo ID
+curl -s http://localhost:18082/cases/case-20260627041323-kb1-17 | python3 -m json.tool
+
+# Xem playbook log của một case
+curl -s http://localhost:18082/cases/case-20260627041323-kb1-17/log | python3 -m json.tool
+```
+
+**Web Portal (có giao diện trực quan):**
+```
+http://localhost:18081/security
+Login: analyst01 / Test1234!
+```
+
+**File case lưu trên disk (persistent qua restart):**
+```bash
+kubectl --context ctx-aws exec -n security \
+  $(kubectl --context ctx-aws get pod -n security -l app=soar-engine -o jsonpath='{.items[0].metadata.name}') \
+  -- tail -5 /data/cases.jsonl | python3 -m json.tool
+```
+
+---
+
+### 8.8 Redis — IP Bị Block và Velocity Counter
+
+**Xem IP đang bị block (KB5):**
+```bash
+# Qua API SOAR
+curl -s http://localhost:8091/blocked-ips | python3 -m json.tool
+
+# Trực tiếp trong Redis
+kubectl --context ctx-aws exec -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=redis -o jsonpath='{.items[0].metadata.name}') \
+  -- redis-cli KEYS "ztlab:blocked_ip:*"
+
+# Xem TTL còn lại của một IP bị block
+kubectl --context ctx-aws exec -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=redis -o jsonpath='{.items[0].metadata.name}') \
+  -- redis-cli TTL "ztlab:blocked_ip:10.0.0.99"
+# → 85234 (giây còn lại, tương đương ~23.7 giờ)
+```
+
+**Xem velocity counter (KB2 — fraud detection):**
+```bash
+kubectl --context ctx-aws exec -n financial \
+  $(kubectl --context ctx-aws get pod -n financial -l app=redis -o jsonpath='{.items[0].metadata.name}') \
+  -- redis-cli KEYS "ztlab:velocity:*"
+```
+
+---
+
+### 8.9 Fraud Detection — Score Thực Tế Của Một Request
+
+Gọi trực tiếp service (không qua api-gateway, để test thuần logic):
+```bash
+# Giao dịch bình thường — score thấp
+curl -s -X POST http://localhost:18083/score \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":10000,"channel":"api","source_ip":"10.0.0.1"}' \
+  | python3 -m json.tool
+
+# Giao dịch rủi ro cao — 500M + TOR
+curl -s -X POST http://localhost:18083/score \
+  -H "Content-Type: application/json" \
+  -d '{"from_account":"ACC-1001","to_account":"ACC-ATTACKER","amount":500000000,"channel":"tor","source_ip":"10.0.0.1"}' \
+  | python3 -m json.tool
+```
+
+**Output giao dịch rủi ro:**
+```json
+{
+  "score": 75,
+  "verdict": "block",
+  "gate": "blocked",
+  "reason": ["critical_amount", "risky_channel"],
+  "details": {
+    "base": 5,
+    "amount_penalty": 55,
+    "channel_penalty": 15,
+    "velocity_penalty": 0
+  }
+}
+```
+
+---
+
+### 8.10 Kubernetes — Trạng Thái Deployment Sau SOAR
+
+**Xem toàn bộ deployment trong namespace financial:**
+```bash
+# AWS cluster
+kubectl --context ctx-aws get deployment -n financial
+kubectl --context ctx-aws get pod -n financial
+
+# OpenStack cluster
+kubectl --context ctx-openstack get deployment -n financial
+```
+
+**Xem NetworkPolicy đã được tạo bởi SOAR:**
+```bash
+kubectl --context ctx-aws get networkpolicy -n financial
+# NAME                        POD-SELECTOR   AGE
+# soar-block-c9f8bbb9         <none>         5m    ← KB5: block IP attacker
+# soar-block-f425eca1         <none>         3m    ← KB4: restrict egress
+```
+
+**Xem chi tiết một NetworkPolicy:**
+```bash
+kubectl --context ctx-aws describe networkpolicy soar-block-c9f8bbb9 -n financial
+```
+
+**Sau khi restore — xác nhận deployment trở về 1 replica:**
+```bash
+bash scripts/run-demo.sh --restore
+kubectl --context ctx-aws get deployment -n financial
+# api-gateway       1/1     1            1
+# payment-service   1/1     1            1
+# fraud-detection   1/1     1            1
+```
+
+---
+
+### Tóm Tắt Nhanh — Lệnh Xem Log Theo Kịch Bản
+
+| Kịch bản | Loại log | Lệnh nhanh |
+|---|---|---|
+| KB1 — Brute Force | Keycloak event | `kubectl logs -n identity <keycloak-pod> \| grep LOGIN_ERROR` |
+| KB2 — Fraud Gate | Fraud score | `curl localhost:18083/score -d '{"amount":500000000,"channel":"tor",...}'` |
+| KB3 — Lateral Move | OPA deny | `kubectl logs -n opa <opa-pod> \| grep '"result":false'` |
+| KB4 — Exfiltration | Envoy bytes | `kubectl logs -n financial <pod> -c envoy \| grep bytes_sent` |
+| KB5 — Access Denied | Redis block | `curl localhost:8091/blocked-ips` |
+| KB6 — Privilege Esc | Pod security | `kubectl exec -n financial <pod> -- id && cat /proc/1/status \| grep CapEff` |
+| Tất cả | SOAR case | `curl localhost:18082/cases \| python3 -m json.tool` |
+| Tất cả | Loki query | Grafana → Explore → LogQL query |
+
+---
+
 *Tài liệu tổng hợp từ config thực tế và log live capture ngày 2026-06-27. Chi tiết kỹ thuật xem tại `DEMO_FLOW_CHITIET.md`.*
