@@ -799,7 +799,7 @@ _LOKI_SEARCH_TERMS: dict[str, str] = {
     "credential_stuffing":  "401|403|login.fail|too.many|credential.stuff|multiple.fail",
     "jwt_replay":           "jwt.replay|token.reuse|duplicate.jti|jti.already.used|token_reuse",
     "fraud_gate_bypass":    "fraud_gate|fraud_score|bypass|gate=failed|fraud_gate_bypass",
-    "lateral_movement":     "svid|denied|lateral|spiffe|invalid.svid|lateral_movement",
+    "lateral_movement":     "payments/internal/execute|transactions/execute|lateral_movement",
     "cryptomining":         "xmrig|stratum|cryptomin|cpu.spike|mining",
     "port_scan":            "port.scan|nmap|syn.scan|masscan|port_scan",
     "exploit_probe":        "sqlmap|union.select|cmd.injection|payload|exploit",
@@ -813,6 +813,11 @@ _LOKI_SEARCH_TERMS: dict[str, str] = {
 }
 
 
+# Attacks where evidence spans multiple services — use namespace-wide Loki query
+# instead of restricting to the action target workload (which would miss OPA/Envoy logs).
+_EVIDENCE_NAMESPACE_WIDE = {"lateral_movement", "fraud_gate_bypass"}
+
+
 async def _fetch_loki_lines(
     attack_type: str,
     source_ip: str | None,
@@ -823,10 +828,15 @@ async def _fetch_loki_lines(
     end_ns = time.time_ns()
     start_ns = end_ns - 30 * 60 * 10**9  # last 30 minutes
 
-    parts = []
-    if workload:
-        parts.append(f'app="{workload}"')
-    base = "{" + ", ".join(parts) + "}" if parts else '{namespace="financial"}'
+    # For attacks that span multiple services (e.g. Envoy + OPA + app logs),
+    # search across the whole namespace rather than restricting to one app label.
+    if attack_type in _EVIDENCE_NAMESPACE_WIDE:
+        base = '{namespace="financial"}'
+    else:
+        parts = []
+        if workload:
+            parts.append(f'app="{workload}"')
+        base = "{" + ", ".join(parts) + "}" if parts else '{namespace="financial"}'
 
     term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
     if source_ip:
