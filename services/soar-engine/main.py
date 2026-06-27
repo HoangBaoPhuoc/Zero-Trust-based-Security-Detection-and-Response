@@ -1058,6 +1058,10 @@ async def _heuristic_analyze() -> None:
             continue
         if now - _heuristic_last_seen.get(attack_type, 0) < _HEURISTIC_DEDUP_S:
             continue
+        # Cross-check: skip if Grafana webhook already created a case for this attack_type recently
+        _wh_entry = _webhook_recent.get(attack_type)
+        if _wh_entry and now - _wh_entry[2] < _WEBHOOK_DEDUP_S:
+            continue
         _heuristic_last_seen[attack_type] = now
 
         alert = SecurityAlert(
@@ -1132,6 +1136,8 @@ async def _process_heuristic_alert(alert: SecurityAlert) -> CaseRecord:
         error=error, dry_run=SOAR_DRY_RUN, steps=steps, ts=_now_iso(),
     )
     result = await record_case(case)
+    # Register in _webhook_recent so Grafana real-alert won't create a duplicate case
+    _webhook_recent[attack] = (case_id, SEVERITY_RANK.get(alert.severity, 0), time.time())
 
     if status == "pending_approval":
         _HITL_QUEUE[case_id] = (case, playbook, target)
