@@ -243,6 +243,57 @@ data:
         noDataState: OK
         title: 'Lateral Movement — Invalid SVID (T1021.007)'
         uid: lateral-movement-svid
+  privilege-escalation-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 1m
+      name: privilege-escalation
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: quarantine_workload (cách ly container bị tấn công,
+            giữ lại để forensics).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → financial namespace logs → filter privilege_escalation.
+
+            Restore: kubectl rollout restart deployment/api-gateway -n financial
+
+            '
+          description: ATT&CK T1611 — Phát hiện cố gắng leo thang đặc quyền trong container
+            (setuid binary, cap_sys_admin, seccomp unconfined). Zero Trust yêu cầu mọi
+            workload chạy với least privilege.
+          summary: Phát hiện Privilege Escalation trong container — vi phạm workload isolation
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum(count_over_time({namespace="financial"} |~ "(?i)(privilege_escalation|setuid|cap_sys_admin|seccomp.unconfined|container_escape|privesc)"
+              [5m]))
+            instant: true
+            intervalMs: 1000
+            maxDataPoints: 43200
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: OK
+        for: 0s
+        labels:
+          attack_type: privilege_escalation
+          category: security
+          mitre: T1611
+          severity: critical
+        noDataState: OK
+        title: Privilege Escalation in Container (T1611)
+        uid: privilege-escalation-container
   notification-policy.yml: |
     apiVersion: 1
 

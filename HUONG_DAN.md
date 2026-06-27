@@ -15,7 +15,7 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 5. [Tài khoản & credentials](#5-tài-khoản--credentials)
 6. [Truy cập các UI](#6-truy-cập-các-ui)
 7. [Health check nhanh](#7-health-check-nhanh)
-8. [Test kịch bản demo](#8-test-kịch-bản-demo) — KB1-KB4 (Grafana) + SC01-SC20 (AI Analyzer)
+8. [Test kịch bản demo](#8-test-kịch-bản-demo) — KB1-KB6 (Grafana → SOAR, không dùng AI Analyzer)
 9. [SOAR Engine & HITL](#9-soar-engine--hitl)
 10. [Grafana — Dashboards & Alerts](#10-grafana--dashboards--alerts)
 11. [OPA — Chính sách Zero Trust](#11-opa--chính-sách-zero-trust)
@@ -46,7 +46,7 @@ GVHD: ThS. Đỗ Thị Phương Uyên · Môn: NT114.Q21.ANTT
 │ namespace: plg-stack                                                     │
 │   Promtail (DaemonSet) → Loki (90 ngày) → Grafana                      │
 │   SOAR Engine   (heuristic + Grafana webhook → HITL email → K8s)       │
-│   AI Analyzer   (OpenAI → Gemini → Heuristic · 15 patterns · /analyze) │
+│   AI Analyzer   (disabled from detection flow — /analyze vẫn khả dụng) │
 │   Security Scorer   (anomaly score 0-100 · window 15 phút · Redis)     │
 │                                                                          │
 │ namespace: monitoring                                                    │
@@ -91,13 +91,7 @@ Log event (Envoy/OPA/app) → Promtail → Loki
   ├─ Heuristic Poller (poll Loki mỗi 60s, 9 regex rules)
   │    └─ phát hiện anomaly → tạo SOAR case
   └─ Grafana alert fire (count_over_time query, eval 1 phút)
-       └─ POST soar-engine/grafana-webhook → tạo SOAR case (KB1-KB4)
-
-Scenario test POST /analyze → AI Analyzer (port 18082)
-  ├─ Provider chain: OpenAI API → Gemini API → Heuristic fallback
-  ├─ 15 attack patterns (brute_force, lateral_movement, cryptomining, ...)
-  ├─ severity < high → verdict + playbook (không cần admin duyệt)
-  └─ severity ≥ high → pending alert → POST soar-engine/alerts → SOAR case
+       └─ POST soar-engine/grafana-webhook → tạo SOAR case (KB1-KB6)
 
 SOAR case tạo xong:
   ├─ severity < high (medium/low): auto-execute playbook ngay
@@ -105,6 +99,9 @@ SOAR case tạo xong:
        └─ Admin mở email → thấy các nút hành động (block IP / isolate / revoke...)
           → click nút HOẶC vào web-portal /security → chọn hành động
           → SOAR thực thi playbook đã chọn → ghi case thành "executed"
+
+> AI Analyzer (port 18082) đã tắt luồng forward sang SOAR (SOAR_WEBHOOK_URL="").
+> /analyze endpoint vẫn khả dụng để thử nghiệm riêng lẻ nhưng không tự động tạo SOAR case.
 ```
 
 ---
@@ -349,10 +346,31 @@ curl -s -X POST http://localhost:18080/payments \
 
 ## 8. Test kịch bản demo
 
-Hệ thống hỗ trợ **20 kịch bản kiểm thử** chia làm hai nhóm:
+Hệ thống hỗ trợ **6 kịch bản Grafana → SOAR** (không dùng AI Analyzer):
 
-- **KB1-KB4** (mục 8.1-8.4): Phát hiện qua Grafana alert → SOAR HITL (inject log Loki → Grafana query → webhook)
-- **SC01-SC20** (mục 8.5): Phát hiện qua AI Analyzer (`/analyze` API → heuristic/AI → verdict + playbook)
+| Kịch bản | ATT&CK | Zero Trust layer | Playbook SOAR |
+|----------|--------|-----------------|---------------|
+| KB1 Brute Force Login | T1110.001 | Keycloak + Envoy (401 spike) | revoke_user_sessions |
+| KB2 Fraud Gate Bypass | T1078.004 | OPA fraud_gate policy | isolate_workload |
+| KB3 Lateral Movement | T1021.007 | SPIFFE mTLS / SVID trust domain | isolate_workload |
+| KB4 Data Exfiltration | T1041 | Envoy egress bytes_sent>1MB | restrict_egress |
+| KB5 Access Denied Spike | T1078 | OPA RBAC deny rate | block_source_ip |
+| KB6 Privilege Escalation | T1611 | Container least-privilege (Seccomp/AppArmor) | quarantine_workload |
+
+**Chạy toàn bộ 6 kịch bản:**
+```bash
+bash tests/grafana_run_all.sh
+```
+
+**Chạy từng kịch bản:**
+```bash
+bash tests/grafana_kb1_brute_force.sh
+bash tests/grafana_kb2_fraud_gate.sh
+bash tests/grafana_kb3_lateral_movement.sh
+bash tests/grafana_kb4_exfiltration.sh
+bash tests/grafana_kb5_access_denied.sh
+bash tests/grafana_kb6_privilege_escalation.sh
+```
 
 ### Chuẩn bị trước mỗi lần demo
 
@@ -377,55 +395,50 @@ Mở sẵn các tab trình duyệt:
 |-----|-----|---------|
 | 1 | http://localhost:18081 | Web Portal — đăng nhập testuser01 |
 | 2 | http://localhost:3000/d/ztlab-ai-siem-soar | Grafana SIEM SOAR dashboard |
-| 3 | http://localhost:3000/alerting/list | Grafana Alert Rules (theo dõi FIRING) |
-| 4 | http://localhost:18081/security | SOAR Cases — đăng nhập analyst01 |
+| 3 | http://localhost:3000/alerting/list | Grafana Alert Rules (theo dõi 6 rule, folder ZTLab) |
+| 4 | http://localhost:18081/security | SOAR Cases — đăng nhập analyst01 / Analyst2026! |
 
 ---
 
 ### Luồng demo đầy đủ (HITL)
 
-> Hệ thống theo mô hình **Human-in-the-Loop**: SOAR phát hiện tấn công, tạo case và gửi email cho admin với các nút hành động. Admin xem xét rồi chọn hành động phù hợp — SOAR thực thi. Không tự động execute cho severity ≥ high để đảm bảo oversight.
+> Hệ thống theo mô hình **Human-in-the-Loop**: log tấn công xuất hiện trong Loki → Grafana alert fire → SOAR webhook → tạo case và gửi email cho admin với các nút hành động. Admin xem xét rồi chọn hành động — SOAR thực thi. Không tự động execute cho severity ≥ high để đảm bảo oversight.
 
-**Bước 1 — Push log tấn công (inject Loki)**  
-**Bước 2 — Chờ Grafana alert fire (~60s) → SOAR tạo case `pending_approval`**  
-**Bước 3 — Admin nhận email với nút hành động (revoke / block / isolate...)**  
-**Bước 4 — Admin vào http://localhost:18081/security → tìm case "⏳ Chờ duyệt" → click "⚡ Xử lý"**  
+**Bước 1 — Script sinh traffic tấn công thật + inject log đặc trưng vào Loki**  
+**Bước 2 — Script gọi trực tiếp SOAR webhook (mô phỏng Grafana → SOAR) → case `pending_approval`**  
+**Bước 3 — Admin nhận email HITL với tên alert, log evidence và nút hành động**  
+**Bước 4 — Admin vào http://localhost:18081/security → tab SOAR Cases → "⏳ Chờ duyệt" → click "⚡ Xử lý"**  
 **Bước 5 — Chọn playbook → SOAR thực thi → case chuyển sang "executed"**
+
+> **Lưu ý về 2 bước:** Script test gộp bước 1+2 lại (inject log + gọi webhook ngay) để demo nhanh. Khi chạy thực tế với Grafana alerting, Grafana tự gọi webhook sau 60s — không cần script mô phỏng.
 
 ---
 
 ### Cách chạy demo
 
-> **Về "tấn công thực" vs "inject log":**
-> - **KB1** có thể tấn công thực bằng cách craft JWT giả → api-gateway xác thực signature thất bại → trả 401 → Envoy ghi log thật → Grafana alert fire.
-> - **KB2, KB3, KB4** không thể tấn công thực từ bên ngoài → inject log vào Loki để trigger Grafana alert.
-> - Script `run-demo.sh` dùng inject log cho tất cả 4 kịch bản để đảm bảo tính đồng nhất khi demo.
-
 **Cách 1 — Script tự động (khuyến nghị)**
 
 ```bash
-# Chạy toàn bộ: normal traffic + tất cả 4 kịch bản tấn công
-bash scripts/run-demo.sh
-
-# Chỉ normal traffic (4 payment hợp lệ)
-bash scripts/run-demo.sh --traffic-only
-
-# Chỉ tất cả 4 kịch bản tấn công (không gửi normal traffic)
-bash scripts/run-demo.sh --attack-only
+# Chạy toàn bộ 6 kịch bản (mỗi script: inject log + gọi SOAR webhook)
+bash tests/grafana_run_all.sh
 
 # Chạy từng kịch bản riêng lẻ
-bash scripts/run-demo.sh --kb1   # KB1: Brute Force
-bash scripts/run-demo.sh --kb2   # KB2: Lateral Movement
-bash scripts/run-demo.sh --kb3   # KB3: Fraud Gate Bypass
-bash scripts/run-demo.sh --kb4   # KB4: Data Exfiltration
+bash tests/grafana_kb1_brute_force.sh       # KB1: Brute Force T1110.001
+bash tests/grafana_kb2_fraud_gate.sh        # KB2: Fraud Gate Bypass T1078.004
+bash tests/grafana_kb3_lateral_movement.sh  # KB3: Lateral Movement T1021.007
+bash tests/grafana_kb4_exfiltration.sh      # KB4: Data Exfiltration T1041
+bash tests/grafana_kb5_access_denied.sh     # KB5: Access Denied Spike T1078
+bash tests/grafana_kb6_privilege_escalation.sh  # KB6: Privilege Escalation T1611
 
 # Restore tất cả services sau demo
 bash scripts/run-demo.sh --restore
 ```
 
-> Script sẽ báo PASS khi SOAR tạo case (kể cả `pending_approval`). Admin vẫn cần vào web portal để duyệt.
+> Mỗi script báo PASS khi SOAR tạo case `pending_approval` với đúng playbook. Admin vào `/security` để duyệt.
 
-**Cách 2 — Thủ công từng kịch bản** (copy-paste nhanh bên dưới)
+**Cách 2 — Inject log thủ công + Grafana tự alert** (chờ ~60s thực)
+
+Thay vì script mô phỏng webhook, inject log vào Loki rồi chờ Grafana eval cycle (≤60s) tự gọi SOAR. Dùng block Python/JSON inject trong các mục 8.1-8.6 bên dưới.
 
 ---
 
@@ -824,6 +837,96 @@ bash scripts/run-demo.sh --restore
 
 ---
 
+### 8.5 — Kịch bản 5: Access Denied Spike (T1078)
+
+**Mô tả:** IP cố tình probe nhiều endpoint admin liên tiếp → OPA từ chối (RBAC deny) → Grafana detect deny rate tăng → SOAR tạo case `pending_approval` → admin chọn `block_source_ip` → Redis ban IP 24h.
+
+**Grafana query:** `{job="opa-decisions"} | json | result="deny" [1m]`
+
+```bash
+bash tests/grafana_kb5_access_denied.sh
+```
+
+**Inject thủ công:**
+```bash
+ts=$(date +%s%N)
+for i in 0 1 2 3 4 5; do
+  curl -s -X POST http://localhost:13100/loki/api/v1/push \
+    -H "Content-Type: application/json" \
+    -d "{\"streams\":[{\"stream\":{\"job\":\"opa-decisions\",\"namespace\":\"financial\",\"result\":\"deny\"},
+      \"values\":[[\"$((ts + i * 1000000))\",\"{\\\"result\\\":\\\"deny\\\",\\\"source_ip\\\":\\\"10.0.0.99\\\",\\\"path\\\":\\\"/admin/users\\\",\\\"reason\\\":\\\"rbac_deny_no_admin_role\\\"}\"]]}]}" >/dev/null
+done
+echo "Inject OK — chờ Grafana alert ~60s"
+```
+
+**Chuỗi sự kiện:**
+1. OPA deny log từ 10.0.0.99 liên tiếp vào Loki
+2. Grafana alert "Access Denied Spike" → FIRING
+3. SOAR: `attack_type=access_denied, severity=high` → case `pending_approval`
+4. Email admin: 3 nút — `Chặn IP nguồn`, `Cô lập dịch vụ`, `Chỉ theo dõi`
+5. Admin chọn `Chặn IP nguồn` → SOAR thêm IP vào Redis blocklist + NetworkPolicy
+
+**Verify:**
+```bash
+curl -s http://localhost:8091/blocked-ips | python3 -c "import sys,json; print(json.load(sys.stdin))"
+# Kỳ vọng: ["10.0.0.99"] (hoặc có trong danh sách)
+```
+
+**Restore:**
+```bash
+curl -s -X DELETE http://localhost:8091/blocked-ips/10.0.0.99
+```
+
+---
+
+### 8.6 — Kịch bản 6: Privilege Escalation in Container (T1611)
+
+**Mô tả:** Phát hiện cố gắng leo thang đặc quyền bên trong container (setuid binary, cap_sys_admin, seccomp unconfined) → Grafana regex match → SOAR tạo case `pending_approval, critical` → admin chọn `quarantine_workload` → cách ly để forensics.
+
+**Grafana query:** `{namespace="financial"} |~ "(?i)(privilege_escalation|setuid|cap_sys_admin|seccomp.unconfined|container_escape|privesc)" [5m]`
+
+```bash
+bash tests/grafana_kb6_privilege_escalation.sh
+```
+
+**Inject thủ công:**
+```bash
+ts=$(date +%s%N)
+curl -s -X POST http://localhost:13100/loki/api/v1/push \
+  -H "Content-Type: application/json" \
+  -d "{\"streams\":[{
+    \"stream\":{\"namespace\":\"financial\",\"app\":\"api-gateway\",\"job\":\"container-runtime\"},
+    \"values\":[
+      [\"$ts\",\"AUDIT: privilege_escalation detected — process attempted setuid(0) in container api-gateway\"],
+      [\"$((ts+1000000))\",\"SECURITY: cap_sys_admin capability access — policy violation\"],
+      [\"$((ts+2000000))\",\"ALERT: seccomp.unconfined profile — container escape attempt blocked\"]
+    ]
+  }]}" >/dev/null
+echo "Inject OK — chờ Grafana alert ~60s"
+```
+
+**Chuỗi sự kiện:**
+1. Log chứa keyword `privilege_escalation|setuid|cap_sys_admin` xuất hiện trong namespace financial
+2. Grafana alert "Privilege Escalation in Container (T1611)" → FIRING
+3. SOAR: `attack_type=privilege_escalation, severity=critical` → case `pending_approval`
+4. Email admin: 4 nút — `Cách ly workload (forensics)`, `Cô lập dịch vụ`, `Chặn IP nguồn`, `Chỉ theo dõi`
+5. Admin chọn `Cách ly workload` → SOAR scale workload xuống 0 (giữ nguyên để forensics)
+
+**Verify:**
+```bash
+kubectl --context ctx-aws get deployment api-gateway -n financial \
+  -o jsonpath='{.spec.replicas}' && echo
+# Kết quả sau quarantine: 0
+```
+
+**Restore:**
+```bash
+kubectl --context ctx-aws scale deployment api-gateway -n financial --replicas=1
+kubectl --context ctx-aws rollout status deployment/api-gateway -n financial
+```
+
+---
+
 ### Restore toàn bộ sau demo
 
 ```bash
@@ -840,19 +943,25 @@ python3 tests/seed_db.py
 
 ---
 
----
-
-### 8.5 — 20 Kịch Bản Kiểm Thử (AI Analyzer)
+### 8.7 — AI Analyzer (thử nghiệm riêng, không tự động tạo SOAR case)
 
 **Yêu cầu:** AI Analyzer đang chạy tại `http://localhost:18082` (kiểm tra: `curl -s http://localhost:18082/health`)
 
-#### Chạy toàn bộ 20 kịch bản
+> **AI Analyzer không còn tự động forward sang SOAR.** Dùng endpoint `/analyze` để thử nghiệm heuristic/AI detection độc lập — kết quả trả về JSON nhưng không tạo SOAR case.
+
+#### Test nhanh AI Analyzer (không liên quan đến SOAR pipeline)
 
 ```bash
-python3 tests/scenario_00_full_suite.py
-```
+# Health + provider đang dùng
+curl -s http://localhost:18082/health | python3 -c "import sys,json; d=json.load(sys.stdin); print('provider:', d.get('provider'), '| status:', d.get('status'))"
 
-Script này chạy lần lượt tất cả SC01-SC20 và in kết quả PASS/FAIL.
+# Test /analyze endpoint
+curl -s -X POST http://localhost:18082/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"source":"manual","logs":[{"timestamp":"2026-01-01T00:00:00Z","message":"jwt_verification_failed brute force attempt","labels":{"job":"envoy-access"}}]}' \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('verdict:', d.get('verdict'), '| attack:', d.get('attack_type'), '| severity:', d.get('severity'))"
+# Kỳ vọng: verdict: malicious | attack: brute_force | severity: high
+```
 
 #### Chạy từng kịch bản riêng lẻ
 
@@ -949,8 +1058,8 @@ curl -s -X POST http://localhost:18082/analyze \
 | Nguồn phát hiện | Cơ chế |
 |-----------------|--------|
 | **Heuristic Poller** | Poll Loki mỗi 60s, 9 regex rules (brute_force, lateral_movement, fraud_gate_bypass, cryptomining...) |
-| **Grafana Webhook** | Grafana alert fire → POST `/grafana-webhook` → SOAR parse `attack_type` từ alert label (KB1-KB4) |
-| **AI Analyzer** | Scenario test POST `/analyze` → OpenAI→Gemini→Heuristic chain → nếu severity ≥ high → POST `/alerts` → SOAR case |
+| **Grafana Webhook** | Grafana alert fire → POST `/grafana-webhook` → SOAR parse `attack_type` từ alert label (KB1-KB6) |
+| ~~AI Analyzer~~ | _Đã tắt (SOAR_WEBHOOK_URL="") — không forward sang SOAR nữa_ |
 
 | Severity | Hành động SOAR |
 |----------|----------------|
@@ -1063,6 +1172,7 @@ for c in cases[-10:]:
 | Fraud Gate Bypass (T1078.004) | critical | fraud_gate_bypass → isolate_workload |
 | Data Exfiltration — Large Response (T1041) | high | large_response → restrict_egress |
 | Access Denied Spike | high | access_denied → block_source_ip |
+| Privilege Escalation in Container (T1611) | critical | privilege_escalation → quarantine_workload |
 | SOAR Engine Health | warning | — (monitor only) |
 
 Tất cả alert `category=security` → webhook `POST soar-engine/grafana-webhook` → SOAR tạo case `pending_approval`.
