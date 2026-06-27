@@ -107,7 +107,8 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
         \"severity\": \"high\",
         \"attack_type\": \"access_denied\",
         \"mitre\": \"T1078\",
-        \"category\": \"security\"
+        \"category\": \"security\",
+        \"source_ip\": \"10.0.0.99\"
       },
       \"annotations\": {
         \"summary\": \"OPA RBAC deny spike — merchant01 bị từ chối $denied/${#amounts[@]} POST /payments\",

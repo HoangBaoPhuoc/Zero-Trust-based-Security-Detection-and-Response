@@ -75,7 +75,8 @@ soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
         \"attack_type\": \"fraud_gate_bypass\",
         \"mitre\": \"T1078.004\",
         \"category\": \"security\",
-        \"gap\": \"gap2\"
+        \"gap\": \"gap2\",
+        \"source_ip\": \"10.0.0.5\"
       },
       \"annotations\": {
         \"summary\": \"Fraud gate bypass attempt — amount=500000000 channel=tor fraud_score=75\",

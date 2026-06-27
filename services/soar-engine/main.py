@@ -342,6 +342,10 @@ _HEURISTIC_WINDOW_S = 300   # 5 min lookback trong Loki
 _HEURISTIC_DEDUP_S  = 600   # 10 min dedup — không gửi alert trùng cùng loại
 _heuristic_last_seen: dict[str, float] = {}
 
+# Grafana webhook dedup: {attack_type: (case_id, severity_rank, timestamp)}
+_WEBHOOK_DEDUP_S: int = 300  # 5 min — ngăn Grafana real-alert tạo case trùng với script
+_webhook_recent: dict[str, tuple[str, int, float]] = {}
+
 
 def _infer_target(alert: SecurityAlert, attack: str) -> dict[str, str | None]:
     target = dict(TARGETS_BY_ATTACK.get(attack, {}))
@@ -1492,6 +1496,34 @@ async def grafana_webhook(request: Request) -> dict[str, Any]:
         playbook   = _select_playbook(alert, attack)
         target     = _infer_target(alert, attack)
         eligible, reason = _should_execute(alert)
+
+        # Dedup: mỗi attack_type chỉ tạo 1 case trong 5 phút
+        # Ngăn Grafana real-alert tạo case trùng với case đã được script tạo trước
+        _now_ts = time.time()
+        _recent = _webhook_recent.get(attack)
+        if _recent:
+            _old_case_id, _old_sev_rank, _old_ts = _recent
+            if _now_ts - _old_ts < _WEBHOOK_DEDUP_S:
+                _new_sev_rank = SEVERITY_RANK.get(alert.severity, 0)
+                if _new_sev_rank <= _old_sev_rank:
+                    # Duplicate với severity thấp hơn hoặc bằng → bỏ qua
+                    logger.info(json.dumps({
+                        "event_type": "grafana_webhook_deduped",
+                        "attack_type": attack,
+                        "existing_case": _old_case_id,
+                        "new_severity": alert.severity,
+                        "reason": "same attack_type within 5 min dedup window",
+                    }))
+                    results.append({
+                        "case_id": _old_case_id,
+                        "attack_type": attack,
+                        "playbook": playbook,
+                        "status": "deduped",
+                        "deduped_by": _old_case_id,
+                    })
+                    continue
+        # Cập nhật registry với case mới (severity cao hơn hoặc mới)
+        _webhook_recent[attack] = (case_id, SEVERITY_RANK.get(alert.severity, 0), _now_ts)
 
         status: Literal["pending_approval", "skipped", "dry_run", "executed", "failed", "rolled_back", "rollback_failed"]
         action = "no action"
