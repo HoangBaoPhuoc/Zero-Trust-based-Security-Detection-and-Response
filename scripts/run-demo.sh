@@ -178,10 +178,12 @@ if matched:
 
 # ─── Restore services ────────────────────────────────────────────────────────
 restore_all() {
-  step "Restore payment-service (xóa SOAR isolation label)..."
+  step "Restore payment-service deployment (replicas=1, xóa SOAR isolation)..."
+  kubectl --context "$AWS_CONTEXT" scale deployment payment-service -n financial --replicas=1 2>/dev/null \
+    && echo "    payment-service deployment: OK" || true
   kubectl --context "$AWS_CONTEXT" patch svc payment-service -n financial \
     --type=json -p='[{"op":"replace","path":"/spec/selector","value":{"app":"payment-service"}}]' 2>/dev/null \
-    && echo "    payment-service: OK" || true
+    && echo "    payment-service svc selector: OK" || true
 
   step "Restore api-gateway (replicas=1)..."
   kubectl --context "$AWS_CONTEXT" scale deployment api-gateway -n financial --replicas=1 2>/dev/null \
