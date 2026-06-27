@@ -27,14 +27,8 @@ groups:
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "OPA từ chối request — SVID không hợp lệ, có thể lateral movement"
-          description: "ATT&CK T1021.007 — Service cố truy cập service khác với SPIFFE ID sai. mTLS bị vi phạm."
-          soar_action: |
-            ✅ SOAR đã tự động:
-            1. Ghi OPA denial vào case với severity=critical
-            2. Revoke token của service account vi phạm
-            3. Cảnh báo SPIRE agent để audit SVID chain
-            🔧 Admin cần xem xét: kubectl logs -n financial deployment/api-gateway -c envoy
+          summary: "Lateral Movement — OPA chặn service call không có SVID hợp lệ (T1021.007)"
+          description: "OPA deny: service gọi /payments/internal/execute hoặc /transactions/execute với SVID không được phép. Kiểm tra: kubectl logs -n financial deployment/payment-service -c envoy | grep payments/internal"
         labels:
           severity: critical
           category: security
