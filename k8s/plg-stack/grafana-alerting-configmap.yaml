@@ -4,7 +4,7 @@ data:
     apiVersion: 1
     groups:
     - folder: ZTLab
-      interval: 1m
+      interval: 10s
       name: access-denied-spike
       orgId: 1
       rules:
@@ -49,7 +49,7 @@ data:
     apiVersion: 1
     groups:
     - folder: ZTLab
-      interval: 1m
+      interval: 10s
       name: brute-force
       orgId: 1
       rules:
@@ -97,7 +97,7 @@ data:
     apiVersion: 1
     groups:
     - folder: ZTLab
-      interval: 1m
+      interval: 10s
       name: fraud-gate
       orgId: 1
       rules:
@@ -147,7 +147,7 @@ data:
     apiVersion: 1
     groups:
     - folder: ZTLab
-      interval: 1m
+      interval: 10s
       name: gap1-exfiltration
       orgId: 1
       rules:
@@ -198,7 +198,7 @@ data:
     apiVersion: 1
     groups:
     - folder: ZTLab
-      interval: 1m
+      interval: 10s
       name: lateral-movement
       orgId: 1
       rules:
@@ -247,7 +247,7 @@ data:
     apiVersion: 1
     groups:
     - folder: ZTLab
-      interval: 1m
+      interval: 10s
       name: privilege-escalation
       orgId: 1
       rules:
@@ -314,16 +314,16 @@ data:
         group_by:
           - grafana_folder
           - alertname
-        group_wait: 10s
-        group_interval: 5m
-        repeat_interval: 4h
+        group_wait: 0s
+        group_interval: 30s
+        repeat_interval: 5m
         routes:
           - receiver: ztlab-security-admin
             matchers:
               - 'category="security"'
-            group_wait: 10s
-            group_interval: 5m
-            repeat_interval: 1h
+            group_wait: 0s
+            group_interval: 30s
+            repeat_interval: 5m
   soar-health-alert.yml: |
     apiVersion: 1
     groups:
