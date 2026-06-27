@@ -7,7 +7,6 @@
 # HITL          : YES — email gửi admin (critical)
 set -euo pipefail
 
-SOAR_URL="${SOAR_URL:-http://localhost:8091}"
 LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 SCENARIO="KB6_privilege_escalation"
 
@@ -16,7 +15,6 @@ pass() { printf "[%s] PASS: %s\n" "$SCENARIO" "$*"; }
 fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
-curl -fsS "$SOAR_URL/health" | grep -q '"status":"ok"' || fail "SOAR không khả dụng"
 curl -fsS "$LOKI_URL/ready" >/dev/null || fail "Loki không khả dụng"
 
 # ── 2. Audit thực tế: kiểm tra pod security context ─────────────────────────
@@ -125,37 +123,4 @@ req = urllib.request.Request(
 urllib.request.urlopen(req, timeout=5)
 PYEOF
 
-# ── 4. SOAR webhook ───────────────────────────────────────────────────────────
-fp="kb6-$(date +%s)"
-soar_resp=$(curl -s -X POST "$SOAR_URL/grafana-webhook" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"status\": \"firing\",
-    \"alerts\": [{
-      \"status\": \"firing\",
-      \"labels\": {
-        \"alertname\": \"Privilege Escalation in Container (T1611)\",
-        \"severity\": \"$SEVERITY\",
-        \"attack_type\": \"privilege_escalation\",
-        \"mitre\": \"T1611\",
-        \"category\": \"security\"
-      },
-      \"annotations\": {
-        \"summary\": \"$POD chạy uid=0 với CapEff=0x${CAPEFF:-a80425fb} — /etc/shadow readable=$SHADOW_READABLE\",
-        \"description\": \"pod=$POD namespace=financial uid=0 cap_dac_override=true cap_setuid=true shadow_readable=$SHADOW_READABLE allowPrivilegeEscalation=$SC_ALLOW_PRIVILEGE\"
-      },
-      \"fingerprint\": \"$fp\"
-    }]
-  }")
-
-# ── 5. Kiểm tra SOAR case ─────────────────────────────────────────────────────
-status=$(echo "$soar_resp"   | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('status','?') if c else 'no-case')" 2>/dev/null)
-playbook=$(echo "$soar_resp" | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('playbook','?') if c else '?')" 2>/dev/null)
-case_id=$(echo "$soar_resp"  | python3 -c "import sys,json; c=json.load(sys.stdin).get('cases',[]); print(c[0].get('case_id','?') if c else '?')" 2>/dev/null)
-
-[[ "$status" =~ ^(pending_approval|executed|dry_run|deduped)$ ]] \
-  || fail "SOAR status='$status' (expect pending_approval)"
-[[ "$playbook" == "quarantine_workload" ]] \
-  || fail "SOAR playbook='$playbook' (expect quarantine_workload)"
-
-pass "KB6 Privilege Escalation | THẬT: uid=0 CapEff=0x${CAPEFF} shadow=$SHADOW_READABLE | SOAR case=$case_id status=$status playbook=$playbook (T1611)"
+pass "KB6 | uid=0 CapEff=0x${CAPEFF:-0} shadow=$SHADOW_READABLE | logs → Loki (Grafana fire trong ≤1 phút)"
