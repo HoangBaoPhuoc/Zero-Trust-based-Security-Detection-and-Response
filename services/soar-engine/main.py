@@ -897,7 +897,7 @@ async def _run_steps(
     contain_action = "skipped"
     try:
         if playbook == "isolate_workload" and workload and context:
-            contain_action = _isolate_service(context, workload)
+            contain_action = _scale_deployment(context, workload, "workload isolation — suspected compromise")
         elif playbook in {"restrict_egress", "quarantine_workload"} and workload and context:
             reason = "suspected exfiltration" if playbook == "restrict_egress" else "suspected cryptomining/compromise"
             contain_action = _scale_deployment(context, workload, reason)
@@ -963,12 +963,7 @@ def rollback_playbook(case: CaseRecord) -> str:
     if not context or context not in SOAR_ALLOWED_CONTEXTS:
         raise ValueError(f"context {context!r} is not allowed")
 
-    if case.playbook == "isolate_workload":
-        if not workload:
-            raise ValueError("target workload is required")
-        return _restore_service(context, workload)
-
-    if case.playbook in {"restrict_egress", "quarantine_workload"}:
+    if case.playbook in {"isolate_workload", "restrict_egress", "quarantine_workload"}:
         if not workload:
             raise ValueError("target workload is required")
         action = _restore_deployment(context, workload)
