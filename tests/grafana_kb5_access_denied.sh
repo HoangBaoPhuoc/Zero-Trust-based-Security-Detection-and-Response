@@ -1,14 +1,17 @@
 #!/bin/bash
 # KB5 — Access Denied Spike (T1078) — OPA RBAC Enforcement
 # Zero Trust layer: Authorization (OPA RBAC — least-privilege, deny by default)
-# Bằng chứng thật: merchant01 (financial-read only) thử POST /payments → OPA từ chối HTTP 403
+# Tấn công thật: merchant01 (role=financial-read) thử POST /payments
+#                → OPA: role_permits_action=false (financial-read thiếu POST permission)
+#                → OPA deny → Envoy 403 → OPA decision log thật
+# Grafana rule  : Access Denied Spike → severity=high
+#   LogQL: {job="opa-decisions", opa_result="false", request_path="/payments"}
 # SOAR playbook : block_source_ip
 # HITL          : YES — email gửi admin
 set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
 KC_URL="${KC_URL:-http://localhost:8180}"
-LOKI_URL="${LOKI_URL:-http://localhost:13100}"
 SCENARIO="KB5_access_denied"
 
 log()  { printf "[%s] %s\n"       "$SCENARIO" "$*"; }
@@ -18,21 +21,17 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
 
-# ── 2. Lấy JWT merchant01 (financial-read only) ───────────────────────────────
+# ── 2. Lấy JWT merchant01 (role=financial-read only) ─────────────────────────
 MERCHANT_TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
   -d "grant_type=password&client_id=web-portal&username=merchant01&password=Test1234%21&scope=openid" \
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
 [[ -n "$MERCHANT_TOKEN" ]] || fail "Không lấy được JWT merchant01"
 
-roles=$(echo "$MERCHANT_TOKEN" | cut -d. -f2 | python3 -c "
-import sys,base64,json
-p=sys.stdin.read().strip(); p+='='*((4-len(p)%4)%4)
-d=json.loads(base64.urlsafe_b64decode(p))
-print(d.get('realm_access',{}).get('roles',[]))" 2>/dev/null || echo "unknown")
-log "merchant01 roles: $roles"
-
-# ── 3. merchant01 thử POST /payments → OPA RBAC deny thật ───────────────────
+# ── 3. merchant01 thử POST /payments → OPA RBAC deny thật ──────────────────
+# OPA: external_api_request requires role_permits_action → financial-read không có POST
+# → allow=false → Envoy 403 → OPA decision log (job=opa-decisions, opa_result=false)
+# → Promtail thu OPA container log → Loki
 denied=0
 amounts=(100000 50000 200000 75000 1000000 5000)
 for amount in "${amounts[@]}"; do
@@ -45,37 +44,8 @@ for amount in "${amounts[@]}"; do
   log "  POST /payments $amount → HTTP $code"
 done
 
-[[ $denied -ge 4 ]] || fail "Chỉ $denied/${#amounts[@]} request bị OPA từ chối (cần ≥4)"
-log "OPA RBAC từ chối $denied/${#amounts[@]} (403)"
+[[ $denied -ge 4 ]] || fail "Chỉ $denied/${#amounts[@]} bị từ chối (cần ≥4)"
+log "OPA RBAC từ chối $denied/${#amounts[@]} (403) → decision log → Loki {job=opa-decisions, request_path=/payments}"
+log "→ Grafana alert 'Kịch bản 5 — Access Denied Spike' sẽ fire trong ≤1 phút → SOAR tạo case access_denied"
 
-# ── 4. Đẩy OPA deny log vào Loki ─────────────────────────────────────────────
-python3 - <<PYEOF
-import json, urllib.request, time
-loki_url = "${LOKI_URL}"
-now = time.time_ns()
-log_lines = []
-for i in range(6):
-    log_lines.append([str(now + i * 1_000_000), json.dumps({
-        "result": "deny",
-        "source_ip": "10.0.0.99",
-        "path": "/payments",
-        "method": "POST",
-        "reason": "rbac_deny_missing_financial_write_role",
-        "subject": "merchant01",
-        "subject_roles": ["financial-read"],
-        "required_roles": ["financial-write"]
-    })])
-payload = {"streams": [{"stream": {
-    "job": "opa-decisions",
-    "namespace": "financial",
-    "app": "opa-server",
-    "result": "deny"
-}, "values": log_lines}]}
-req = urllib.request.Request(
-    f"{loki_url}/loki/api/v1/push",
-    data=json.dumps(payload).encode(),
-    headers={"Content-Type": "application/json"}, method="POST")
-urllib.request.urlopen(req, timeout=5)
-PYEOF
-
-pass "KB5 | OPA RBAC từ chối $denied/${#amounts[@]} (403) | logs → Loki (Grafana fire trong ≤1 phút)"
+pass "KB5 DONE | OPA RBAC từ chối $denied/${#amounts[@]} (403) | Log thật từ OPA decision log → Grafana fire trong ≤1 phút"

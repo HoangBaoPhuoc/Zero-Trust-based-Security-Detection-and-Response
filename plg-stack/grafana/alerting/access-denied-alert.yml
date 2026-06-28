@@ -1,0 +1,42 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: access-denied
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: access-denied-opa-rbac
+        title: "Kịch bản 5 — Access Denied Spike (T1078) — OPA RBAC"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({job="opa-decisions", opa_result="false", request_path="/payments"}[5m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "OPA RBAC từ chối POST /payments — user thiếu financial-write role (T1078)"
+          description: "ATT&CK T1078 — merchant01 cố gắng thực hiện POST /payments với role financial-read. OPA từ chối: thiếu financial-write. Có thể là tài khoản bị compromise hoặc privilege escalation."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Block IP nguồn tấn công (Redis blocklist, 24h TTL)
+            2. Tạo case với playbook block_source_ip
+            3. Notify admin để review merchant account
+            🔧 Admin cần xem xét: Grafana → ZTLab → SOAR Cases
+        labels:
+          severity: high
+          category: security
+          mitre: T1078
+          attack_type: access_denied

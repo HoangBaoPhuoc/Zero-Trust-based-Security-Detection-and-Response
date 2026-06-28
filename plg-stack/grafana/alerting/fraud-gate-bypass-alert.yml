@@ -20,15 +20,15 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: '{job="opa-decisions",opa_result="false",request_path="/transactions/execute"}'
-              instant: false
-              queryType: range
+              expr: 'sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [5m]))'
+              instant: true
+              queryType: instant
               refId: A
         noDataState: OK
-        execErrState: Alerting
+        execErrState: OK
         annotations:
-          summary: "Fraud Gate bypass: payment-service cố thực hiện giao dịch không qua fraud-detection"
-          description: "ATT&CK T1078.004 — Gap 2: payment-service gọi core-banking mà thiếu header X-Fraud-Score. OPA từ chối."
+          summary: "Fraud Gate: giao dịch bị chặn do fraud score cao"
+          description: "ATT&CK T1078.004 — payment-service phát hiện giao dịch gian lận (fraud score ≥ 75) và từ chối. Log thật từ payment-service AUDIT event payment_blocked_fraud."
           soar_action: |
             ✅ SOAR đã tự động:
             1. Block transaction ID liên quan trong Redis (TTL 1h)

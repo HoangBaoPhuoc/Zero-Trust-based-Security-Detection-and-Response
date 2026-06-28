@@ -20,15 +20,15 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum by (source_ip) (count_over_time({job="envoy-access"} | json | response_code=`401` [1m]))'
+              expr: 'sum by (source_ip) (count_over_time({job="envoy-access"} | json | response_code=`403` [1m])) > 10'
               instant: true
               queryType: instant
               refId: A
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Brute force login — nhiều lần 401 từ cùng source_ip trong 1 phút"
-          description: "ATT&CK T1110.001 — Kẻ tấn công đang thử đoán mật khẩu. OPA đã log request bị từ chối."
+          summary: "Brute force login — hơn 10 lần 403 từ cùng source_ip trong 1 phút"
+          description: "ATT&CK T1110.001 — Kẻ tấn công gửi nhiều request với JWT không hợp lệ. Envoy/OPA trả về 403 (JWT bị từ chối bởi OPA ext_authz)."
           soar_action: |
             ✅ SOAR đã tự động:
             1. Block IP nguồn tấn công (Redis blocklist, 24h TTL)

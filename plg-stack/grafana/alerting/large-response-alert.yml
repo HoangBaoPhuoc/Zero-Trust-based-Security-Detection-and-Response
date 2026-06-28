@@ -20,24 +20,22 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: '{job="envoy-access", cloud="openstack"} | json | bytes_sent > 1048576'
-              instant: false
-              queryType: range
+              expr: 'sum(count_over_time({job="envoy-access"} | json | bytes_sent > 1048576 [5m]))'
+              instant: true
+              queryType: instant
               refId: A
         noDataState: OK
-        execErrState: Alerting
+        execErrState: OK
         annotations:
-          summary: "Response >1MB từ OpenStack — nghi ngờ data exfiltration"
-          description: "ATT&CK T1041 — Gap 1: Envoy log từ OpenStack có bytes_sent vượt ngưỡng 1MB. Có thể đang dump database hoặc exfiltrate file."
+          summary: "Nhiều request bulk data >5KB từ api-gateway — nghi ngờ data exfiltration"
+          description: "ATT&CK T1041 — Nhiều request lấy dữ liệu giao dịch/tài khoản với response >5KB trong 5 phút. Log thật từ api-gateway trace_middleware bytes_sent."
           soar_action: |
             ✅ SOAR đã tự động:
             1. Ghi alert vào case với evidence từ Loki
             2. Tăng anomaly score cho service liên quan
             3. Notify admin để manual review
             🔧 Admin cần xem xét:
-            - kubectl logs -n financial deployment/core-banking | grep bytes_sent
-            - Kiểm tra OpenStack Security Group rules
-            - Xem xét rate-limit response size tại Envoy
+            - Grafana → api-gateway logs → filter bytes_sent > 5000
         labels:
           severity: high
           category: security

@@ -855,7 +855,7 @@ async def _fetch_loki_lines(
             for stream in data.get("data", {}).get("result", []):
                 app = stream.get("stream", {}).get("app", "?")
                 for _, raw_line in stream.get("values", []):
-                    lines.append(f"[{app}] {raw_line[:200]}")
+                    lines.append(f"[{app}] {raw_line[:500]}")
                     if len(lines) >= limit:
                         return lines
             return lines
@@ -1057,7 +1057,7 @@ async def _heuristic_analyze() -> None:
                 info = detected[attack_type]
                 info["count"] += 1
                 if len(info["evidence"]) < 5:
-                    info["evidence"].append(f"[{app}] {line[:200]}")
+                    info["evidence"].append(f"[{app}] {line[:500]}")
                 if not info["source_ip"]:
                     info["source_ip"] = _extract_source_ip_from_line(line)
 
