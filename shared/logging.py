@@ -68,6 +68,7 @@ def trace_middleware(service: str, cloud: str) -> type[BaseHTTPMiddleware]:
                 )
                 raise
             duration_ms = round((time.time() - start) * 1000, 2)
+            bytes_sent = int(response.headers.get("content-length", 0))
             response.headers["X-Trace-ID"] = trace_id
             logger.info(
                 "http_request",
@@ -76,6 +77,7 @@ def trace_middleware(service: str, cloud: str) -> type[BaseHTTPMiddleware]:
                 path=request.url.path,
                 status_code=response.status_code,
                 duration_ms=duration_ms,
+                bytes_sent=bytes_sent,
             )
             return response
 

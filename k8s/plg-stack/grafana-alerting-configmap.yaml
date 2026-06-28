@@ -18,7 +18,7 @@ data:
             '
           description: ATT&CK T1078 — IP nguồn đang probe các endpoint trái phép liên
             tiếp.
-          summary: OPA deny rate tăng đột biến từ cùng source_ip
+          summary: Access denied rate tăng đột biến — api-gateway từ chối do thiếu role
         condition: A
         data:
         - datasourceUid: Loki
@@ -26,8 +26,7 @@ data:
             datasource:
               type: loki
               uid: Loki
-            expr: sum by (source_ip) (count_over_time({job="opa-decisions"} | json | result="deny"
-              [1m]))
+            expr: sum by (source_ip) (count_over_time({namespace="financial",app="api-gateway"} | json | event="authz_denied" [1m]))
             instant: true
             queryType: instant
             refId: A
@@ -74,8 +73,7 @@ data:
             datasource:
               type: loki
               uid: Loki
-            expr: sum by (source_ip) (count_over_time({job="envoy-access"} | json | response_code=`401`
-              [1m]))
+            expr: sum by (source_ip) (count_over_time({namespace="financial",app="api-gateway"} | json | event="jwt_verification_failed" [1m]))
             instant: true
             queryType: instant
             refId: A
@@ -122,7 +120,7 @@ data:
             datasource:
               type: loki
               uid: Loki
-            expr: sum(count_over_time({job="opa-decisions",opa_result="false",attack_scenario="fraud_gate_bypass"}[5m]))
+            expr: sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [5m]))
             instant: true
             intervalMs: 1000
             maxDataPoints: 43200
@@ -172,8 +170,7 @@ data:
             datasource:
               type: loki
               uid: Loki
-            expr: sum(count_over_time({job="envoy-access"} | json | bytes_sent > 1048576
-              [5m]))
+            expr: sum(count_over_time({namespace="financial",app="api-gateway"} | json | event="http_request" | path=~"/transactions.*|/accounts.*" | bytes_sent > 5000 [5m]))
             instant: true
             intervalMs: 1000
             maxDataPoints: 43200
@@ -223,7 +220,7 @@ data:
             datasource:
               type: loki
               uid: Loki
-            expr: sum(count_over_time({job="opa-decisions",opa_result="false",attack_scenario="lateral_movement"}[5m]))
+            expr: sum(count_over_time({namespace="financial",app="api-gateway"} | json | event="jwt_verification_failed" | reason="missing_bearer" [5m]))
             instant: true
             intervalMs: 1000
             maxDataPoints: 43200
@@ -273,8 +270,7 @@ data:
             datasource:
               type: loki
               uid: Loki
-            expr: sum(count_over_time({namespace="financial"} |~ "(?i)(privilege_escalation|setuid|cap_sys_admin|seccomp.unconfined|container_escape|privesc)"
-              [5m]))
+            expr: sum(count_over_time({namespace="financial",app="security-scanner"} | json | event="privilege_escalation" [5m]))
             instant: true
             intervalMs: 1000
             maxDataPoints: 43200

@@ -7,7 +7,7 @@ groups:
     interval: 1m
     rules:
       - uid: lateral-movement-svid
-        title: "Kịch bản 2 — Lateral Movement: Invalid SVID"
+        title: "Kịch bản 3 — Lateral Movement: Unauthorized Internal Path (T1021.007)"
         for: 0s
         condition: A
         data:
@@ -20,15 +20,15 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: '{job="opa-decisions",opa_result="false"}'
-              instant: false
-              queryType: range
+              expr: 'sum(count_over_time({job="opa-decisions",opa_result="false",request_path="/payments/internal/execute"}[5m]))'
+              instant: true
+              queryType: instant
               refId: A
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Lateral Movement — OPA chặn service call không có SVID hợp lệ (T1021.007)"
-          description: "OPA deny: service gọi /payments/internal/execute hoặc /transactions/execute với SVID không được phép. Kiểm tra: kubectl logs -n financial deployment/payment-service -c envoy | grep payments/internal"
+          summary: "Lateral Movement — OPA chặn service gọi /payments/internal/execute (T1021.007)"
+          description: "ATT&CK T1021.007 — notification-service (SVID hợp lệ) cố truy cập /payments/internal/execute tại payment-service — path không nằm trong whitelist OPA cho internal service. OPA từ chối, Envoy trả 403. Log thật từ OPA decision log."
         labels:
           severity: critical
           category: security

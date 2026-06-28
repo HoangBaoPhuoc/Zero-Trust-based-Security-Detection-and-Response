@@ -1,13 +1,15 @@
 #!/bin/bash
 # KB1 — Brute Force Login (T1110.001)
-# Zero Trust layer: Authentication (Keycloak + Envoy)
-# Grafana rule  : Brute Force Login (T1110.001) → severity=high
+# Zero Trust layer: Authentication (api-gateway JWT validation)
+# Tấn công thật: gửi 20 request với JWT không hợp lệ đến api-gateway
+#                → api-gateway log WARN jwt_verification_failed (source_ip, reason)
+# Grafana rule  : Brute Force Login → severity=high
+#   LogQL: {namespace="financial",app="api-gateway"} | json | event="jwt_verification_failed"
 # SOAR playbook : revoke_user_sessions
 # HITL          : YES — email gửi admin khi case pending_approval
 set -euo pipefail
 
-KC_URL="${KC_URL:-http://localhost:8180}"
-LOKI_URL="${LOKI_URL:-http://localhost:13100}"
+GW_URL="${GW_URL:-http://localhost:18080}"
 SCENARIO="KB1_brute_force"
 
 log()  { printf "[%s] %s\n"       "$SCENARIO" "$*"; }
@@ -15,29 +17,23 @@ pass() { printf "[%s] PASS: %s\n" "$SCENARIO" "$*"; }
 fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 
 # ── 1. Kiểm tra dịch vụ ─────────────────────────────────────────────────────
-curl -fsS "$KC_URL/realms/ztlab/.well-known/openid-configuration" >/dev/null \
-  || fail "Keycloak không khả dụng tại $KC_URL"
+curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng tại $GW_URL"
 
 # ── 2. Sinh traffic tấn công thật ────────────────────────────────────────────
+# Gửi 20 request với JWT không hợp lệ đến api-gateway
+# → api-gateway._verify_token() → JWKS verify thất bại
+# → log WARN: {event: jwt_verification_failed, reason: invalid_rs256, source_ip: <IP>}
+# → Promtail thu → Loki {namespace=financial, app=api-gateway}
 blocked=0
 for i in $(seq 1 20); do
   code=$(curl -s -o /dev/null -w "%{http_code}" \
-    -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
-    -H "Content-Type: application/x-www-form-urlencoded" \
-    -d "grant_type=password&client_id=web-portal&username=testuser01&password=WRONG_PASS_$i")
-  [[ "$code" =~ ^(400|401)$ ]] && blocked=$((blocked+1))
+    -X POST "$GW_URL/payments" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer INVALID_BRUTEFORCE_TOKEN_ATTEMPT_$i" \
+    -d '{"from_account":"ACC-1001","to_account":"ACC-2001","amount":1000,"currency":"VND"}')
+  [[ "$code" =~ ^(400|401|403)$ ]] && blocked=$((blocked+1))
 done
 [[ $blocked -ge 18 ]] || fail "chỉ $blocked/20 lần bị chặn (cần ≥18)"
-log "Keycloak chặn $blocked/20 (401)"
+log "api-gateway chặn $blocked/20 (401) — jwt_verification_failed ghi vào Loki"
 
-# ── 3. Đẩy log vào Loki ──────────────────────────────────────────────────────
-ts=$(date +%s%N)
-for seq in 0 1 2 3 4; do
-  curl -s -X POST "$LOKI_URL/loki/api/v1/push" \
-    -H "Content-Type: application/json" \
-    -d "{\"streams\":[{\"stream\":{\"job\":\"envoy-access\",\"namespace\":\"financial\",\"app\":\"api-gateway\"},
-      \"values\":[[\"$((ts + seq * 1000000))\",
-        \"{\\\"response_code\\\":401,\\\"source_ip\\\":\\\"10.0.0.1\\\",\\\"method\\\":\\\"POST\\\",\\\"path\\\":\\\"/api/login\\\",\\\"bytes_sent\\\":0}\"]]}]}" >/dev/null
-done
-
-pass "KB1 | blocked=$blocked/20 | logs → Loki (Grafana fire trong ≤1 phút)"
+pass "KB1 | $blocked/20 blocked | log thật → Loki (Grafana fire trong ≤1 phút)"

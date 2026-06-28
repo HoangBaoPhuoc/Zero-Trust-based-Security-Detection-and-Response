@@ -196,8 +196,8 @@ restore_all() {
 
   step "Xóa soar-block NetworkPolicies tích lũy (AWS + OpenStack)..."
   local aws_np os_np
-  aws_np=$(kubectl --context "$AWS_CONTEXT" get networkpolicy -n financial --no-headers 2>/dev/null | awk '/soar-block/{print $1}' | tr '\n' ' ')
-  os_np=$(kubectl --context "$OS_CONTEXT" get networkpolicy -n financial --no-headers 2>/dev/null | awk '/soar-block/{print $1}' | tr '\n' ' ')
+  aws_np=$(kubectl --context "$AWS_CONTEXT" get networkpolicy -n financial --no-headers 2>/dev/null | awk '/soar-block/{print $1}' | tr '\n' ' ' || true)
+  os_np=$(kubectl --context "$OS_CONTEXT" get networkpolicy -n financial --no-headers 2>/dev/null | awk '/soar-block/{print $1}' | tr '\n' ' ' || true)
   if [[ -n "$aws_np" ]]; then
     kubectl --context "$AWS_CONTEXT" delete networkpolicy -n financial $aws_np 2>/dev/null \
       && echo "    AWS soar-block NP xóa: $aws_np" || true
