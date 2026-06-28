@@ -34,6 +34,6 @@ for i in $(seq 1 20); do
   [[ "$code" =~ ^(400|401|403)$ ]] && blocked=$((blocked+1))
 done
 [[ $blocked -ge 18 ]] || fail "chỉ $blocked/20 lần bị chặn (cần ≥18)"
-log "api-gateway chặn $blocked/20 (401) — jwt_verification_failed ghi vào Loki"
+log "api-gateway chặn $blocked/20  — jwt_verification_failed ghi vào Loki"
 
 pass "KB1 | $blocked/20 blocked | log thật → Loki (Grafana fire trong ≤1 phút)"

@@ -52,7 +52,7 @@ SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 TARGETS_BY_ATTACK = {
     "fraud_gate_bypass":    {"context": "ctx-aws",        "workload": "payment-service"},
     "lateral_movement":     {"context": "ctx-aws",        "workload": "payment-service"},
-    "large_response":       {"context": "ctx-openstack",   "workload": "core-banking"},
+    "large_response":       {"context": "ctx-openstack",  "workload": "core-banking"},
     "cryptomining":         {"context": "ctx-aws",        "workload": "api-gateway"},
     "port_scan":            {"context": "ctx-aws",        "workload": "api-gateway"},
     "exploit_probe":        {"context": "ctx-aws",        "workload": "api-gateway"},
@@ -64,7 +64,6 @@ TARGETS_BY_ATTACK = {
     "data_staging":         {"context": "ctx-openstack",  "workload": "account-service"},
     "container_escape":     {"context": "ctx-aws",        "workload": "api-gateway"},
     "impair_defenses":      {"context": "ctx-aws",        "workload": "api-gateway"},
-    "privilege_escalation": {"context": "ctx-aws",        "workload": "api-gateway"},
 }
 
 PLAYBOOK_BY_ATTACK = {
@@ -82,7 +81,6 @@ PLAYBOOK_BY_ATTACK = {
     "data_staging":         "restrict_egress",
     "container_escape":     "quarantine_workload",
     "impair_defenses":      "quarantine_workload",
-    "privilege_escalation": "quarantine_workload",
 }
 
 MITRE_BY_ATTACK: dict[str, str] = {
@@ -100,7 +98,6 @@ MITRE_BY_ATTACK: dict[str, str] = {
     "data_staging":         "T1074",
     "container_escape":     "T1611",
     "impair_defenses":      "T1562",
-    "privilege_escalation": "T1611",
 }
 
 ALLOWED_PLAYBOOKS = {
@@ -128,7 +125,6 @@ ATTACK_DISPLAY_NAMES: dict[str, str] = {
     "data_staging":         "Data Staging — Bulk Export (T1074)",
     "container_escape":     "Container Escape Attempt (T1611)",
     "impair_defenses":      "Impair Defenses (T1562)",
-    "privilege_escalation": "Privilege Escalation in Container (T1611)",
 }
 
 # Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn, không giới hạn)
@@ -403,7 +399,7 @@ def _hitl_email_html(case: CaseRecord, alert_name: str, mitre: str, log_lines: l
     token = _hitl_token(case.case_id)
     deny_url = f"{SOAR_PUBLIC_URL}/cases/{case.case_id}/deny?token={token}"
     severity_color = {"low": "#4CAF50", "medium": "#FF9800", "high": "#F44336", "critical": "#9C27B0"}.get(case.severity, "#F44336")
-    logs_html = "".join(f"<li style='font-size:12px;color:#555;word-break:break-all'>{l}</li>" for l in log_lines[:10]) or "<li>Không có log evidence</li>"
+    logs_html = "".join(f"<li style='font-size:11px;color:#a8d8a8;word-break:break-all;font-family:monospace;margin-bottom:4px'>{l}</li>" for l in log_lines[:8]) or "<li style='color:#aaa'>Không có log evidence trong 30 phút qua</li>"
 
     # Extract source_ip from Loki evidence if not in case record
     display_source_ip = case.source_ip or _source_ip_from_evidence(log_lines)
@@ -449,20 +445,26 @@ def _hitl_email_html(case: CaseRecord, alert_name: str, mitre: str, log_lines: l
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Case ID</td><td style="padding:6px 12px"><code style="font-size:11px">{case.case_id}</code></td></tr>
       <tr><td style="padding:6px 12px;background:#f5f5f5;font-weight:bold">Thời gian</td><td style="padding:6px 12px">{case.ts}</td></tr>
     </table>
-    <h4 style="margin:0 0 8px;color:#333">Log Evidence:</h4>
-    <ul style="background:#f9f9f9;border:1px solid #e0e0e0;border-radius:4px;padding:12px 12px 12px 28px;margin:0 0 20px">{logs_html}</ul>
-    <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:14px 16px;margin-bottom:20px">
-      <p style="margin:0 0 12px;font-weight:bold;color:#333">Chọn hành động phản ứng:</p>
+    <h4 style="margin:0 0 8px;color:#333">📋 Log Evidence (từ Loki — log thật):</h4>
+    <ul style="background:#1e1e1e;border-radius:4px;padding:12px 12px 12px 16px;margin:0 0 20px;list-style:none;overflow-x:auto">{logs_html}</ul>
+    <div style="text-align:center;margin-bottom:20px">
+      <a href="http://localhost:18081/security" style="display:inline-block;background:#1565C0;color:#fff;padding:14px 32px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:15px">
+        🛡️ Xem &amp; Xử lý tại Web Portal
+      </a>
+      <p style="font-size:11px;color:#888;margin:6px 0 0">http://localhost:18081/security → đăng nhập analyst01 / Test1234!</p>
+    </div>
+    <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:14px 16px;margin-bottom:16px">
+      <p style="margin:0 0 10px;font-weight:bold;color:#555;font-size:12px">Hoặc xử lý nhanh qua API (chỉ hoạt động nếu truy cập từ máy chạy demo):</p>
       <div style="display:flex;flex-wrap:wrap;gap:4px">{action_buttons_html}
       </div>
     </div>
     <div style="text-align:center">
-      <a href="{deny_url}" style="display:inline-block;background:#9e9e9e;color:#fff;padding:10px 28px;border-radius:6px;text-decoration:none;font-size:13px">
+      <a href="{deny_url}" style="display:inline-block;background:#9e9e9e;color:#fff;padding:8px 24px;border-radius:6px;text-decoration:none;font-size:12px">
         ❌ Bỏ qua — không thực hiện
       </a>
     </div>
-    <p style="text-align:center;font-size:11px;color:#aaa;margin-top:16px">
-      Link có hiệu lực 24h. Hoặc xử lý qua Web Portal → Security page.
+    <p style="text-align:center;font-size:11px;color:#aaa;margin-top:12px">
+      ZTLab SOAR Engine · Case <code>{case.case_id}</code>
     </p>
   </div>
 </div>
@@ -794,28 +796,101 @@ async def _investigate_loki(attack_type: str, workload: str | None, source_ip: s
         return f"Loki query failed: {exc}"
 
 
+# Exact Loki LogQL queries per attack type — mirror the Grafana alert queries exactly
+# so email evidence matches what triggered the alert.
+_LOKI_EXACT_QUERIES: dict[str, str] = {
+    # KB1: envoy-access 403 từ api-gateway, path=/payments — xác nhận brute force bị Envoy block
+    "brute_force":       '{job="envoy-access", response_code="403", service_name="api-gateway", path="/payments"}',
+    # KB5: OPA structured deny log từ opa-server app (compact, có subject/roles/reason rõ ràng)
+    # Dùng stream này thay vì {job="opa-decisions", opa_result="false", request_path="/payments"}
+    # vì stream kia cũng bắt KB1 brute force (cùng path /payments, cùng OPA deny)
+    "access_denied":     '{app="opa-server", job="opa-decisions"} |= "rbac_deny"',
+    # KB3: OPA decision log cho /payments/internal/execute — chỉ lateral movement mới dùng path này
+    "lateral_movement":  '{job="opa-decisions", opa_result="false", request_path="/payments/internal/execute"}',
+    # KB2: payment-service AUDIT log event payment_blocked_fraud
+    "fraud_gate_bypass": '{namespace="financial", app="payment-service"} | json | event="payment_blocked_fraud"',
+}
+
 _LOKI_SEARCH_TERMS: dict[str, str] = {
-    "brute_force":          "401|403|login.fail|authentication.fail|invalid.credentials|login_attempt",
     "credential_stuffing":  "401|403|login.fail|too.many|credential.stuff|multiple.fail",
     "jwt_replay":           "jwt.replay|token.reuse|duplicate.jti|jti.already.used|token_reuse",
-    "fraud_gate_bypass":    "fraud_gate|fraud_score|bypass|gate=failed|fraud_gate_bypass",
-    "lateral_movement":     "payments/internal/execute|transactions/execute|lateral_movement",
     "cryptomining":         "xmrig|stratum|cryptomin|cpu.spike|mining",
     "port_scan":            "port.scan|nmap|syn.scan|masscan|port_scan",
     "exploit_probe":        "sqlmap|union.select|cmd.injection|payload|exploit",
-    "large_response":       "bytes_sent|data.exfil|large.response|exfiltrat",
-    "access_denied":        "denied|403|unauthorized|access.denied|opa.deny",
     "account_manipulation": "account.manip|role.change|privilege.grant|account_manipulation|T1098",
     "data_staging":         "bulk.export|data.staging|large.query|bulk_export|staging",
     "container_escape":     "container.escape|cap_sys_admin|cap_net_admin|seccomp|privileged|escape",
     "impair_defenses":      "impair.defense|disable.log|opa.admin|prometheus.scrape|loki.push|impair",
-    "privilege_escalation": "privilege.escalat|setuid|sudo|cap_sys_admin|privesc|escalat",
 }
 
-
-# Attacks where evidence spans multiple services — use namespace-wide Loki query
-# instead of restricting to the action target workload (which would miss OPA/Envoy logs).
 _EVIDENCE_NAMESPACE_WIDE = {"lateral_movement", "fraud_gate_bypass"}
+
+
+def _format_evidence_line(attack_type: str, raw_line: str, stream_labels: dict) -> str:
+    """Parse raw Loki log JSON and extract key fields proving the attack scenario."""
+    try:
+        d = json.loads(raw_line)
+    except Exception:
+        tag = stream_labels.get("app") or stream_labels.get("job") or "?"
+        return f"[{tag}] {raw_line[:300]}"
+
+    ts = d.get("timestamp") or d.get("ts") or d.get("time") or ""
+    if ts:
+        ts = ts[:19].replace("T", " ")
+
+    if attack_type == "brute_force":
+        # Envoy access log thật từ api-gateway sidecar
+        src  = d.get("source_ip", "?")
+        code = d.get("response_code", "?")
+        path = d.get("path", "?")
+        meth = d.get("method", "POST")
+        svid = d.get("svid") or "null"
+        rt   = d.get("response_time", "?")
+        return f"[envoy-access] {ts} | {meth} {path} → HTTP {code} | src={src} | svid={svid} | response_time={rt}ms"
+
+    if attack_type == "fraud_gate_bypass":
+        # payment-service AUDIT log thật — event payment_blocked_fraud
+        score   = d.get("fraud_score") or d.get("fraud", {}).get("score", "?")
+        verdict = d.get("fraud", {}).get("verdict") or d.get("verdict", "?")
+        gate    = d.get("fraud", {}).get("gate", "?")
+        reasons = ", ".join(d.get("fraud", {}).get("reason") or [d.get("reason", "?")])
+        trace   = (d.get("trace_id") or "")[:16]
+        svc     = d.get("service", "payment-service")
+        return f"[{svc}] {ts} | event={d.get('event','payment_blocked_fraud')} | level={d.get('level','AUDIT')} | fraud_score={score} | verdict={verdict} | gate={gate} | reason=[{reasons}] | trace_id={trace}"
+
+    if attack_type == "lateral_movement":
+        # OPA decision log thật — full input từ Envoy ext_authz gRPC call
+        result   = "DENIED" if not d.get("result", True) else "ALLOWED"
+        req_http = d.get("input", {}).get("attributes", {}).get("request", {}).get("http", {})
+        path     = req_http.get("path", "?")
+        method   = req_http.get("method", "?")
+        headers  = req_http.get("headers", {})
+        xfcc     = headers.get("x-forwarded-client-cert", "") or ""
+        caller_ip = d.get("input", {}).get("attributes", {}).get("source", {}).get("address", {}).get("socketAddress", {}).get("address", "?")
+        dec_id   = (d.get("decision_id") or "")[:16]
+        if xfcc:
+            m = re.search(r'URI=([^,;]+)', xfcc)
+            svid_info = f"xfcc_uri={m.group(1)}" if m else f"xfcc={xfcc[:60]}"
+        else:
+            svid_info = f"xfcc=null"
+        return f"[opa-decisions] {ts} | result={result} | {method} {path} | caller_ip={caller_ip} | {svid_info} | decision_id={dec_id}"
+
+    if attack_type == "access_denied":
+        # OPA structured deny log thật từ opa-server app
+        # Format: {"result":"deny","source_ip":...,"path":...,"method":...,"reason":"rbac_deny_...","subject":...,"subject_roles":[...],"required_roles":[...]}
+        result         = d.get("result", "?")
+        subject        = d.get("subject", "?")
+        subject_roles  = d.get("subject_roles", [])
+        required_roles = d.get("required_roles", [])
+        reason         = d.get("reason", "?")
+        path           = d.get("path", "?")
+        method         = d.get("method", "?")
+        src_ip         = d.get("source_ip", "?")
+        return f"[opa-server] {ts} | result={result} | {method} {path} | subject={subject} | subject_roles={subject_roles} | required_roles={required_roles} | reason={reason} | src={src_ip}"
+
+    # Fallback generic format
+    tag = stream_labels.get("app") or stream_labels.get("job") or stream_labels.get("service_name") or "?"
+    return f"[{tag}] {raw_line[:300]}"
 
 
 async def _fetch_loki_lines(
@@ -828,20 +903,25 @@ async def _fetch_loki_lines(
     end_ns = time.time_ns()
     start_ns = end_ns - 30 * 60 * 10**9  # last 30 minutes
 
-    # For attacks that span multiple services (e.g. Envoy + OPA + app logs),
-    # search across the whole namespace rather than restricting to one app label.
-    if attack_type in _EVIDENCE_NAMESPACE_WIDE:
-        base = '{namespace="financial"}'
+    # Use exact query matching the Grafana alert rule when available
+    if attack_type in _LOKI_EXACT_QUERIES:
+        query = _LOKI_EXACT_QUERIES[attack_type]
+        if source_ip and source_ip not in query:
+            query = f'{query} |~ "{source_ip}"'
+    elif attack_type in _EVIDENCE_NAMESPACE_WIDE:
+        term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
+        if source_ip:
+            term = f"{source_ip}|{term}"
+        query = f'{{namespace="financial"}} |~ "(?i)({term})"'
     else:
         parts = []
         if workload:
             parts.append(f'app="{workload}"')
         base = "{" + ", ".join(parts) + "}" if parts else '{namespace="financial"}'
-
-    term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
-    if source_ip:
-        term = f"{source_ip}|{term}"
-    query = f'{base} |~ "(?i)({term})"'
+        term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
+        if source_ip:
+            term = f"{source_ip}|{term}"
+        query = f'{base} |~ "(?i)({term})"'
 
     try:
         async with httpx.AsyncClient(timeout=10) as h:
@@ -853,9 +933,9 @@ async def _fetch_loki_lines(
             data = resp.json()
             lines: list[str] = []
             for stream in data.get("data", {}).get("result", []):
-                app = stream.get("stream", {}).get("app", "?")
+                labels = stream.get("stream", {})
                 for _, raw_line in stream.get("values", []):
-                    lines.append(f"[{app}] {raw_line[:500]}")
+                    lines.append(_format_evidence_line(attack_type, raw_line, labels))
                     if len(lines) >= limit:
                         return lines
             return lines
@@ -1522,6 +1602,10 @@ def _grafana_to_alert(alert_data: dict) -> SecurityAlert | None:
     annotations = alert_data.get("annotations", {})
 
     if alert_data.get("status", "firing") != "firing":
+        return None
+
+    # Skip health/ops monitoring alerts — they fire on SOAR's own logs and create feedback loops
+    if labels.get("category", "") in ("health", "ops"):
         return None
 
     raw_severity = labels.get("severity", "medium").lower()

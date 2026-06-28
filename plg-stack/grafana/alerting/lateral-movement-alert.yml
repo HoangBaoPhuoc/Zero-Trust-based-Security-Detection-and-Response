@@ -13,14 +13,14 @@ groups:
         data:
           - refId: A
             relativeTimeRange:
-              from: 300
+              from: 600
               to: 0
             datasourceUid: Loki
             model:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum(count_over_time({job="opa-decisions",opa_result="false",request_path="/payments/internal/execute"}[5m]))'
+              expr: 'sum(count_over_time({job="opa-decisions",opa_result="false",request_path="/payments/internal/execute"}[10m]))'
               instant: true
               queryType: instant
               refId: A
