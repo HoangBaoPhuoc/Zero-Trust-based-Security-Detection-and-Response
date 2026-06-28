@@ -7,20 +7,20 @@ groups:
     interval: 1m
     rules:
       - uid: fraud-gate-bypass
-        title: "Kịch bản 3 — Fraud Gate Bypass (Gap 2)"
+        title: "Kịch bản 2 — Fraud Gate Bypass (T1078.004)"
         for: 0s
         condition: A
         data:
           - refId: A
             relativeTimeRange:
-              from: 300
+              from: 600
               to: 0
             datasourceUid: Loki
             model:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [5m]))'
+              expr: 'sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [10m]))'
               instant: true
               queryType: instant
               refId: A
