@@ -1,0 +1,41 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: large-response
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: large-response
+        title: "Kịch bản 4 — Data Exfiltration: Large Response (T1041)"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({job="envoy-access"} | json | bytes_sent > 1048576 [5m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "Response >1MB từ Envoy — nghi ngờ data exfiltration từ core-banking"
+          description: "ATT&CK T1041 — Envoy access log ghi bytes_sent > 1MB (path=/accounts/export). Có thể đang dump database hoặc exfiltrate file từ core-banking (OpenStack)."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Đề xuất restrict_egress — scale core-banking (OpenStack) xuống 0 replica, chặn data ra ngoài
+            2. Tạo case với playbook restrict_egress, chờ admin duyệt
+            🔧 Admin duyệt tại: Web Portal → /security → SOAR Cases (đăng nhập analyst01)
+        labels:
+          severity: high
+          category: security
+          mitre: T1041
+          attack_type: large_response

@@ -28,8 +28,32 @@ jwt_payload := payload if {
   [_, payload, _] := io.jwt.decode(bearer_token)
 }
 
+# Issuer trước đây hardcode 1 chuỗi cố định tại đây, PHẢI khớp tuyệt đối với
+# cấu hình Keycloak thật (KC_HOSTNAME/KC_HOSTNAME_PORT) và với JWT_ISSUER của
+# api-gateway ở một file khác — 3 nơi độc lập cùng phải đồng bộ tay. Lệch 1
+# ký tự (đã xảy ra ngày 2026-08-13, thiếu KC_HOSTNAME_PORT) làm toàn bộ JWT
+# bị OPA từ chối. Giờ tự hỏi OIDC discovery document — nguồn sự thật do
+# chính Keycloak công bố — cache 5 phút để không tốn round-trip mỗi request.
+discovery_response := http.send({
+  "method": "GET",
+  "url": "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/.well-known/openid-configuration",
+  "force_cache": true,
+  "force_cache_duration_seconds": 300,
+  "raise_error": false,
+})
+
+# Fallback nếu discovery lỗi (Keycloak chưa lên, mạng lỗi...) — không để
+# toàn bộ policy sập theo kiểu fail-closed tệ hơn cả lỗi cũ.
+default expected_issuer := "http://keycloak.ztlab.local:8180/realms/ztlab"
+
+expected_issuer := discovery_response.body.issuer if {
+  not discovery_response.error
+  discovery_response.status_code == 200
+  discovery_response.body.issuer
+}
+
 valid_jwt if {
-  jwt_payload.iss == "http://keycloak.ztlab.local:8180/realms/ztlab"
+  jwt_payload.iss == expected_issuer
   jwt_payload.exp > time.now_ns() / 1000000000
 }
 

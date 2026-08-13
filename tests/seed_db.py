@@ -2,10 +2,11 @@
 """
 ZTLab seed_db.py — Reset account balances to NT114 test baseline.
 
+Postgres (postgres-accounts, postgres-txn) only runs on the OpenStack
+cluster (see deploy-all.sh) — AWS financial namespace only has Redis.
+
 Usage:
-    python3 tests/seed_db.py                  # reset both AWS and OS via kubectl
-    python3 tests/seed_db.py --cloud aws      # reset only AWS
-    python3 tests/seed_db.py --cloud openstack
+    python3 tests/seed_db.py
 
 Baseline per NT114.Q21.ANTT report §5.1.2:
   ACC-1001 (testuser01) : 1,000,000,000 VND
@@ -28,7 +29,6 @@ SELECT account_id, owner, balance FROM accounts ORDER BY account_id;
 """
 
 CLUSTERS = {
-    "aws":       ("ctx-aws",       "financial", "deploy/postgres-accounts"),
     "openstack": ("ctx-openstack", "financial", "deploy/postgres-accounts"),
 }
 
@@ -73,16 +73,12 @@ def seed_cloud(cloud: str) -> bool:
 
 def main():
     parser = argparse.ArgumentParser(description="Reset ZTLab test DB to NT114 baseline")
-    parser.add_argument("--cloud", choices=["aws", "openstack", "both"], default="both")
-    args = parser.parse_args()
+    parser.parse_args()
 
-    clouds = ["aws", "openstack"] if args.cloud == "both" else [args.cloud]
-    results = [seed_cloud(c) for c in clouds]
-
-    if all(results):
-        print("\n[seed_db] All clusters seeded successfully.")
+    if seed_cloud("openstack"):
+        print("\n[seed_db] Seeded successfully.")
     else:
-        print("\n[seed_db] Some clusters failed.", file=sys.stderr)
+        print("\n[seed_db] Seeding failed.", file=sys.stderr)
         sys.exit(1)
 
 

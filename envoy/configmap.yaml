@@ -363,8 +363,8 @@ data:
                           port_value: 30080         # NodePort → Envoy mTLS inbound (15006)
     
         - name: account_service
-          connect_timeout: 2s
-          type: STRICT_DNS
+          connect_timeout: 8s
+          type: STATIC
           wait_for_warm_on_init: false
           transport_socket: *upstream_mtls
           load_assignment:
@@ -374,12 +374,12 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: account-service.financial.svc.cluster.local
-                          port_value: 15006  # account-service Envoy inbound mTLS
-    
+                          address: 192.168.101.11  # OpenStack account-service via WireGuard
+                          port_value: 30082         # NodePort → Envoy mTLS inbound (15006)
+
         - name: transaction_service
-          connect_timeout: 2s
-          type: STRICT_DNS
+          connect_timeout: 8s
+          type: STATIC
           wait_for_warm_on_init: false
           transport_socket: *upstream_mtls
           load_assignment:
@@ -389,5 +389,5 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: transaction-service.financial.svc.cluster.local
-                          port_value: 15006  # transaction-service Envoy inbound mTLS
+                          address: 192.168.101.11  # OpenStack transaction-service via WireGuard
+                          port_value: 30083         # NodePort → Envoy mTLS inbound (15006)

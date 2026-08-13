@@ -92,7 +92,7 @@ variable "instance_type_gateway" {
 
 variable "instance_type_k3s_master" {
   type    = string
-  default = "t3.micro"
+  default = "t3.small"
 }
 
 variable "instance_type_k3s_worker" {
@@ -107,7 +107,7 @@ variable "instance_type_security" {
 
 variable "instance_type_siem" {
   type    = string
-  default = "t3.medium"
+  default = "t3.micro"
 }
 
 variable "instance_type_bastion" {

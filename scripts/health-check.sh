@@ -5,6 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INVENTORY_FILE="${INVENTORY_FILE:-$ROOT_DIR/ansible/inventory/hosts.yml}"
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
 OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
+AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 LOKI_URL="${LOKI_URL:-http://127.0.0.1:13100}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
 AI_URL="${AI_URL:-http://127.0.0.1:8090}"
@@ -120,7 +122,7 @@ check_files() {
   [[ -f "$INVENTORY_FILE" ]] && pass "inventory exists: $INVENTORY_FILE" || fail "inventory missing: $INVENTORY_FILE"
   [[ -f "$ROOT_DIR/.env.ai" ]] && pass ".env.ai exists and is gitignored" || warn ".env.ai missing; AI/SOAR will use defaults/placeholders"
   [[ -f "$ROOT_DIR/.env" ]] && pass ".env exists and is gitignored" || warn ".env missing; Terraform/Ansible may need env vars"
-  [[ -f "$HOME/.ssh/ztlab-key" ]] && pass "SSH key exists: ~/.ssh/ztlab-key" || warn "SSH key missing: ~/.ssh/ztlab-key"
+  [[ -f "$SSH_KEY" ]] && pass "SSH key exists: $SSH_KEY" || warn "SSH key missing: $SSH_KEY"
 }
 
 check_commands() {

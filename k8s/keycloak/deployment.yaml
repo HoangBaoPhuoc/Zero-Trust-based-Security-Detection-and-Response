@@ -42,6 +42,8 @@ spec:
                   key: postgres-password
             - name: KC_HOSTNAME
               value: keycloak.ztlab.local
+            - name: KC_HOSTNAME_PORT
+              value: "8180"
             - name: KC_HOSTNAME_ADMIN
               value: localhost
             - name: KC_HOSTNAME_STRICT

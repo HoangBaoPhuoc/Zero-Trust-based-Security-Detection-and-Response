@@ -61,6 +61,28 @@ resource "openstack_networking_secgroup_rule_v2" "os_private_ingress_kubelet" {
   security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_private.id
 }
 
+resource "openstack_networking_secgroup_rule_v2" "os_private_ingress_flannel_vxlan" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "udp"
+  port_range_min    = 8472
+  port_range_max    = 8472
+  remote_ip_prefix  = "192.168.101.0/24"
+  security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_private.id
+  description       = "Flannel VXLAN overlay — required for cross-node pod-to-pod traffic (kubelet, CoreDNS, kube-proxy service routing)"
+}
+
+resource "openstack_networking_secgroup_rule_v2" "os_private_ingress_spire_server" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 8081
+  port_range_max    = 8081
+  remote_ip_prefix  = "192.168.101.0/24"
+  security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_private.id
+  description       = "spire-server runs hostNetwork — needed for spire-agent on other nodes (not just localhost) to attest"
+}
+
 resource "openstack_networking_secgroup_rule_v2" "os_private_ingress_icmp" {
   direction         = "ingress"
   ethertype         = "IPv4"
@@ -78,6 +100,17 @@ resource "openstack_networking_secgroup_rule_v2" "os_private_ingress_ssh_from_ga
   remote_ip_prefix  = "192.168.101.1/32"
   security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_private.id
   description       = "Allow SSH from os_gateway private interface"
+}
+
+resource "openstack_networking_secgroup_rule_v2" "os_private_ingress_nodeport_from_aws" {
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "tcp"
+  port_range_min    = 30000
+  port_range_max    = 32767
+  remote_ip_prefix  = "192.168.101.0/24"
+  security_group_id = openstack_networking_secgroup_v2.neutron_sg_os_private.id
+  description       = "K8s NodePort range for cross-cloud calls from AWS (source is os_gateway's SNAT'd IP, not the original AWS-side IP)"
 }
 
 resource "openstack_networking_secgroup_rule_v2" "os_private_egress_loki" {

@@ -1,4 +1,51 @@
 ---
+- name: Prepare all K3s nodes (sshd + swap)
+  hosts: aws_k3s_master:aws_k3s_worker_1:aws_k3s_worker_2:os_k3s_master:os_k3s_worker_1:os_k3s_worker_2
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Set MaxStartups to handle Ansible parallel connections
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?MaxStartups'
+        line: 'MaxStartups 50:30:150'
+        state: present
+      notify: Reload sshd
+
+    - name: Create 2GB swap file if not present
+      ansible.builtin.command: fallocate -l 2G /swapfile
+      args:
+        creates: /swapfile
+
+    - name: Set swap file permissions
+      ansible.builtin.file:
+        path: /swapfile
+        mode: '0600'
+
+    - name: Format swap file
+      ansible.builtin.command: mkswap /swapfile
+      register: mkswap_result
+      changed_when: mkswap_result.rc == 0
+      failed_when: false
+
+    - name: Enable swap
+      ansible.builtin.command: swapon /swapfile
+      register: swapon_result
+      changed_when: swapon_result.rc == 0
+      failed_when: false
+
+    - name: Persist swap in fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        line: '/swapfile none swap sw 0 0'
+        state: present
+
+  handlers:
+    - name: Reload sshd
+      ansible.builtin.service:
+        name: ssh
+        state: reloaded
+
 - name: Install AWS K3s server
   hosts: aws_k3s_master
   become: true
@@ -61,12 +108,20 @@
               Recent journal:
               {{ aws_k3s_server_journal.stdout | default('No journal output available') }}
 
-    - name: Wait for K3s API server (AWS)
+    - name: Wait for K3s API server TCP (AWS)
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 6443
         delay: 2
         timeout: 180
+
+    - name: Wait for K3s API server to be fully ready (AWS)
+      ansible.builtin.command: k3s kubectl get nodes
+      register: k3s_api_ready
+      retries: 30
+      delay: 10
+      until: k3s_api_ready.rc == 0
+      changed_when: false
 
     - name: Read K3s cluster token (AWS)
       ansible.builtin.slurp:
@@ -128,11 +183,11 @@
 
     - name: Start K3s agent and fail fast with logs if unhealthy (AWS)
       block:
-        - name: Ensure K3s agent is enabled and start in non-blocking mode (AWS)
+        - name: Ensure K3s agent is enabled and started (AWS)
           ansible.builtin.systemd:
             name: k3s-agent
             enabled: true
-            state: started
+            state: restarted
             no_block: true
 
         - name: Wait until K3s agent service is active (AWS)
@@ -218,12 +273,20 @@
               Recent journal:
               {{ os_k3s_server_journal.stdout | default('No journal output available') }}
 
-    - name: Wait for K3s API server (OpenStack)
+    - name: Wait for K3s API server TCP (OpenStack)
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 6443
         delay: 2
         timeout: 180
+
+    - name: Wait for K3s API server to be fully ready (OpenStack)
+      ansible.builtin.command: k3s kubectl get nodes
+      register: k3s_api_ready
+      retries: 30
+      delay: 10
+      until: k3s_api_ready.rc == 0
+      changed_when: false
 
     - name: Read K3s cluster token (OpenStack)
       ansible.builtin.slurp:
@@ -285,11 +348,11 @@
 
     - name: Start K3s agent and fail fast with logs if unhealthy (OpenStack)
       block:
-        - name: Ensure K3s agent is enabled and start in non-blocking mode (OpenStack)
+        - name: Ensure K3s agent is enabled and started (OpenStack)
           ansible.builtin.systemd:
             name: k3s-agent
             enabled: true
-            state: started
+            state: restarted
             no_block: true
 
         - name: Wait until K3s agent service is active (OpenStack)

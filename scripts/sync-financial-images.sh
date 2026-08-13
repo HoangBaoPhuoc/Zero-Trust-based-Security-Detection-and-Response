@@ -28,8 +28,8 @@ for arg in "$@"; do
   esac
 done
 
-AWS_K3S_TARGETS="aws_k3s_master:aws_k3s_worker_1"
-OPENSTACK_K3S_TARGETS="os_k3s_master"
+AWS_K3S_TARGETS="aws_k3s_master:aws_k3s_worker_1:aws_k3s_worker_2"
+OPENSTACK_K3S_TARGETS="os_k3s_master:os_k3s_worker_1:os_k3s_worker_2"
 K3S_TARGETS="$AWS_K3S_TARGETS"
 if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
   K3S_TARGETS="$AWS_K3S_TARGETS:$OPENSTACK_K3S_TARGETS"
