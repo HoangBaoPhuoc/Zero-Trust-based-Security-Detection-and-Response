@@ -18,6 +18,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
 OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
+AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 
 SKIP_IMAGES=false
 SKIP_TUNNEL=false
@@ -320,6 +322,7 @@ provision_grafana_configmaps() {
     --from-file=large-response-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/large-response-alert.yml" \
     --from-file=lateral-movement-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/lateral-movement-alert.yml" \
     --from-file=soar-engine-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/soar-engine-alert.yml" \
+    --from-file=security-control-plane-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/security-control-plane-alert.yml" \
     --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
 }
 
@@ -348,7 +351,7 @@ deploy_observability_response() {
 
   # Ensure socat relay is persistent on AWS worker (OpenStack Promtail → Loki cross-cluster)
   LOKI_CIP=$(kubectl --context "$AWS_CONTEXT" -n plg-stack get svc loki -o jsonpath='{.spec.clusterIP}')
-  ssh -o StrictHostKeyChecking=no -i ~/.ssh/ztlab-key \
+  ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" \
       -J ubuntu@52.221.255.36 ubuntu@10.10.1.11 \
       "sudo tee /etc/systemd/system/loki-relay.service > /dev/null << 'EOF'
 [Unit]
@@ -366,9 +369,9 @@ EOF
 sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/null || warn "socat relay setup skipped (SSH unavailable)"
 
   kos apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
-  # 10.10.10.1:13099 = deployer machine br-exnat interface (reachable from OpenStack via os-gateway default route)
+  # 172.10.10.1:13099 = deployer machine br-exnat interface (reachable from OpenStack via os-gateway default route)
   # socat on deployer bridges this port to localhost:13100 → kubectl port-forward → Loki
-  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://10.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
+  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"

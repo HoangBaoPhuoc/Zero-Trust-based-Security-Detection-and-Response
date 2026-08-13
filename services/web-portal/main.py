@@ -173,6 +173,48 @@ def _decode_jwt_payload(access_token: str) -> dict:
         return {}
 
 
+async def _ensure_valid_token(session: dict) -> str:
+    """Return a live access_token for this session, transparently refreshing
+    it via the stored refresh_token when it's expired or about to expire.
+
+    accessTokenLifespan on this realm is 300s — without this, every request
+    after the first few minutes of a login would fail Keycloak/OPA's exp
+    check, even though the SSO session (and refresh_token) is still valid
+    for much longer (ssoSessionIdleTimeout).
+    """
+    access_token = session.get("access_token", "")
+    claims = _decode_jwt_payload(access_token)
+    exp = claims.get("exp", 0)
+    if exp and exp - time.time() > 30:
+        return access_token
+
+    refresh_token = session.get("refresh_token", "")
+    if not refresh_token:
+        return access_token
+
+    async with httpx.AsyncClient(timeout=8) as client:
+        try:
+            resp = await client.post(
+                _token_url(),
+                data={"grant_type": "refresh_token", "client_id": KEYCLOAK_CLIENT_ID,
+                      "refresh_token": refresh_token},
+            )
+            if resp.status_code != 200:
+                logger.warn(json.dumps({"event": "token_refresh_failed", "status": resp.status_code}))
+                return access_token
+            token_data = resp.json()
+        except Exception as exc:
+            logger.warn(json.dumps({"event": "token_refresh_error", "error": str(exc)}))
+            return access_token
+
+    new_access = token_data.get("access_token", "")
+    if new_access:
+        session["access_token"] = new_access
+        session["refresh_token"] = token_data.get("refresh_token", refresh_token)
+        return new_access
+    return access_token
+
+
 # ---------------------------------------------------------------------------
 # Keycloak Admin helpers
 # ---------------------------------------------------------------------------
@@ -485,23 +527,25 @@ async def kc_proxy(path: str, request: Request):
             raise HTTPException(status_code=502, detail="Keycloak không khả dụng")
 
     portal_base = str(request.base_url).rstrip("/")
-    kc_ext_base_http = f"http://{KC_EXTERNAL_HOST}"
-    kc_ext_base_https = f"https://{KC_EXTERNAL_HOST}"
-    # Must replace the full public URL (with port) first to avoid partial replace
-    # e.g. "http://keycloak.ztlab.local:8180" → "http://localhost:18081/kc"
-    # If we replace hostname-only first, ":8180" would be left dangling in the path
-    kc_replacements = [
-        KEYCLOAK_PUBLIC_URL,       # http://keycloak.ztlab.local:8180 (with port, most specific)
-        kc_ext_base_https,         # https://keycloak.ztlab.local
-        kc_ext_base_http,          # http://keycloak.ztlab.local
-        KEYCLOAK_URL,              # http://keycloak.identity.svc.cluster.local:8080 (internal)
-    ]
+
+    # Keycloak self-generates links (e.g. login-actions/authenticate form action)
+    # using KC_HOSTNAME with whatever port it's actually bound to, which is not
+    # always the same host:port combo as KEYCLOAK_PUBLIC_URL or KEYCLOAK_URL — e.g.
+    # it may emit "http://keycloak.ztlab.local:8080" (public hostname + internal
+    # port). Matching scheme+host+optional-port as one regex span, for every known
+    # Keycloak hostname, avoids leaving a dangling ":port" after the "/kc" swap
+    # regardless of which host/port combination Keycloak happens to use.
+    kc_hosts = {h for h in (
+        KC_EXTERNAL_HOST,
+        urllib.parse.urlsplit(KEYCLOAK_PUBLIC_URL).hostname,
+        urllib.parse.urlsplit(KEYCLOAK_URL).hostname,
+    ) if h}
+    kc_url_re = re.compile(
+        r"https?://(?:" + "|".join(re.escape(h) for h in kc_hosts) + r")(?::\d+)?"
+    )
 
     def _rewrite(text: str) -> str:
-        for src in kc_replacements:
-            if src:
-                text = text.replace(src, portal_base + "/kc")
-        return text
+        return kc_url_re.sub(portal_base + "/kc", text)
 
     content = kc_resp.content
     ct = kc_resp.headers.get("content-type", "")
@@ -680,7 +724,7 @@ async def get_balance(account_id: str, request: Request):
             f"IDOR attempt on /api/balance requested={account_id} user={session.get('username')}",
         ))
         return JSONResponse({"error": "access denied"}, status_code=403)
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     async with httpx.AsyncClient(timeout=10) as client:
         try:
             resp = await client.get(
@@ -697,7 +741,7 @@ async def get_transactions(request: Request, account_id: str = "", limit: int = 
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     params: dict[str, Any] = {"limit": min(limit, 100)}
     if account_id:
         params["account_id"] = account_id
@@ -719,7 +763,7 @@ async def do_transfer(request: Request):
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     body = await request.json()
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     client_ip = request.client.host if request.client else "unknown"
 
     async with httpx.AsyncClient(timeout=15) as client:
@@ -749,7 +793,7 @@ async def get_my_account(request: Request):
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
     username = session.get("username", "")
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     roles = session.get("roles", [])
     is_admin = "security-admin" in roles
     params = {} if is_admin else {"owner": username}
@@ -868,7 +912,7 @@ async def admin_all_accounts(request: Request):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     admin_token = await _get_admin_token()
     async with httpx.AsyncClient(timeout=15) as client:
         try:
@@ -901,7 +945,7 @@ async def admin_all_transactions(request: Request, limit: int = 100):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     import asyncio as _asyncio
     async with httpx.AsyncClient(timeout=15) as client:
         txn_resp, acct_resp = await _asyncio.gather(
@@ -945,7 +989,7 @@ async def admin_users(request: Request):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     admin_token = await _get_admin_token()
     if not admin_token:
         return JSONResponse({"error": "keycloak admin unavailable"}, status_code=503)
@@ -980,7 +1024,7 @@ async def admin_stats(request: Request):
     session = _get_session(request)
     if not session or not _require_admin(session):
         return JSONResponse({"error": "forbidden"}, status_code=403)
-    access_token = session.get("access_token", "")
+    access_token = await _ensure_valid_token(session)
     import asyncio as _asyncio, time as _time
     async with httpx.AsyncClient(timeout=10) as client:
         accounts_resp, txns_resp = await _asyncio.gather(

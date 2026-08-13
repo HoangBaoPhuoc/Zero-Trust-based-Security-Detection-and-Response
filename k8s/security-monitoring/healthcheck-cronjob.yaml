@@ -1,0 +1,91 @@
+# Giám sát sức khỏe của chính security control-plane (SPIRE + OPA), tách biệt
+# khỏi alert nghiệp vụ. Lý do tồn tại: ngày 2026-08-13 spire-agent trên
+# OpenStack "Running" 1/1 suốt ~3 tiếng nhưng KHÔNG hề attest được với
+# spire-server (kẹt ở NodeAttestation) — kubectl get pods không phát hiện
+# được việc này vì pod vẫn báo Ready bình thường. Health-check này gọi thẳng
+# `spire-server agent list` (nguồn sự thật thật sự) thay vì suy luận qua
+# trạng thái pod, để bắt đúng loại lỗi đã xảy ra.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: security-healthcheck
+  namespace: spire
+spec:
+  schedule: "*/1 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 45
+      template:
+        spec:
+          serviceAccountName: security-healthcheck
+          restartPolicy: Never
+          containers:
+            - name: healthcheck
+              image: alpine/k8s:1.31.13
+              env:
+                - name: LOKI_PUSH_URL
+                  value: "http://loki.plg-stack.svc.cluster.local:3100/loki/api/v1/push"
+                - name: CLOUD_PROVIDER
+                  value: "aws"
+                - name: OPA_URL
+                  value: "http://opa-service.financial.svc.cluster.local:8181/health"
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -uo pipefail
+
+                  NODE_COUNT=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+
+                  # grep -c in với 0 khớp vẫn thoát mã 1 (dù đã in "0") — nếu
+                  # nối thêm "|| echo 0" sẽ ra CHUỖI 2 DÒNG "0\n0", phá phép
+                  # so sánh số phía dưới. Chỉ dùng "|| true" để không thoát
+                  # script, giữ nguyên output "0" gốc của grep.
+                  AGENT_COUNT=$(kubectl exec -n spire deploy/spire-server -- \
+                    /opt/spire/bin/spire-server agent list \
+                    -socketPath /tmp/spire-server/private/api.sock 2>/dev/null \
+                    | grep -c '^SPIFFE ID' || true)
+                  AGENT_COUNT=${AGENT_COUNT:-0}
+
+                  OPA_CODE=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$OPA_URL" || echo 000)
+
+                  STATUS="healthy"
+                  REASONS="[]"
+                  if [ "$AGENT_COUNT" -lt "$NODE_COUNT" ]; then
+                    STATUS="critical"
+                    REASONS="[\"spire_agent_not_attested\"]"
+                  fi
+                  if [ "$OPA_CODE" != "200" ]; then
+                    STATUS="critical"
+                    REASONS="[\"opa_unreachable\"]"
+                  fi
+
+                  # BusyBox `date` trong image này KHÔNG hỗ trợ %N (nanosecond)
+                  # — lặng lẽ bỏ qua, chỉ trả về giây, khiến Loki hiểu nhầm
+                  # timestamp thành gần epoch 1970 và từ chối log. Tự ghép
+                  # chuỗi "giây" + 9 số 0 thay vì dựa vào %N.
+                  TS_NS="$(date +%s)000000000"
+                  LOGLINE=$(cat <<EOF
+                  {"event":"security_control_plane_health","cloud":"${CLOUD_PROVIDER}","status":"${STATUS}","reasons":${REASONS},"spire_nodes_expected":${NODE_COUNT},"spire_agents_attested":${AGENT_COUNT},"opa_http_code":"${OPA_CODE}"}
+                  EOF
+                  )
+
+                  PAYLOAD=$(cat <<EOF
+                  {"streams":[{"stream":{"job":"security-healthcheck","cloud":"${CLOUD_PROVIDER}"},"values":[["${TS_NS}", $(echo "$LOGLINE" | jq -Rs .)]]}]}
+                  EOF
+                  )
+
+                  PUSH_CODE=$(curl -s -o /tmp/push_resp.txt -m 5 -w '%{http_code}' -X POST "$LOKI_PUSH_URL" \
+                    -H "Content-Type: application/json" \
+                    -d "$PAYLOAD" || echo 000)
+
+                  echo "[security-healthcheck] cloud=${CLOUD_PROVIDER} status=${STATUS} spire=${AGENT_COUNT}/${NODE_COUNT} opa=${OPA_CODE} loki_push=${PUSH_CODE}"
+                  if [ "$PUSH_CODE" != "204" ] && [ "$PUSH_CODE" != "200" ]; then
+                    echo "[security-healthcheck] WARNING: log không vào được Loki (http=$PUSH_CODE): $(cat /tmp/push_resp.txt 2>/dev/null)"
+                  fi
+                  if [ "$STATUS" = "critical" ]; then
+                    exit 1
+                  fi

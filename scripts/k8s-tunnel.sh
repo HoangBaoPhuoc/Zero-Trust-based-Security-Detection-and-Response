@@ -13,6 +13,8 @@ OS_LOCAL_PORT="${OS_K8S_LOCAL_PORT:-6445}"
 
 AWS_CONTEXT="ctx-aws"
 OS_CONTEXT="ctx-openstack"
+AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || {

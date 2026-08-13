@@ -21,8 +21,25 @@ CLOUD = "aws"
 PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-service:8080").rstrip("/")
 JWT_SECRET = os.getenv("JWT_DEV_SECRET", "")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "")
-JWT_ISSUER = os.getenv("JWT_ISSUER", "http://keycloak.ztlab.local:8180/realms/ztlab")
-JWKS_URL = os.getenv("JWKS_URL", "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs")
+
+# Issuer và JWKS URL trước đây là 2 hằng số hardcode độc lập, phải tự tay giữ
+# khớp với cấu hình THẬT của Keycloak (KC_HOSTNAME/KC_HOSTNAME_PORT). Lệch 1
+# ký tự giữa chúng (đã xảy ra ngày 2026-08-13, thiếu KC_HOSTNAME_PORT khiến
+# issuer thật lệch port) làm toàn bộ JWT bị từ chối, mất nhiều giờ để lần ra.
+# Giờ lấy cả 2 giá trị từ chính OIDC discovery document Keycloak tự công bố —
+# nguồn sự thật duy nhất, không cần đồng bộ tay.
+JWT_ISSUER_OVERRIDE = os.getenv("JWT_ISSUER", "")  # để trống = luôn theo discovery; đặt tay chỉ dùng khi cần ghim khẩn cấp
+JWKS_URL_OVERRIDE = os.getenv("JWKS_URL", "")
+_KEYCLOAK_REALM_BASE = os.getenv(
+    "KEYCLOAK_REALM_BASE", "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab"
+).rstrip("/")
+OIDC_DISCOVERY_URL = f"{_KEYCLOAK_REALM_BASE}/.well-known/openid-configuration"
+
+# Giá trị dự phòng nếu discovery chưa chạy được lần nào (VD Keycloak chưa kịp
+# lên khi api-gateway khởi động) — không để service crash hoàn toàn, chỉ
+# fail-closed như bình thường cho tới khi discovery thành công.
+_jwt_issuer = JWT_ISSUER_OVERRIDE or "http://keycloak.ztlab.local:8180/realms/ztlab"
+_jwks_uri = JWKS_URL_OVERRIDE or f"{_KEYCLOAK_REALM_BASE}/protocol/openid-connect/certs"
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 ALLOW_DEV_TOKENS = os.getenv("ALLOW_DEV_TOKENS", "false").lower() == "true"
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/0")
@@ -56,17 +73,38 @@ async def _is_ip_blocked(ip: str) -> bool:
         return False
 
 
-def _load_jwks() -> None:
-    global _jwks_keys
-    if not JWKS_URL:
-        return
+def _load_oidc_config() -> None:
+    """Nạp issuer + JWKS URI từ OIDC discovery document của Keycloak, thay vì
+    2 hằng số hardcode độc lập. Nếu discovery lỗi, fallback dùng override/URL
+    JWKS mặc định (đã tính sẵn) để không phá vỡ hoàn toàn service."""
+    global _jwks_keys, _jwt_issuer, _jwks_uri
+    issuer = _jwt_issuer
+    jwks_uri = _jwks_uri
     try:
-        resp = httpx.get(JWKS_URL, timeout=5)
+        disc = httpx.get(OIDC_DISCOVERY_URL, timeout=5)
+        disc.raise_for_status()
+        disc_data = disc.json()
+        disc_issuer = disc_data.get("issuer")
+        disc_jwks_uri = disc_data.get("jwks_uri")
+        if not disc_issuer or not disc_jwks_uri:
+            raise ValueError("discovery document missing issuer/jwks_uri")
+        if not JWT_ISSUER_OVERRIDE:
+            issuer = disc_issuer
+        if not JWKS_URL_OVERRIDE:
+            jwks_uri = disc_jwks_uri
+    except Exception as exc:
+        logger.warn("oidc_discovery_failed", error=str(exc), discovery_url=OIDC_DISCOVERY_URL,
+                    fallback_issuer=issuer, fallback_jwks_uri=jwks_uri)
+
+    try:
+        resp = httpx.get(jwks_uri, timeout=5)
         resp.raise_for_status()
         _jwks_keys = [jwk.construct(k) for k in resp.json().get("keys", []) if k.get("use") == "sig"]
-        logger.info("jwks_loaded", key_count=len(_jwks_keys), jwks_url=JWKS_URL)
+        _jwt_issuer = issuer
+        _jwks_uri = jwks_uri
+        logger.info("oidc_config_loaded", key_count=len(_jwks_keys), issuer=_jwt_issuer, jwks_uri=_jwks_uri)
     except Exception as exc:
-        logger.warn("jwks_load_failed", error=str(exc), jwks_url=JWKS_URL)
+        logger.warn("jwks_load_failed", error=str(exc), jwks_uri=jwks_uri)
 
 
 class PaymentRequest(BaseModel):
@@ -105,7 +143,7 @@ def _require_role(claims: dict, role: str, source_ip: str) -> None:
 def _decode_jwt(token: str, key, algorithms: list[str]) -> dict:
     kwargs = {
         "algorithms": algorithms,
-        "issuer": JWT_ISSUER,
+        "issuer": _jwt_issuer,
     }
     if JWT_AUDIENCE:
         kwargs["audience"] = JWT_AUDIENCE
@@ -156,13 +194,13 @@ def _verify_token(authorization: str | None, source_ip: str) -> dict:
 async def _jwks_refresh_loop() -> None:
     while True:
         if not _jwks_keys:
-            _load_jwks()
+            _load_oidc_config()
         await asyncio.sleep(300)
 
 
 @app.on_event("startup")
 async def startup() -> None:
-    _load_jwks()
+    _load_oidc_config()
     asyncio.create_task(_jwks_refresh_loop())
 
 
@@ -290,4 +328,9 @@ async def get_transactions(request: Request, account_id: str = "", limit: int = 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": SERVICE, "cloud": CLOUD, "jwks_keys_loaded": len(_jwks_keys)}
+    return {
+        "status": "ok", "service": SERVICE, "cloud": CLOUD,
+        "jwks_keys_loaded": len(_jwks_keys),
+        "active_issuer": _jwt_issuer,
+        "active_jwks_uri": _jwks_uri,
+    }

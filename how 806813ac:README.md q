@@ -1,0 +1,67 @@
+[33mcommit 806813ac676f36b45fe4afa851718fca79f43560[m
+Author: verstecktH0311 <23520414@gm.uit.edu.vn>
+Date:   Sat Jun 6 03:11:12 2026 +0700
+
+    feat: cross-cloud Zero Trust complete — mTLS, OPA ext_authz, SPIRE on OpenStack
+    
+    Flow hoạt động end-to-end:
+      payment-service (AWS, SVID: aws/payment-service)
+        → mTLS → core-banking Envoy (OpenStack)
+        → OPA ext_authz (zta/crosscloud/allow, result=true)
+        → core-banking app → transaction completed
+    
+    Các thay đổi chính:
+    
+    k8s / Envoy:
+    - os-security.yaml: OPA + Envoy configmap cho OpenStack financial namespace
+    - os-services.yaml: Envoy sidecar cho core-banking (mTLS inbound port 15006)
+    - envoy/configmap.yaml: upstream mTLS cho core_banking cluster (AWS → OS)
+    - aws-services.yaml: NodePort và labels cập nhật
+    
+    NetworkPolicy:
+    - os-allow-list.yaml: thêm port 9191 (Envoy → OPA gRPC) vào intra-namespace
+    - aws-allow-list.yaml: thêm egress 10.10.1.10:6443 (Promtail k8s discovery)
+      và 10.10.1.12:30082/30083 (Prometheus scrape OpenStack)
+    
+    OPA:
+    - cross_cloud.rego: fix input path → input.attributes.source.principal
+    - zta_policy.rego, fraud_gate.rego: cập nhật policies
+    - opa-config.yaml: bật decision_logs console
+    
+    SPIRE:
+    - os-agent-daemonset.yaml: SPIRE agent cho OpenStack (join_token attestation)
+    - os-agent.conf: server_port → 30900 (NodePort)
+    - server-deployment.yaml: SPIRE server Service type NodePort 30900
+    
+    Prometheus:
+    - Tách job financial-services-aws và financial-services-openstack
+    - Core-banking scrape port 30084 (plain HTTP) thay vì 30081 (mTLS Envoy)
+    - Kết quả: 9/9 targets UP
+    
+    Promtail:
+    - promtail-daemonset.yaml: explicit api_server https://10.10.1.10:6443
+      để worker-1 discover pods qua direct K8s API (bypass ClusterIP issue)
+    
+    Scripts:
+    - Thêm deploy-all.sh, run-demo.sh
+    - Xóa các script không dùng: setup-os-cluster, reset-lab, wg-status,
+      gen-certs, deploy-plg-stack, deploy-full, import-and-destroy-aws,
+      increase-swap, demo-ai-soar
+    
+    Docs:
+    - HUONG_DAN.md: cập nhật NodePort table, fix health check URL (30084),
+      thêm troubleshooting OPA 403, SPIRE, cross-cloud mTLS
+    - BAOCAO.md: báo cáo đồ án
+    - Xóa REDEPLOY.md (đã tích hợp vào HUONG_DAN.md)
+
+[33mcommit db46cd68777cad9306a5fb6d614d56a3978612d8[m
+Author: phuochb <23521231@gm.uit.edu.vn>
+Date:   Tue Apr 14 00:19:30 2026 +0700
+
+    fix: reconfig with plg
+
+[33mcommit a872b027713bc329e384cb84275aa70f1228d9a4[m
+Author: phuochb <23521231@gm.uit.edu.vn>
+Date:   Sun Mar 22 13:40:14 2026 +0700
+
+    initial commit

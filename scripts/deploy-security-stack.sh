@@ -337,6 +337,23 @@ register_spire_entry() {
     -ttl 3600 >/dev/null 2>&1 || true
 }
 
+register_node_alias() {
+  local ctx="$1"
+  local spiffe_id="$2"
+  local cluster="$3"
+
+  # Node alias: parented to the SPIRE server itself (-node), matched via the
+  # k8s_psat:cluster:<name> selector that every agent in this cluster gets
+  # regardless of its own per-node UUID. Workload entries then parent to this
+  # alias instead of a specific agent, so registrations survive node
+  # replacement (new EC2 instance -> new agent UUID) without being redone.
+  kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry create \
+    -socketPath /tmp/spire-server/private/api.sock \
+    -node \
+    -spiffeID "$spiffe_id" \
+    -selector "k8s_psat:cluster:${cluster}" >/dev/null 2>&1 || true
+}
+
 register_spire_workloads() {
   log_step "3.3 Register SPIRE workload entries"
 
@@ -345,8 +362,12 @@ register_spire_workloads() {
   kubectl --context "$OS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
   kubectl --context "$OS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
 
-  local aws_parent="spiffe://ztlab.local/spire/agent/k8s_psat/aws-k3s/spire/spire-agent"
-  local os_parent="spiffe://ztlab.local/spire/agent/k8s_psat/os-k3s/spire/spire-agent"
+  local aws_parent="spiffe://ztlab.local/nodes/aws-k3s"
+  local os_parent="spiffe://ztlab.local/nodes/os-k3s"
+
+  log_info "Registering node aliases (cluster-wide, survive node/agent UUID changes)..."
+  register_node_alias "$AWS_CONTEXT" "$aws_parent" "aws-k3s"
+  register_node_alias "$OS_CONTEXT" "$os_parent" "os-k3s"
 
   log_info "Registering AWS workload SVID entries..."
   register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/api-gateway" "$aws_parent" financial api-gateway
@@ -361,6 +382,28 @@ register_spire_workloads() {
   register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/transaction-service" "$os_parent" financial transaction-service
 
   log_info "SPIRE workload registration completed"
+}
+
+deploy_security_healthcheck() {
+  log_step "3.4 Deploy security control-plane health-check"
+
+  kubectl --context "$AWS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-rbac.yaml"
+  kubectl --context "$OS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-rbac.yaml"
+
+  kubectl --context "$AWS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-cronjob.yaml"
+  kubectl --context "$AWS_CONTEXT" -n spire set env cronjob/security-healthcheck \
+    CLOUD_PROVIDER=aws \
+    LOKI_PUSH_URL=http://loki.plg-stack.svc.cluster.local:3100/loki/api/v1/push
+
+  # OpenStack promtail cũng dùng chung đường relay này (deploy-all.sh) vì
+  # OpenStack không có Loki riêng — kế thừa cùng giới hạn: relay chạy trên
+  # máy deployer, không phải cluster-native.
+  kubectl --context "$OS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-cronjob.yaml"
+  kubectl --context "$OS_CONTEXT" -n spire set env cronjob/security-healthcheck \
+    CLOUD_PROVIDER=openstack \
+    LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push
+
+  log_info "Security control-plane health-check deployed (chạy mỗi 1 phút trên cả 2 cluster)"
 }
 
 verify_deployment() {
@@ -386,7 +429,7 @@ verify_deployment() {
   kubectl --context $AWS_CONTEXT get pods -n financial
 
   log_info ""
-  log_info "OPA pods on OpenStack:"
+  log_info "OPA pods on OpenStack (expected empty here; deployed later by os-security.yaml):"
   kubectl --context $OS_CONTEXT get pods -n financial
 
   log_info ""
@@ -402,7 +445,7 @@ verify_deployment() {
   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$OS_CONTEXT" "spire" "spire-agent" "true"
   check_rollout "$AWS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
-  check_rollout "$OS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
+  # OS opa-server is deployed later by os-security.yaml (deploy-all.sh Step 5), not here.
   check_configmap "$AWS_CONTEXT" "financial" "envoy-config"
   check_configmap "$OS_CONTEXT" "financial" "envoy-config"
 
@@ -432,6 +475,7 @@ main() {
   register_spire_workloads
   deploy_step_4_opa
   deploy_step_5_envoy
+  deploy_security_healthcheck
 
   # Verify
   verify_deployment

@@ -120,7 +120,7 @@ resource "openstack_compute_instance_v2" "os_gateway" {
   security_groups = [openstack_networking_secgroup_v2.neutron_sg_os_dmz.name]
 
   user_data = base64gzip(templatefile("${path.module}/cloud-init-gateway.yaml", {
-    public_key = file("~/.ssh/zta-siem-soar-key.pub")
+    public_key = file(pathexpand("~/.ssh/zta-siem-soar-key.pub"))
   }))
 
   network {
@@ -170,7 +170,7 @@ resource "openstack_compute_instance_v2" "os_k3s_master" {
   security_groups = [openstack_networking_secgroup_v2.neutron_sg_os_private.name]
 
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yaml", {
-    public_key = file("~/.ssh/zta-siem-soar-key.pub")
+    public_key = file(pathexpand("~/.ssh/zta-siem-soar-key.pub"))
   }))
 
   network {
@@ -191,7 +191,7 @@ resource "openstack_compute_instance_v2" "os_k3s_worker_1" {
   security_groups = [openstack_networking_secgroup_v2.neutron_sg_os_private.name]
 
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yaml", {
-    public_key = file("~/.ssh/zta-siem-soar-key.pub")
+    public_key = file(pathexpand("~/.ssh/zta-siem-soar-key.pub"))
   }))
 
   network {
@@ -212,7 +212,7 @@ resource "openstack_compute_instance_v2" "os_k3s_worker_2" {
   security_groups = [openstack_networking_secgroup_v2.neutron_sg_os_private.name]
 
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yaml", {
-    public_key = file("~/.ssh/zta-siem-soar-key.pub")
+    public_key = file(pathexpand("~/.ssh/zta-siem-soar-key.pub"))
   }))
 
   network {
@@ -233,7 +233,7 @@ resource "openstack_compute_instance_v2" "os_identity" {
   security_groups = [openstack_networking_secgroup_v2.neutron_sg_os_identity.name]
 
   user_data = base64gzip(templatefile("${path.module}/cloud-init.yaml", {
-    public_key = file("~/.ssh/zta-siem-soar-key.pub")
+    public_key = file(pathexpand("~/.ssh/zta-siem-soar-key.pub"))
   }))
 
   network {

@@ -1,0 +1,46 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: security-control-plane
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: security-control-plane-health
+        title: "Security Control-Plane Down — SPIRE/OPA không khỏe"
+        for: 1m
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 180
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({job="security-healthcheck"} | json | status="critical" [3m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        # noDataState=Alerting (không phải OK) một cách CÓ CHỦ ĐÍCH: nếu chính
+        # CronJob health-check ngừng chạy (crash, RBAC hỏng, image lỗi...) thì
+        # sẽ KHÔNG còn log mới — mất tín hiệu hoàn toàn phải được coi là đáng
+        # ngờ, không phải "im lặng = ổn", đúng tinh thần Assume Breach.
+        noDataState: Alerting
+        execErrState: Alerting
+        annotations:
+          summary: "SPIRE agent chưa attest đủ số node hoặc OPA không phản hồi — mTLS/policy có nguy cơ fail-closed toàn hệ thống"
+          description: |
+            Health-check định kỳ (mỗi phút) phát hiện bất thường ở control-plane bảo mật.
+            KHÔNG phải dấu hiệu bị tấn công — đây là lỗi vận hành hạ tầng.
+            Kiểm tra ngay:
+              kubectl -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server agent list -socketPath /tmp/spire-server/private/api.sock
+              kubectl -n financial get pods -l app=opa
+            Nếu không có log mới từ security-healthcheck trong 3+ phút, kiểm tra luôn:
+              kubectl -n spire get cronjob,jobs security-healthcheck
+        labels:
+          severity: critical
+          category: infrastructure
+          component: security-control-plane
