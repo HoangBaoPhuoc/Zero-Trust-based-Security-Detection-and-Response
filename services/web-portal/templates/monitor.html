@@ -9,6 +9,7 @@
   border: 1px solid var(--border);
   border-radius: 12px;
   overflow: hidden;
+  box-shadow: var(--shadow-sm);
 }
 .cloud-header {
   padding: 12px 16px;
@@ -30,19 +31,19 @@
   align-items: center;
   gap: 10px;
   padding: 10px 16px;
-  border-bottom: 1px solid rgba(31,45,69,0.4);
+  border-bottom: 1px solid var(--border);
   font-size: 13px;
   transition: background .1s;
 }
 .svc-row:last-child { border-bottom: none; }
-.svc-row:hover { background: rgba(59,130,246,.03); }
+.svc-row:hover { background: var(--surface2); }
 .svc-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
   flex-shrink: 0;
 }
-.svc-dot.up    { background: var(--green); box-shadow: 0 0 5px rgba(34,197,94,.5); }
-.svc-dot.down  { background: var(--red);   box-shadow: 0 0 5px rgba(239,68,68,.5); }
+.svc-dot.up    { background: var(--green); }
+.svc-dot.down  { background: var(--red); }
 .svc-dot.check { background: var(--yellow); animation: blink 1.2s ease-in-out infinite; }
 .svc-dot.info  { background: var(--text3); }
 @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.25} }
@@ -83,20 +84,16 @@
 }
 .f-sub { font-size: 10px; color: var(--text3); margin-top: 2px; text-align: center; }
 .f-box.user    { background: var(--surface2); border: 1px solid var(--border2); color: var(--text2); }
-.f-box.aws     { background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.25); color: var(--accent2); }
-.f-box.opa     { background: rgba(168,85,247,.08); border: 1px solid rgba(168,85,247,.25); color: var(--purple); }
-.f-box.os      { background: rgba(34,197,94,.06); border: 1px solid rgba(34,197,94,.25); color: var(--green); }
-.f-box.db      { background: rgba(245,158,11,.06); border: 1px solid rgba(245,158,11,.2); color: var(--yellow); }
+.f-box.aws     { background: var(--accent-soft); border: 1px solid #c7dbfc; color: var(--accent2); }
+.f-box.opa     { background: var(--purple-soft); border: 1px solid #ddd3fb; color: var(--purple); }
+.f-box.os      { background: var(--green-soft); border: 1px solid #bbf0cf; color: var(--green); }
+.f-box.db      { background: var(--yellow-soft); border: 1px solid #fde3a8; color: var(--yellow); }
 .f-arrow {
   display: flex; align-items: center;
   font-size: 16px; color: var(--text3);
   padding: 0 2px;
   margin-top: 17px;
 }
-.f-arrow.down { transform: rotate(90deg); margin: 0; padding: 2px 0; }
-.f-col { display: flex; flex-direction: column; align-items: center; }
-
-/* Layer labels */
 .layer-label {
   font-size: 10px;
   color: var(--text3);
@@ -126,10 +123,24 @@
   font-weight: 500;
   transition: all .15s;
 }
-.quick-item:hover { border-color: var(--accent); color: var(--accent2); }
+.quick-item:hover { border-color: var(--accent); color: var(--accent2); background: var(--accent-soft); }
 .quick-icon { font-size: 20px; flex-shrink: 0; }
 .quick-info .quick-name { font-weight: 600; font-size: 13px; }
 .quick-info .quick-port { font-size: 11px; color: var(--text3); margin-top: 1px; }
+
+/* Collapsible architecture section */
+.collapse-header {
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; user-select: none;
+}
+.collapse-toggle {
+  font-size: 12px; color: var(--accent2); font-weight: 600;
+  display: flex; align-items: center; gap: 4px;
+}
+.collapse-body { display: none; margin-top: 16px; }
+.collapse-body.open { display: block; }
+.collapse-chevron { transition: transform .2s; display: inline-block; }
+.collapse-chevron.open { transform: rotate(90deg); }
 </style>
 {% endblock %}
 
@@ -219,101 +230,8 @@
   </div>
 </div>
 
-<!-- Flow diagram -->
-<div class="card" style="margin-bottom:14px">
-  <div class="card-header">
-    <div class="card-title">Luồng request end-to-end</div>
-    <div class="card-subtitle">Mỗi giao dịch phải qua ít nhất 4 lớp kiểm tra độc lập</div>
-  </div>
-  <div class="flow-canvas">
-
-    <!-- Main flow row -->
-    <div class="flow-layer">
-      <div class="f-node">
-        <div class="layer-label">Browser</div>
-        <div class="f-box user">🌐 User</div>
-      </div>
-      <div class="f-arrow">→</div>
-      <div class="f-node">
-        <div class="layer-label">Web Portal</div>
-        <div class="f-box aws">web-portal<div class="f-sub">OIDC PKCE · :18081</div></div>
-      </div>
-      <div class="f-arrow">→</div>
-      <div class="f-node">
-        <div class="layer-label">Gateway</div>
-        <div class="f-box aws">api-gateway<div class="f-sub">JWT+RateLimit+IP · :18080</div></div>
-      </div>
-      <div class="f-arrow">→</div>
-      <div class="f-node">
-        <div class="layer-label">Payment</div>
-        <div class="f-box aws">payment-svc<div class="f-sub">HMAC sign · AWS</div></div>
-      </div>
-      <div class="f-arrow">→</div>
-      <div class="f-node">
-        <div class="layer-label">Core (OpenStack)</div>
-        <div class="f-box os">core-banking<div class="f-sub">HMAC verify · OS</div></div>
-      </div>
-    </div>
-
-    <!-- Sub-flow annotations -->
-    <div class="flow-layer" style="margin-top:4px">
-      <div style="min-width:108px"></div>
-      <div style="min-width:26px"></div>
-      <div style="min-width:108px">
-        <div style="border-top:1px dashed var(--border2);padding-top:6px;font-size:10px;color:var(--text3);text-align:center;line-height:1.5">
-          Keycloak SSO<br>session cookie
-        </div>
-      </div>
-      <div style="min-width:26px"></div>
-      <div style="min-width:108px">
-        <div style="border-top:1px dashed rgba(168,85,247,.4);padding-top:6px;font-size:10px;color:var(--purple);text-align:center;line-height:1.5">
-          Envoy sidecar<br>OPA ext_authz
-        </div>
-      </div>
-      <div style="min-width:26px"></div>
-      <div style="min-width:108px">
-        <div style="border-top:1px dashed rgba(245,158,11,.4);padding-top:6px;font-size:10px;color:var(--yellow);text-align:center;line-height:1.5">
-          fraud-detection<br>Redis velocity DB0
-        </div>
-      </div>
-      <div style="min-width:26px"></div>
-      <div style="min-width:108px">
-        <div style="border-top:1px dashed rgba(34,197,94,.4);padding-top:6px;font-size:10px;color:var(--green);text-align:center;line-height:1.5">
-          account-service<br>txn-service · PostgreSQL
-        </div>
-      </div>
-    </div>
-
-    <!-- SPIRE mTLS bar -->
-    <div style="margin:14px 0 8px;padding:8px 16px;background:rgba(139,92,246,.05);border:1px solid rgba(139,92,246,.15);border-radius:8px;font-size:11px;color:var(--purple);display:flex;align-items:center;gap:8px">
-      <span>🔒</span>
-      <span><strong>SPIRE mTLS (X.509 SVID)</strong> bao phủ toàn bộ service-to-service: payment-svc → core-banking, account-svc, txn-svc · Trust domain: <code>spiffe://ztlab.local</code> · Cross-cloud qua WireGuard VPN</span>
-    </div>
-
-    <!-- PLG detection bar -->
-    <div style="padding:8px 16px;background:rgba(6,182,212,.04);border:1px solid rgba(6,182,212,.15);border-radius:8px;font-size:11px;color:var(--cyan);display:flex;align-items:center;gap:8px">
-      <span>📊</span>
-      <span><strong>Promtail → Loki → Grafana</strong> thu thập toàn bộ log · 4 alert rules (T1110, T1021, T1078, T1041) · Grafana gửi email cảnh báo đến admin khi phát hiện tấn công</span>
-    </div>
-
-    <!-- Zero Trust layer tags -->
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
-      <span class="badge badge-blue">🔑 Keycloak OIDC/PKCE S256</span>
-      <span class="badge badge-blue">🔑 JWT RS256 · JWKS verify</span>
-      <span class="badge badge-purple">🛡 OPA zta_policy</span>
-      <span class="badge badge-purple">🛡 OPA fraud_gate</span>
-      <span class="badge badge-purple">🛡 OPA cross_cloud</span>
-      <span class="badge" style="background:rgba(139,92,246,.1);color:#c4b5fd;border:1px solid rgba(139,92,246,.3)">🔒 SPIRE X.509 SVID</span>
-      <span class="badge badge-yellow">⚡ Rate limit 60 req/min</span>
-      <span class="badge badge-yellow">⚡ Redis IP blocklist</span>
-      <span class="badge badge-yellow">⚡ Redis velocity check</span>
-      <span class="badge badge-red">🔐 HMAC-SHA256 fraud gate</span>
-    </div>
-  </div>
-</div>
-
 <!-- Quick access -->
-<div class="card">
+<div class="card" style="margin-bottom:14px">
   <div class="card-header">
     <div class="card-title">Truy cập nhanh</div>
     <div class="card-subtitle">Port-forward cần mở trước qua scripts/open-admin-uis.sh</div>
@@ -368,20 +286,113 @@
         <div class="quick-port">Tài khoản · Giao dịch · Users</div>
       </div>
     </a>
-    <a href="/security" class="quick-item">
-      <div class="quick-icon">🔴</div>
-      <div class="quick-info">
-        <div class="quick-name">Security</div>
-        <div class="quick-port">IP block · Grafana alerts</div>
-      </div>
-    </a>
     <a href="/scenarios" class="quick-item">
-      <div class="quick-icon">⚔</div>
+      <div class="quick-icon">⚡</div>
       <div class="quick-info">
-        <div class="quick-name">Demo Scenarios</div>
+        <div class="quick-name">Painpoint Demo</div>
         <div class="quick-port">Inject attacks · Test ZT</div>
       </div>
     </a>
+  </div>
+</div>
+
+<!-- Collapsible: Architecture reference -->
+<div class="card">
+  <div class="collapse-header" onclick="toggleArch()">
+    <div>
+      <div class="card-title">Kiến trúc hệ thống (tham khảo)</div>
+      <div class="card-subtitle">Sơ đồ luồng request end-to-end · các cơ chế Zero Trust đang áp dụng</div>
+    </div>
+    <span class="collapse-toggle" id="arch-toggle-label">
+      <span class="collapse-chevron" id="arch-chevron">▸</span> Xem sơ đồ
+    </span>
+  </div>
+
+  <div class="collapse-body" id="arch-body">
+    <div class="flow-canvas">
+      <!-- Main flow row -->
+      <div class="flow-layer">
+        <div class="f-node">
+          <div class="layer-label">Browser</div>
+          <div class="f-box user">🌐 User</div>
+        </div>
+        <div class="f-arrow">→</div>
+        <div class="f-node">
+          <div class="layer-label">Web Portal</div>
+          <div class="f-box aws">web-portal<div class="f-sub">OIDC PKCE · :18081</div></div>
+        </div>
+        <div class="f-arrow">→</div>
+        <div class="f-node">
+          <div class="layer-label">Gateway</div>
+          <div class="f-box aws">api-gateway<div class="f-sub">JWT+RateLimit+IP · :18080</div></div>
+        </div>
+        <div class="f-arrow">→</div>
+        <div class="f-node">
+          <div class="layer-label">Payment</div>
+          <div class="f-box aws">payment-svc<div class="f-sub">HMAC sign · AWS</div></div>
+        </div>
+        <div class="f-arrow">→</div>
+        <div class="f-node">
+          <div class="layer-label">Core (OpenStack)</div>
+          <div class="f-box os">core-banking<div class="f-sub">HMAC verify · OS</div></div>
+        </div>
+      </div>
+
+      <!-- Sub-flow annotations -->
+      <div class="flow-layer" style="margin-top:4px">
+        <div style="min-width:108px"></div>
+        <div style="min-width:26px"></div>
+        <div style="min-width:108px">
+          <div style="border-top:1px dashed var(--border2);padding-top:6px;font-size:10px;color:var(--text3);text-align:center;line-height:1.5">
+            Keycloak SSO<br>session cookie
+          </div>
+        </div>
+        <div style="min-width:26px"></div>
+        <div style="min-width:108px">
+          <div style="border-top:1px dashed #ddd3fb;padding-top:6px;font-size:10px;color:var(--purple);text-align:center;line-height:1.5">
+            Envoy sidecar<br>OPA ext_authz
+          </div>
+        </div>
+        <div style="min-width:26px"></div>
+        <div style="min-width:108px">
+          <div style="border-top:1px dashed #fde3a8;padding-top:6px;font-size:10px;color:var(--yellow);text-align:center;line-height:1.5">
+            fraud-detection<br>Redis velocity DB0
+          </div>
+        </div>
+        <div style="min-width:26px"></div>
+        <div style="min-width:108px">
+          <div style="border-top:1px dashed #bbf0cf;padding-top:6px;font-size:10px;color:var(--green);text-align:center;line-height:1.5">
+            account-service<br>txn-service · PostgreSQL
+          </div>
+        </div>
+      </div>
+
+      <!-- SPIRE mTLS bar -->
+      <div style="margin:14px 0 8px;padding:8px 16px;background:var(--purple-soft);border:1px solid #ddd3fb;border-radius:8px;font-size:11px;color:var(--purple);display:flex;align-items:center;gap:8px">
+        <span>🔒</span>
+        <span><strong>SPIRE mTLS (X.509 SVID)</strong> bao phủ toàn bộ service-to-service: payment-svc → core-banking, account-svc, txn-svc · Trust domain: <code>spiffe://ztlab.local</code> · Cross-cloud qua WireGuard VPN</span>
+      </div>
+
+      <!-- PLG detection bar -->
+      <div style="padding:8px 16px;background:var(--cyan-soft);border:1px solid #a8e6f0;border-radius:8px;font-size:11px;color:var(--cyan);display:flex;align-items:center;gap:8px">
+        <span>📊</span>
+        <span><strong>Promtail → Loki → Grafana</strong> thu thập toàn bộ log · 4 alert rules (T1110, T1021, T1078, T1041) · Grafana gửi email cảnh báo đến admin khi phát hiện tấn công</span>
+      </div>
+
+      <!-- Zero Trust layer tags -->
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
+        <span class="badge badge-blue">🔑 Keycloak OIDC/PKCE S256</span>
+        <span class="badge badge-blue">🔑 JWT RS256 · JWKS verify</span>
+        <span class="badge badge-purple">🛡 OPA zta_policy</span>
+        <span class="badge badge-purple">🛡 OPA fraud_gate</span>
+        <span class="badge badge-purple">🛡 OPA cross_cloud</span>
+        <span class="badge badge-purple">🔒 SPIRE X.509 SVID</span>
+        <span class="badge badge-yellow">⚡ Rate limit 60 req/min</span>
+        <span class="badge badge-yellow">⚡ Redis IP blocklist</span>
+        <span class="badge badge-yellow">⚡ Redis velocity check</span>
+        <span class="badge badge-red">🔐 HMAC-SHA256 fraud gate</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -389,6 +400,15 @@
 
 {% block scripts %}
 <script>
+function toggleArch() {
+  const body = document.getElementById('arch-body');
+  const chevron = document.getElementById('arch-chevron');
+  const label = document.getElementById('arch-toggle-label');
+  const open = body.classList.toggle('open');
+  chevron.classList.toggle('open', open);
+  label.lastChild.textContent = open ? ' Thu gọn' : ' Xem sơ đồ';
+}
+
 const GROUPS = {
   aws: {
     services: [

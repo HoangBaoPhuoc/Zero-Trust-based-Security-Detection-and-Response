@@ -15,6 +15,8 @@ spec:
     metadata:
       labels:
         app: opa
+      annotations:
+        sidecar.istio.io/inject: "false"  # PDP for ext_authz, called by other sidecars' filters directly — not in migration scope
     spec:
       serviceAccountName: opa
       containers:

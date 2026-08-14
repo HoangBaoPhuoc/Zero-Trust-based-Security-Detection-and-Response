@@ -28,6 +28,19 @@ spec:
             - "--"
             - "echo"
             - "SPIRE Server ready"
+        # Istio's SPIRE integration (SPIFFE CSI driver + istio-agent's SDS
+        # client) hardcodes the expected Workload API socket filename as
+        # "socket" — not configurable. This project's agent.conf names it
+        # "agent.sock" (matches every hand-rolled Envoy sidecar's pipe
+        # address across k8s/financial/*.yaml, which must not change).
+        # `ln -s` doesn't need the target to exist yet, so this can run
+        # before spire-agent starts; the symlink just resolves once it does.
+        - name: alias-socket-for-istio
+          image: busybox:1.36
+          command: ["sh", "-c", "ln -sfn agent.sock /run/spire/sockets/socket"]
+          volumeMounts:
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
       containers:
         - name: spire-agent
           image: ghcr.io/spiffe/spire-agent:1.9.4

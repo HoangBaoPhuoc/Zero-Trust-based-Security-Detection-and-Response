@@ -1,0 +1,63 @@
+# Istio migration policies (see plan: Envoy hand-rolled -> Istio service mesh,
+# SPIRE stays the certificate source via SDS). Applied incrementally per
+# service as each one is migrated off the hand-rolled Envoy sidecar — see
+# Phase 4/5/6 in the migration plan.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: financial
+spec:
+  mtls:
+    # PERMISSIVE, not STRICT: most services in this namespace still run the
+    # hand-rolled Envoy sidecar (not Istio-managed) during the migration.
+    # Flip to STRICT only once every pod in the namespace is Istio-injected
+    # (last step of Phase 5).
+    mode: PERMISSIVE
+---
+# Istio's automatic mTLS expects peer certs to carry SPIFFE ID
+# spiffe://<trustdomain>/ns/<namespace>/sa/<serviceaccount> (derived from the
+# Kubernetes ServiceAccount), but SPIRE issues this project's own custom
+# scheme (spiffe://ztlab.local/aws/notification-service) instead. Without
+# this override, Istio's client-side validation context rejects the cert on
+# handshake (confirmed: connections fail with cx_connect_fail / 503 even
+# between two Istio-managed pods) — every migrated service needs one of
+# these DestinationRules naming its actual SPIRE-issued SPIFFE ID.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: notification-service-custom-san
+  namespace: financial
+spec:
+  host: notification-service.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/aws/notification-service"
+---
+# notification-service (canary, Phase 4): payment-service calls POST /notify
+# fire-and-forget. valid_svid-only check in zta_policy.rego's
+# internal_service_request rule (no specific principal restriction) maps
+# directly to a native ALLOW policy — no CUSTOM/OPA needed for this one.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: notification-service-allow
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: notification-service
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["*"]
+      to:
+        - operation:
+            methods: ["POST"]
+            paths: ["/notify"]
+    - to:
+        - operation:
+            paths: ["/health", "/ready"]

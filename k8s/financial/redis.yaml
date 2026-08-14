@@ -35,6 +35,8 @@ spec:
     metadata:
       labels:
         app: redis
+      annotations:
+        sidecar.istio.io/inject: "false"  # infra service, never had mTLS/SPIRE identity — not in migration scope
     spec:
       containers:
         - name: redis

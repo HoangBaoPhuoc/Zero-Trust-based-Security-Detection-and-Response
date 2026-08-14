@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from prometheus_client import make_asgi_app
 import redis.asyncio as aioredis
 
@@ -47,6 +47,7 @@ class FraudRequest(BaseModel):
     currency: str = "VND"
     channel: str = "api"
     country: str | None = None
+    device_trust: str = "unknown"  # trusted | new_device | suspicious | unknown — see web-portal device binding
 
 
 class FraudResponse(BaseModel):
@@ -99,6 +100,13 @@ async def _score(body: FraudRequest) -> FraudResponse:
         score += 10
         reasons.append("unusual_country")
 
+    if body.device_trust == "suspicious":
+        score += 20
+        reasons.append("suspicious_device")
+    elif body.device_trust == "new_device":
+        score += 10
+        reasons.append("unrecognized_device")
+
     score = min(score, 100)
     if score >= 75:
         verdict = "block"
@@ -113,14 +121,18 @@ async def _score(body: FraudRequest) -> FraudResponse:
 
 
 @app.post("/score", response_model=FraudResponse)
-async def score(body: FraudRequest) -> FraudResponse:
+async def score(req: Request, body: FraudRequest) -> FraudResponse:
     result = await _score(body)
     FRAUD_SCORE.labels(service=SERVICE, cloud=CLOUD, verdict=result.verdict).observe(result.score)
     logger.audit(
         "fraud_score_computed",
+        trace_id=getattr(req.state, "trace_id", None),
         from_account=body.from_account,
         to_account=body.to_account,
         amount=body.amount,
+        channel=body.channel,
+        country=body.country,
+        device_trust=body.device_trust,
         fraud_score=result.score,
         verdict=result.verdict,
         reason=result.reason,

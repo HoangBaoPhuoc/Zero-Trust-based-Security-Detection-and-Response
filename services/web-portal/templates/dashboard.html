@@ -3,6 +3,16 @@
 {% block page_title %}Tổng quan{% endblock %}
 
 {% block content %}
+{% if new_device_alert %}
+<div class="alert {% if new_device_alert == 'suspicious' %}alert-error{% else %}alert-info{% endif %}" style="margin-bottom:16px">
+  {% if new_device_alert == 'suspicious' %}
+  ⚠ <div><strong>Đăng nhập từ thiết bị/nguồn bất thường.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay và liên hệ hỗ trợ.</div>
+  {% else %}
+  🔔 <div><strong>Đăng nhập từ thiết bị mới.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay. Thiết bị này sẽ được ghi nhớ cho lần sau — xem tại <a href="/profile">Hồ sơ &amp; Thiết bị</a>.</div>
+  {% endif %}
+</div>
+{% endif %}
+
 <div style="margin-bottom:20px">
   <div style="font-size:20px;font-weight:700">Xin chào, {{ full_name or username }}</div>
   <div style="font-size:13px;color:var(--text3);margin-top:4px">
@@ -13,13 +23,44 @@
   </div>
 </div>
 
-<!-- Stats row -->
-<div class="grid grid-4" style="margin-bottom:20px">
-  <div class="stat-card">
-    <div class="stat-label">Số dư tổng</div>
-    <div class="stat-value" id="total-balance" style="font-size:18px">—</div>
-    <div class="stat-sub" id="account-count">Đang tải...</div>
+<div class="grid grid-2" style="margin-bottom:20px;align-items:start">
+  <!-- Bank card hero -->
+  <div class="bank-card">
+    <div class="bank-card-chip">💳</div>
+    <div class="bank-card-number" id="bc-account">ACC-••••</div>
+    <div class="bank-card-balance" id="bc-balance">—</div>
+    <div class="bank-card-footer">
+      <div>
+        <div class="bank-card-owner">Chủ tài khoản</div>
+        <div class="bank-card-name">{{ full_name or username }}</div>
+      </div>
+      <div class="bank-card-logo">ZTLab Bank</div>
+    </div>
   </div>
+
+  <!-- Quick actions -->
+  <div class="card" style="height:100%">
+    <div class="card-title" style="margin-bottom:14px">Thao tác nhanh</div>
+    <div class="grid grid-2" style="gap:10px">
+      <a href="/transfer" class="btn btn-primary" style="justify-content:center;padding:14px">↗ Chuyển tiền</a>
+      <button onclick="loadTransactions()" class="btn" style="justify-content:center;padding:14px">↺ Lịch sử GD</button>
+      <a href="/profile" class="btn" style="justify-content:center;padding:14px">◐ Hồ sơ</a>
+      <a href="/profile" class="btn" style="justify-content:center;padding:14px">📱 Thiết bị</a>
+    </div>
+    <hr class="divider">
+    <div style="display:flex;justify-content:space-between;font-size:12px">
+      <span class="text-muted">Thiết bị hiện tại</span>
+      <span>
+        {% if device_trust == 'trusted' %}<span class="badge badge-green">✓ Đã tin cậy</span>
+        {% elif device_trust == 'new_device' %}<span class="badge badge-yellow">🆕 Mới</span>
+        {% else %}<span class="badge badge-red">⚠ Bất thường</span>{% endif %}
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="grid grid-3" style="margin-bottom:20px">
   <div class="stat-card">
     <div class="stat-label">Giao dịch hôm nay</div>
     <div class="stat-value" id="txn-today">—</div>
@@ -31,80 +72,14 @@
     <div class="stat-sub">Tổng giao dịch gửi</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">Grafana Alerts</div>
-    <div class="stat-value" style="color:var(--green);font-size:14px">4 rules</div>
-    <div class="stat-sub"><a href="http://grafana.ztlab.local:8080/alerting/list" target="_blank" style="color:var(--accent)">Xem Alerting</a></div>
-  </div>
-</div>
-
-<!-- Accounts + Zero Trust -->
-<div class="grid grid-2" style="margin-bottom:20px">
-  <!-- Accounts -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">Tài khoản của tôi</div>
-      <a href="/transfer" class="btn btn-primary btn-sm">↗ Chuyển tiền</a>
-    </div>
-    <div id="accounts-loading" class="loading"><div class="spinner"></div> Đang tải...</div>
-    <div id="accounts-list" style="display:none"></div>
-  </div>
-
-  <!-- Zero Trust Status -->
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title">Trạng thái Zero Trust</div>
-      <a href="/profile" class="btn btn-sm">Chi tiết</a>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:10px">
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:16px">🔑</span>
-          <div>
-            <div style="font-size:13px;font-weight:600">Keycloak OIDC/PKCE</div>
-            <div style="font-size:11px;color:var(--text3)">S256 Challenge · JWT RS256</div>
-          </div>
-        </div>
-        <span class="badge badge-green">Active</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:16px">🛡</span>
-          <div>
-            <div style="font-size:13px;font-weight:600">OPA ext_authz</div>
-            <div style="font-size:11px;color:var(--text3)">Envoy sidecar · Claims + Roles</div>
-          </div>
-        </div>
-        <span class="badge badge-green">Active</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:16px">🔒</span>
-          <div>
-            <div style="font-size:13px;font-weight:600">SPIRE/SPIFFE mTLS</div>
-            <div style="font-size:11px;color:var(--text3)">X.509 SVID · k8s_psat</div>
-          </div>
-        </div>
-        <span class="badge badge-green">Active</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:16px">📊</span>
-          <div>
-            <div style="font-size:13px;font-weight:600">Grafana Alerting</div>
-            <div style="font-size:11px;color:var(--text3)">4 alert rules · LogQL</div>
-          </div>
-        </div>
-        <span class="badge badge-green">Active</span>
-      </div>
-    </div>
-    <div style="margin-top:16px;padding:10px;background:var(--surface2);border-radius:8px;font-size:11px;color:var(--text3);line-height:1.6">
-      Mỗi request đi qua: Keycloak JWT xác thực → OPA kiểm tra role → Envoy mTLS với SVID → Service.
-    </div>
+    <div class="stat-label">Số tài khoản</div>
+    <div class="stat-value" id="account-count-stat" style="font-size:18px">—</div>
+    <div class="stat-sub">Đang hoạt động</div>
   </div>
 </div>
 
 <!-- Transactions table -->
-<div class="card">
+<div class="card" style="margin-bottom:20px">
   <div class="card-header">
     <div class="card-title">Giao dịch gần đây</div>
     <div style="display:flex;gap:8px;align-items:center">
@@ -115,6 +90,22 @@
   </div>
   <div id="txn-container">
     <div class="loading" style="padding:20px"><div class="spinner"></div> Đang tải giao dịch...</div>
+  </div>
+</div>
+
+<!-- Trust footer strip -->
+<div class="card" style="padding:14px 20px">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">
+      Giao dịch của bạn được bảo vệ bởi
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span class="badge badge-blue" title="Xác thực danh tính qua Keycloak OIDC/PKCE">🔑 Xác thực đa lớp</span>
+      <span class="badge badge-purple" title="Mọi request được OPA kiểm tra chính sách trước khi xử lý">🛡 Kiểm soát truy cập</span>
+      <span class="badge badge-cyan" title="Kênh truyền giữa các dịch vụ được mã hoá mTLS qua SPIRE">🔒 Mã hoá nội bộ</span>
+      <span class="badge badge-green" title="Mỗi giao dịch được chấm điểm rủi ro gian lận theo thời gian thực">📊 Chống gian lận</span>
+      <span class="badge badge-yellow" title="Thiết bị đăng nhập được ghi nhớ, thiết bị lạ sẽ được đánh giá rủi ro cao hơn">📱 Tin cậy thiết bị</span>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -147,42 +138,22 @@ async function loadAccounts() {
     const r = await fetch('/api/account/me');
     const d = await r.json();
     myAccounts = d.accounts || [];
-    document.getElementById('accounts-loading').style.display = 'none';
-    document.getElementById('accounts-list').style.display = '';
 
     if (!myAccounts.length) {
-      document.getElementById('accounts-list').innerHTML =
-        '<div style="padding:12px;color:var(--text3);font-size:13px">Chưa có tài khoản ngân hàng.</div>';
-      document.getElementById('total-balance').textContent = '0 ₫';
-      document.getElementById('account-count').textContent = '0 tài khoản';
+      document.getElementById('bc-account').textContent = 'Chưa có tài khoản';
+      document.getElementById('bc-balance').textContent = '0 ₫';
+      document.getElementById('account-count-stat').textContent = '0';
       return;
     }
 
     const totalBalance = myAccounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
-    document.getElementById('total-balance').textContent = fmtVND(totalBalance);
-    document.getElementById('account-count').textContent = `${myAccounts.length} tài khoản`;
-
-    document.getElementById('accounts-list').innerHTML = myAccounts.map(a => `
-      <div style="display:flex;justify-content:space-between;align-items:center;
-                  padding:12px 0;border-bottom:1px solid var(--border)">
-        <div>
-          <div class="mono" style="color:var(--accent2);font-size:13px">${esc(a.account_id)}</div>
-          <div style="font-size:11px;color:var(--text3);margin-top:2px">VND · ${esc(a.owner)}</div>
-        </div>
-        <div style="text-align:right">
-          <div style="font-size:16px;font-weight:700">${fmtVND(a.balance)}</div>
-          <span class="badge badge-green" style="font-size:10px">Hoạt động</span>
-        </div>
-      </div>
-    `).join('').replace(/<div style="[^"]*border-bottom[^"]*"[^>]*>(?!.*<div style="[^"]*border-bottom)/, s => s) +
-    (myAccounts.length > 1 ? '' : '');
-    // remove border on last item
-    const items = document.getElementById('accounts-list').querySelectorAll('[style*="border-bottom"]');
-    if (items.length > 0) items[items.length - 1].style.borderBottom = 'none';
+    document.getElementById('bc-account').textContent = myAccounts[0].account_id;
+    document.getElementById('bc-balance').textContent = fmtVND(totalBalance);
+    document.getElementById('account-count-stat').textContent = myAccounts.length;
 
     loadTransactions();
   } catch(e) {
-    document.getElementById('accounts-loading').textContent = 'Lỗi kết nối';
+    document.getElementById('bc-balance').textContent = 'Lỗi kết nối';
   }
 }
 

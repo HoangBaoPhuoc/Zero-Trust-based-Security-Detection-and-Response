@@ -144,6 +144,25 @@
       ],
       "firstName": "Analyst",
       "lastName": "01"
+    },
+    {
+      "username": "demoadmin",
+      "email": "demoadmin@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "DemoAdmin2026!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read",
+        "financial-write",
+        "security-analyst",
+        "security-admin"
+      ]
     }
   ]
 }

@@ -19,46 +19,13 @@ data:
     decision_logs:
       console: true
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: opa-policies
-  namespace: financial
-data:
-  cross_cloud.rego: |
-    package zta.crosscloud
-
-    import future.keywords.if
-    import future.keywords.in
-
-    default allow = false
-    default allow_cross_cloud = false
-
-    # Specific cross-cloud relationship: payment-service (AWS) → core-banking (OpenStack)
-    allow_cross_cloud if {
-      input.attributes.source.principal == "spiffe://ztlab.local/aws/payment-service"
-      input.attributes.destination.principal == "spiffe://ztlab.local/openstack/core-banking"
-    }
-
-    # Cross-cloud ingress: only payment-service may POST to /transactions on core-banking
-    allow if {
-      input.attributes.source.principal == "spiffe://ztlab.local/aws/payment-service"
-      input.attributes.destination.principal == "spiffe://ztlab.local/openstack/core-banking"
-      input.attributes.request.http.method == "POST"
-      startswith(input.attributes.request.http.path, "/transactions")
-    }
-
-    # OpenStack-internal: any OS workload may call another OS service (no /admin)
-    allow if {
-      startswith(input.attributes.source.principal, "spiffe://ztlab.local/openstack/")
-      input.attributes.request.http.method in ["GET", "POST", "PUT", "OPTIONS"]
-      not denied_path
-    }
-
-    denied_path if {
-      startswith(input.attributes.request.http.path, "/admin")
-    }
----
+# opa-policies ConfigMap (cross_cloud.rego, zta_policy.rego, fraud_gate.rego) is
+# created by scripts/deploy-security-stack.sh via `kubectl create configmap
+# --from-file=opa/policies/` BEFORE this file is applied — that is the single
+# source of truth. An embedded copy used to live here too; it went stale
+# (missing a live policy fix from 2026-08-13) because this file is applied
+# AFTER the --from-file step in deploy_financial_services, silently reverting
+# the fix on every full deploy-all.sh run. Do not re-add an embedded copy.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -75,6 +42,8 @@ spec:
     metadata:
       labels:
         app: opa
+      annotations:
+        sidecar.istio.io/inject: "false"  # PDP for ext_authz, called by other sidecars' filters directly — not in migration scope
     spec:
       serviceAccountName: opa
       containers:
@@ -144,149 +113,10 @@ spec:
     - name: grpc-authz
       port: 9191
       targetPort: 9191
----
-# Envoy configmap for OpenStack services — inbound mTLS + cross_cloud ext_authz
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: envoy-config
-  namespace: financial
-data:
-  envoy-sidecar.yaml: |
-    node:
-      id: ztlab-envoy-os
-      cluster: ztlab-openstack
-
-    admin:
-      access_log_path: /dev/null
-      address:
-        socket_address:
-          address: 0.0.0.0
-          port_value: 9901
-
-    static_resources:
-      listeners:
-        - name: inbound_listener
-          address:
-            socket_address:
-              address: 0.0.0.0
-              port_value: 15006
-          filter_chains:
-            - transport_socket:
-                name: envoy.transport_sockets.tls
-                typed_config:
-                  "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-                  require_client_certificate: true
-                  common_tls_context:
-                    tls_certificate_sds_secret_configs:
-                      - name: __SPIFFE_ID__
-                        sds_config:
-                          initial_fetch_timeout: 10s
-                          api_config_source:
-                            api_type: GRPC
-                            transport_api_version: V3
-                            grpc_services:
-                              - envoy_grpc:
-                                  cluster_name: spire_agent
-                    validation_context_sds_secret_config:
-                      name: ROOTCA
-                      sds_config:
-                        initial_fetch_timeout: 10s
-                        api_config_source:
-                          api_type: GRPC
-                          transport_api_version: V3
-                          grpc_services:
-                            - envoy_grpc:
-                                cluster_name: spire_agent
-              filters:
-                - name: envoy.filters.network.http_connection_manager
-                  typed_config:
-                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
-                    stat_prefix: inbound_mtls
-                    access_log:
-                      - name: envoy.access_loggers.stdout
-                        typed_config:
-                          "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
-                          log_format:
-                            json_format:
-                              timestamp: "%START_TIME%"
-                              method: "%REQ(:METHOD)%"
-                              path: "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%"
-                              response_code: "%RESPONSE_CODE%"
-                              source_ip: "%DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%"
-                              trace_id: "%REQ(X-TRACE-ID)%"
-                              svid: "%DOWNSTREAM_PEER_URI_SAN%"
-                    route_config:
-                      name: local_route
-                      virtual_hosts:
-                        - name: local_service
-                          domains: ["*"]
-                          routes:
-                            - match:
-                                prefix: "/"
-                              route:
-                                cluster: local_service
-                    http_filters:
-                      - name: envoy.filters.http.ext_authz
-                        typed_config:
-                          "@type": type.googleapis.com/envoy.extensions.filters.http.ext_authz.v3.ExtAuthz
-                          grpc_service:
-                            envoy_grpc:
-                              cluster_name: opa_ext_authz
-                            timeout: 2s
-                          transport_api_version: V3
-                          with_request_body:
-                            max_request_bytes: 8192
-                            allow_partial_message: true
-                      - name: envoy.filters.http.router
-                        typed_config:
-                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
-
-      clusters:
-        - name: spire_agent
-          connect_timeout: 1s
-          type: STATIC
-          typed_extension_protocol_options:
-            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-              explicit_http_config:
-                http2_protocol_options: {}
-          load_assignment:
-            cluster_name: spire_agent
-            endpoints:
-              - lb_endpoints:
-                  - endpoint:
-                      address:
-                        pipe:
-                          path: /run/spire/sockets/agent.sock
-
-        - name: opa_ext_authz
-          connect_timeout: 2s
-          type: STRICT_DNS
-          typed_extension_protocol_options:
-            envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-              "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-              explicit_http_config:
-                http2_protocol_options: {}
-          load_assignment:
-            cluster_name: opa_ext_authz
-            endpoints:
-              - lb_endpoints:
-                  - endpoint:
-                      address:
-                        socket_address:
-                          address: opa-service.financial.svc.cluster.local
-                          port_value: 9191
-
-        - name: local_service
-          connect_timeout: 1s
-          type: STATIC
-          load_assignment:
-            cluster_name: local_service
-            endpoints:
-              - lb_endpoints:
-                  - endpoint:
-                      address:
-                        socket_address:
-                          address: 127.0.0.1
-                          port_value: 8080
+# envoy-config ConfigMap used to be embedded here too — an incomplete,
+# stale copy missing outbound_listener/cross-service STATIC clusters/the
+# failure_mode_allow: false assertion that the real, currently-relied-upon
+# config (envoy/configmap.yaml, applied to BOTH clusters by
+# scripts/deploy-security-stack.sh's deploy_step_5_envoy) already has.
+# Deleted so there is exactly one source of truth for both clouds — do not
+# re-add an embedded copy here.

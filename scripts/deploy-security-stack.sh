@@ -149,8 +149,16 @@ deploy_step_2_keycloak() {
   }
 
   log_info "Deploying Keycloak server..."
+  # realm-config.json is the single source of truth. It used to also be
+  # hand-embedded inline in realm-configmap.yaml (kubectl apply -f), which
+  # went stale (e.g. missing port-forward redirect URIs added later, missing
+  # the demoadmin user added only to the embedded copy) because nobody
+  # remembered to edit both. Generate the ConfigMap from the file directly so
+  # there is exactly one place to edit.
   log_info "Deploying Keycloak realm config..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/realm-configmap.yaml"
+  kubectl --context $AWS_CONTEXT -n identity create configmap keycloak-realm-config \
+    --from-file=realm-config.json="$REPO_ROOT/k8s/keycloak/realm-config.json" \
+    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
 
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
@@ -180,10 +188,20 @@ provision_spire_root_ca() {
   if [[ ! -f "$ca_dir/ca.key" || ! -f "$ca_dir/ca.crt" ]]; then
     log_info "Generating shared root CA for cross-cloud mTLS trust..."
     openssl genrsa -out "$ca_dir/ca.key" 4096 2>/dev/null
+    # -extensions v3_ca alone (no -config) silently relies on whatever
+    # [v3_ca] section exists in the system's default openssl.cnf, which does
+    # not reliably include keyUsage. A root CA without keyUsage=keyCertSign
+    # fails RFC 5280 strict validation — invisible to this project's
+    # hand-rolled Envoy (lenient validation_context) but rejected outright by
+    # Istio's SPIFFE cert validator (used for every Istio-managed mTLS
+    # handshake), causing connections to silently fail. -addext is explicit
+    # and doesn't depend on any external config file.
     openssl req -new -x509 -days 3650 -key "$ca_dir/ca.key" \
       -out "$ca_dir/ca.crt" \
       -subj "/C=VN/O=ZT-Lab/CN=ZTLab Root CA" \
-      -extensions v3_ca 2>/dev/null
+      -addext "basicConstraints=critical,CA:TRUE" \
+      -addext "keyUsage=critical,keyCertSign,cRLSign" \
+      -addext "subjectKeyIdentifier=hash" 2>/dev/null
     log_info "Root CA generated: $ca_dir/ca.crt"
   else
     log_info "Root CA already exists, reusing: $ca_dir/ca.crt"
@@ -300,25 +318,35 @@ deploy_step_4_opa() {
   log_info "Deploying OPA on AWS..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
 
-  # OS OPA config + deployment are handled entirely by os-security.yaml in deploy_financial_services.
-  # Only deploy the rego policies ConfigMap here so it exists before os-security.yaml runs.
+  # OS opa-config ConfigMap is defined inline in os-security.yaml (its
+  # ext_authz path differs from AWS's: zta/crosscloud/allow vs zta/authz/allow).
+  # The rego policies themselves must come from this single --from-file step —
+  # os-security.yaml intentionally does NOT define its own opa-policies
+  # ConfigMap anymore (see comment there) so this is the sole source for OS.
   kubectl --context $OS_CONTEXT -n financial create configmap opa-policies \
     --from-file="$REPO_ROOT/opa/policies" \
     --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
 
-  log_info "OPA deployed on AWS; OS OPA will be configured by os-security.yaml"
+  log_info "OPA deployed on AWS; OS OPA (opa-config) will be configured by os-security.yaml"
 }
 
 deploy_step_5_envoy() {
-  log_step "5. Deploy Envoy ConfigMaps"
+  log_step "5. Deploy Envoy ConfigMap"
 
+  # envoy/configmap.yaml is the single source of truth for envoy-config on
+  # BOTH clusters (outbound_listener + cross-service STATIC clusters + the
+  # explicit failure_mode_allow: false fail-closed assertion all live here).
+  # os-security.yaml used to also embed its own, incomplete copy of this
+  # ConfigMap; that copy is now deleted (see comment there) precisely so this
+  # is the only place it's defined — no more order-dependent drift between
+  # the two files.
   log_info "Deploying Envoy ConfigMap on AWS..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/envoy/configmap.yaml"
 
   log_info "Deploying Envoy ConfigMap on OpenStack..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/envoy/configmap.yaml"
 
-  log_info "Envoy ConfigMaps deployed"
+  log_info "Envoy ConfigMap deployed"
 }
 
 register_spire_entry() {

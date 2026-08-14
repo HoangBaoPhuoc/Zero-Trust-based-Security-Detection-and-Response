@@ -6,26 +6,41 @@
   <title>{% block title %}ZTLab Banking{% endblock %}</title>
   <style>
     :root {
-      --bg: #0a0e1a;
-      --surface: #111827;
-      --surface2: #1a2233;
-      --border: #1f2d45;
-      --border2: #263347;
-      --text: #e2e8f0;
-      --text2: #94a3b8;
-      --text3: #64748b;
-      --accent: #3b82f6;
-      --accent2: #60a5fa;
-      --green: #22c55e;
-      --green2: #16a34a;
-      --red: #ef4444;
-      --yellow: #f59e0b;
-      --purple: #a855f7;
-      --cyan: #06b6d4;
-      --sidebar-w: 240px;
+      --bg: #f6f8fb;
+      --surface: #ffffff;
+      --surface2: #f1f5f9;
+      --surface3: #eef2f7;
+      --border: #e5e9f0;
+      --border2: #d7dee8;
+      --text: #0f172a;
+      --text2: #475569;
+      --text3: #8a94a6;
+      --accent: #2563eb;
+      --accent2: #1d4ed8;
+      --accent-soft: #eff4ff;
+      --green: #15803d;
+      --green-soft: #ecfdf3;
+      --red: #dc2626;
+      --red-soft: #fef2f2;
+      --yellow: #b45309;
+      --yellow-soft: #fffbeb;
+      --purple: #7c3aed;
+      --purple-soft: #f5f3ff;
+      --cyan: #0e7490;
+      --cyan-soft: #ecfeff;
+      --sidebar-w: 244px;
+      --shadow-sm: 0 1px 2px rgba(15,23,42,.04);
+      --shadow-md: 0 4px 16px rgba(15,23,42,.06);
+      --radius: 12px;
+      --ops-bg: #0f172a;
+      --ops-bg2: #1e293b;
+      --ops-accent: #f59e0b;
+      --ops-accent-soft: rgba(245,158,11,.14);
+      --ops-text: #e2e8f0;
+      --ops-text2: #94a3b8;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; min-height: 100vh; font-size: 14px; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; display: flex; min-height: 100vh; font-size: 14px; -webkit-font-smoothing: antialiased; }
 
     /* Sidebar */
     .sidebar {
@@ -46,16 +61,17 @@
     }
     .logo-icon {
       width: 36px; height: 36px;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      background: var(--accent);
       border-radius: 10px;
       display: flex; align-items: center; justify-content: center;
-      font-size: 18px; flex-shrink: 0;
+      font-size: 17px; flex-shrink: 0; color: #fff;
     }
     .logo-text { font-size: 15px; font-weight: 700; color: var(--text); }
     .logo-sub { font-size: 10px; color: var(--text3); margin-top: 1px; letter-spacing: .3px; }
 
     .sidebar-nav { flex: 1; padding: 12px 0; overflow-y: auto; }
-    .nav-section { padding: 6px 16px 4px; font-size: 10px; font-weight: 600; color: var(--text3); text-transform: uppercase; letter-spacing: .8px; }
+    .nav-section { padding: 14px 16px 4px; font-size: 10px; font-weight: 700; color: var(--text3); text-transform: uppercase; letter-spacing: .8px; }
+    .nav-section:first-child { padding-top: 6px; }
     .nav-item {
       display: flex; align-items: center; gap: 10px;
       padding: 9px 16px; margin: 1px 8px;
@@ -63,14 +79,24 @@
       border-radius: 8px; transition: all .15s;
     }
     .nav-item:hover { background: var(--surface2); color: var(--text); }
-    .nav-item.active { background: rgba(59,130,246,.15); color: var(--accent2); }
+    .nav-item.active { background: var(--accent-soft); color: var(--accent2); font-weight: 600; }
     .nav-item.active .nav-icon { color: var(--accent); }
-    .nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; }
-    .nav-badge {
-      margin-left: auto; font-size: 10px; font-weight: 600;
-      background: rgba(59,130,246,.2); color: var(--accent2);
-      padding: 1px 6px; border-radius: 10px;
+    .nav-icon { width: 18px; text-align: center; font-size: 15px; flex-shrink: 0; opacity: .85; }
+
+    /* SOC Console section — visually distinct from Banking nav so it's obvious
+       during demo which persona/experience you're in */
+    .nav-section-ops {
+      margin: 10px 8px 4px; padding: 10px 10px 6px;
+      background: var(--ops-bg); border-radius: 10px 10px 0 0;
+      font-size: 10px; font-weight: 700; color: var(--ops-accent);
+      text-transform: uppercase; letter-spacing: .8px;
+      display: flex; align-items: center; gap: 6px;
     }
+    .nav-ops-group { background: var(--ops-bg); margin: 0 8px; padding: 2px 0 8px; border-radius: 0 0 10px 10px; }
+    .nav-ops-group .nav-item { color: var(--ops-text2); margin: 1px 6px; }
+    .nav-ops-group .nav-item:hover { background: var(--ops-bg2); color: var(--ops-text); }
+    .nav-ops-group .nav-item.active { background: var(--ops-accent-soft); color: var(--ops-accent); }
+    .nav-ops-group .nav-item.active .nav-icon { color: var(--ops-accent); }
 
     .sidebar-footer {
       border-top: 1px solid var(--border);
@@ -83,7 +109,7 @@
     }
     .avatar {
       width: 32px; height: 32px; border-radius: 50%;
-      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      background: var(--accent);
       display: flex; align-items: center; justify-content: center;
       font-size: 13px; font-weight: 700; color: #fff; flex-shrink: 0;
     }
@@ -107,34 +133,50 @@
       display: flex; align-items: center; justify-content: space-between;
       position: sticky; top: 0; z-index: 50;
     }
-    .topbar-title { font-size: 16px; font-weight: 600; }
-    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .topbar-title { font-size: 16px; font-weight: 700; display: flex; align-items: center; gap: 10px; }
+    .topbar-right { display: flex; align-items: center; gap: 14px; }
     .status-dot { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text3); }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green2); }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
     .dot.red { background: var(--red); }
     .top-time { font-size: 12px; color: var(--text3); font-variant-numeric: tabular-nums; }
+
+    /* Ops (SOC Console) context: distinct dark topbar so a demo transition
+       between the customer app and the security console reads as a different app */
+    body[data-section="ops"] .topbar { background: var(--ops-bg); border-bottom-color: #1e293b; }
+    body[data-section="ops"] .topbar-title { color: var(--ops-text); }
+    body[data-section="ops"] .status-dot { color: var(--ops-text2); }
+    body[data-section="ops"] .top-time { color: var(--ops-text2); }
+    .soc-pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px; border-radius: 20px; font-size: 10.5px; font-weight: 700;
+      background: var(--ops-accent-soft); color: var(--ops-accent);
+      text-transform: uppercase; letter-spacing: .5px;
+      border: 1px solid rgba(245,158,11,.3);
+    }
 
     .content { flex: 1; padding: 24px; }
 
     /* Cards */
     .card {
       background: var(--surface); border: 1px solid var(--border);
-      border-radius: 12px; padding: 20px;
+      border-radius: var(--radius); padding: 20px;
+      box-shadow: var(--shadow-sm);
     }
-    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-    .card-title { font-size: 13px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
-    .card-subtitle { font-size: 11px; color: var(--text3); margin-top: 2px; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; gap: 12px; }
+    .card-title { font-size: 13px; font-weight: 700; color: var(--text); }
+    .card-subtitle { font-size: 12px; color: var(--text3); margin-top: 2px; }
 
     /* Grid */
     .grid { display: grid; gap: 16px; }
     .grid-2 { grid-template-columns: 1fr 1fr; }
     .grid-3 { grid-template-columns: repeat(3, 1fr); }
     .grid-4 { grid-template-columns: repeat(4, 1fr); }
+    @media (max-width: 900px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
 
     /* Stats */
-    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
-    .stat-label { font-size: 12px; color: var(--text3); margin-bottom: 8px; font-weight: 500; text-transform: uppercase; letter-spacing: .4px; }
-    .stat-value { font-size: 26px; font-weight: 700; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; box-shadow: var(--shadow-sm); }
+    .stat-label { font-size: 11.5px; color: var(--text3); margin-bottom: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+    .stat-value { font-size: 24px; font-weight: 700; letter-spacing: -.3px; }
     .stat-sub { font-size: 12px; color: var(--text3); margin-top: 4px; }
     .stat-change { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; margin-top: 6px; }
     .stat-change.up { color: var(--green); }
@@ -142,81 +184,84 @@
 
     /* Account card (bank card style) */
     .bank-card {
-      background: linear-gradient(135deg, #1e3a5f 0%, #1a2d4a 50%, #0f1e35 100%);
-      border: 1px solid rgba(59,130,246,.2);
+      background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 55%, #2563eb 100%);
+      border: 1px solid rgba(37,99,235,.25);
       border-radius: 16px; padding: 24px;
       position: relative; overflow: hidden;
       color: #fff;
+      box-shadow: 0 8px 24px rgba(37,99,235,.18);
     }
     .bank-card::before {
       content: ''; position: absolute; top: -40px; right: -40px;
       width: 160px; height: 160px; border-radius: 50%;
-      background: rgba(59,130,246,.1);
+      background: rgba(255,255,255,.06);
     }
     .bank-card::after {
       content: ''; position: absolute; bottom: -60px; right: 20px;
       width: 200px; height: 200px; border-radius: 50%;
-      background: rgba(139,92,246,.07);
+      background: rgba(255,255,255,.04);
     }
     .bank-card-chip { font-size: 20px; margin-bottom: 20px; }
-    .bank-card-number { font-size: 14px; color: rgba(255,255,255,.6); margin-bottom: 6px; font-family: monospace; }
+    .bank-card-number { font-size: 14px; color: rgba(255,255,255,.65); margin-bottom: 6px; font-family: monospace; }
     .bank-card-balance { font-size: 28px; font-weight: 700; margin-bottom: 20px; }
     .bank-card-footer { display: flex; justify-content: space-between; align-items: flex-end; }
-    .bank-card-owner { font-size: 12px; color: rgba(255,255,255,.5); text-transform: uppercase; letter-spacing: .5px; }
+    .bank-card-owner { font-size: 12px; color: rgba(255,255,255,.55); text-transform: uppercase; letter-spacing: .5px; }
     .bank-card-name { font-size: 15px; font-weight: 600; }
     .bank-card-logo { font-size: 24px; }
 
     /* Table */
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
-    th { text-align: left; padding: 10px 14px; font-size: 11px; color: var(--text3); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
-    td { padding: 12px 14px; border-bottom: 1px solid rgba(31,45,69,.5); vertical-align: middle; }
+    th { text-align: left; padding: 10px 14px; font-size: 11px; color: var(--text3); font-weight: 700; text-transform: uppercase; letter-spacing: .5px; border-bottom: 1px solid var(--border); }
+    td { padding: 12px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
     tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(59,130,246,.03); }
+    tr:hover td { background: var(--surface2); }
 
     /* Badges */
-    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
-    .badge-green { background: rgba(34,197,94,.1); color: var(--green); border: 1px solid rgba(34,197,94,.2); }
-    .badge-red { background: rgba(239,68,68,.1); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
-    .badge-yellow { background: rgba(245,158,11,.1); color: var(--yellow); border: 1px solid rgba(245,158,11,.2); }
-    .badge-blue { background: rgba(59,130,246,.1); color: var(--accent2); border: 1px solid rgba(59,130,246,.2); }
-    .badge-purple { background: rgba(168,85,247,.1); color: var(--purple); border: 1px solid rgba(168,85,247,.2); }
+    .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 700; }
+    .badge-green { background: var(--green-soft); color: var(--green); border: 1px solid #bbf0cf; }
+    .badge-red { background: var(--red-soft); color: var(--red); border: 1px solid #fecaca; }
+    .badge-yellow { background: var(--yellow-soft); color: var(--yellow); border: 1px solid #fde3a8; }
+    .badge-blue { background: var(--accent-soft); color: var(--accent2); border: 1px solid #c7dbfc; }
+    .badge-purple { background: var(--purple-soft); color: var(--purple); border: 1px solid #ddd3fb; }
+    .badge-cyan { background: var(--cyan-soft); color: var(--cyan); border: 1px solid #a5e8f2; }
 
     /* Buttons */
-    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border2); cursor: pointer; font-size: 13px; font-weight: 500; text-decoration: none; transition: all .15s; background: var(--surface2); color: var(--text); }
-    .btn:hover { border-color: var(--accent); color: var(--accent); }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--border2); cursor: pointer; font-size: 13px; font-weight: 600; text-decoration: none; transition: all .15s; background: var(--surface); color: var(--text2); }
+    .btn:hover { border-color: var(--accent); color: var(--accent2); background: var(--accent-soft); }
     .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
     .btn-primary:hover { background: var(--accent2); border-color: var(--accent2); color: #fff; }
-    .btn-green { background: rgba(34,197,94,.15); color: var(--green); border-color: rgba(34,197,94,.3); }
-    .btn-green:hover { background: rgba(34,197,94,.25); }
-    .btn-yellow { background: rgba(234,179,8,.12); color: var(--yellow); border-color: rgba(234,179,8,.35); }
-    .btn-yellow:hover { background: rgba(234,179,8,.22); }
-    .btn-danger { background: rgba(239,68,68,.1); color: var(--red); border-color: rgba(239,68,68,.3); }
+    .btn-green { background: var(--green-soft); color: var(--green); border-color: #bbf0cf; }
+    .btn-green:hover { background: #d3f8e0; }
+    .btn-yellow { background: var(--yellow-soft); color: var(--yellow); border-color: #fde3a8; }
+    .btn-yellow:hover { background: #fdedc4; }
+    .btn-danger { background: var(--red-soft); color: var(--red); border-color: #fecaca; }
+    .btn-danger:hover { background: #fee0e0; }
     .btn-sm { padding: 5px 10px; font-size: 12px; }
     .btn-lg { padding: 12px 24px; font-size: 15px; }
 
     /* Forms */
     .form-group { margin-bottom: 16px; }
-    .form-label { display: block; font-size: 12px; font-weight: 600; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .4px; }
+    .form-label { display: block; font-size: 12px; font-weight: 700; color: var(--text2); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .4px; }
     .form-input {
       width: 100%; padding: 10px 14px;
-      background: var(--surface2); border: 1px solid var(--border2);
+      background: var(--surface); border: 1px solid var(--border2);
       border-radius: 8px; color: var(--text); font-size: 14px; outline: none;
-      transition: border-color .15s;
+      transition: border-color .15s, box-shadow .15s;
     }
-    .form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
+    .form-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
     .form-input::placeholder { color: var(--text3); }
     .form-hint { font-size: 11px; color: var(--text3); margin-top: 5px; }
 
     /* Alerts */
     .alert { padding: 12px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 16px; display: flex; align-items: flex-start; gap: 8px; }
-    .alert-error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.2); color: #fca5a5; }
-    .alert-success { background: rgba(34,197,94,.08); border: 1px solid rgba(34,197,94,.2); color: #86efac; }
-    .alert-info { background: rgba(59,130,246,.08); border: 1px solid rgba(59,130,246,.2); color: #93c5fd; }
+    .alert-error { background: var(--red-soft); border: 1px solid #fecaca; color: #991b1b; }
+    .alert-success { background: var(--green-soft); border: 1px solid #bbf0cf; color: #166534; }
+    .alert-info { background: var(--accent-soft); border: 1px solid #c7dbfc; color: #1e40af; }
 
     /* Amount */
-    .amount-positive { color: var(--green); font-weight: 600; }
-    .amount-negative { color: var(--red); font-weight: 600; }
+    .amount-positive { color: var(--green); font-weight: 700; }
+    .amount-negative { color: var(--red); font-weight: 700; }
 
     /* Misc */
     .mono { font-family: 'JetBrains Mono', 'SF Mono', Consolas, monospace; font-size: 12px; }
@@ -232,53 +277,54 @@
   </style>
   {% block head %}{% endblock %}
 </head>
-<body>
+{% set is_security = 'security-admin' in roles or 'security-analyst' in roles %}
+{% set is_ops_page = page in ['scenarios', 'security', 'admin', 'monitor'] %}
+<body {% if is_ops_page %}data-section="ops"{% endif %}>
   <aside class="sidebar">
     <div class="sidebar-header">
       <a href="/dashboard" class="logo">
-        <div class="logo-icon">🔐</div>
+        <div class="logo-icon">🏦</div>
         <div>
-          <div class="logo-text">ZTLab</div>
-          <div class="logo-sub">Zero Trust Banking</div>
+          <div class="logo-text">ZTLab Bank</div>
+          <div class="logo-sub">Ngân hàng số</div>
         </div>
       </a>
     </div>
 
     <nav class="sidebar-nav">
-      <div class="nav-section">Banking</div>
+      <div class="nav-section">Ngân hàng</div>
       <a href="/dashboard" class="nav-item {% if page=='dashboard' %}active{% endif %}">
-        <span class="nav-icon">🏠</span> Tổng quan
+        <span class="nav-icon">⌂</span> Tổng quan
       </a>
       <a href="/transfer" class="nav-item {% if page=='transfer' %}active{% endif %}">
         <span class="nav-icon">↗</span> Chuyển tiền
       </a>
       <a href="/profile" class="nav-item {% if page=='profile' %}active{% endif %}">
-        <span class="nav-icon">👤</span> Hồ sơ
+        <span class="nav-icon">◐</span> Hồ sơ &amp; Thiết bị
       </a>
-      {% if 'security-admin' in roles or 'security-analyst' in roles %}
-      <div class="nav-section" style="margin-top:8px">Security</div>
-      {% if 'security-admin' in roles %}
-      <a href="/admin" class="nav-item {% if page=='admin' %}active{% endif %}">
-        <span class="nav-icon">🛡</span> Quản trị
-      </a>
+
+      {% if is_security %}
+      <div class="nav-section-ops">🛡 SOC Console</div>
+      <div class="nav-ops-group">
+        <a href="/scenarios" class="nav-item {% if page=='scenarios' %}active{% endif %}">
+          <span class="nav-icon">⚡</span> Mô phỏng tấn công
+        </a>
+        <a href="/security" class="nav-item {% if page=='security' %}active{% endif %}">
+          <span class="nav-icon">⛨</span> Ứng cứu sự cố (SOAR)
+        </a>
+        <a href="/monitor" class="nav-item {% if page=='monitor' %}active{% endif %}">
+          <span class="nav-icon">◱</span> Giám sát hệ thống
+        </a>
+        {% if 'security-admin' in roles %}
+        <a href="/admin" class="nav-item {% if page=='admin' %}active{% endif %}">
+          <span class="nav-icon">☰</span> Quản trị
+        </a>
+        {% endif %}
+        <a href="http://grafana.ztlab.local:8080/d/ztlab-full-logs/full-logs" target="_blank" class="nav-item">
+          <span class="nav-icon">▤</span> Grafana (raw logs) ↗
+        </a>
+      </div>
       {% endif %}
-      <a href="/security" class="nav-item {% if page=='security' %}active{% endif %}">
-        <span class="nav-icon">🔴</span> Security
-      </a>
-      <a href="/scenarios" class="nav-item {% if page=='scenarios' %}active{% endif %}">
-        <span class="nav-icon">⚔</span> Kịch bản demo
-      </a>
-      {% endif %}
-      <div class="nav-section" style="margin-top:8px">Monitoring</div>
-      <a href="/monitor" class="nav-item {% if page=='monitor' %}active{% endif %}">
-        <span class="nav-icon">🖥</span> System Monitor
-      </a>
-      <a href="http://grafana.ztlab.local:8080/d/ztlab-full-logs/full-logs" target="_blank" class="nav-item">
-        <span class="nav-icon">📊</span> Grafana Logs
-      </a>
-      <a href="http://grafana.ztlab.local:8080/alerting/list" target="_blank" class="nav-item">
-        <span class="nav-icon">🚨</span> Alert Rules
-      </a>
     </nav>
 
     <div class="sidebar-footer">
@@ -297,11 +343,16 @@
 
   <div class="main">
     <header class="topbar">
-      <div class="topbar-title">{% block page_title %}ZTLab{% endblock %}</div>
+      <div class="topbar-title">
+        {% block page_title %}ZTLab Bank{% endblock %}
+        {% if is_ops_page %}<span class="soc-pill">🛡 SOC Console</span>{% endif %}
+      </div>
       <div class="topbar-right">
+        {% if is_ops_page %}
         <div class="status-dot"><div class="dot"></div> Keycloak</div>
         <div class="status-dot"><div class="dot"></div> OPA</div>
         <div class="status-dot"><div class="dot"></div> SPIRE</div>
+        {% endif %}
         <div class="top-time" id="clock"></div>
       </div>
     </header>

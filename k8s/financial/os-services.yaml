@@ -37,6 +37,7 @@ spec:
         cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: core-banking
       volumes:
@@ -156,6 +157,7 @@ spec:
         cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: account-service
       containers:
@@ -280,6 +282,7 @@ spec:
         cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: transaction-service
       containers:

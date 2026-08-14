@@ -114,6 +114,7 @@ class PaymentRequest(BaseModel):
     currency: str = "VND"
     channel: str = "api"
     country: str | None = None
+    device_trust: str = "unknown"
 
 
 def _source_ip(request: Request) -> str:
