@@ -107,6 +107,34 @@
         ⏻ Đăng xuất khỏi hệ thống
       </a>
     </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Thiết bị của bạn</div>
+        {% if device_trust == 'trusted' %}<span class="badge badge-green">✓ Đã tin cậy</span>
+        {% elif device_trust == 'new_device' %}<span class="badge badge-yellow">🆕 Mới ghi nhận</span>
+        {% else %}<span class="badge badge-red">⚠ Bất thường</span>{% endif %}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+        <div style="display:flex;justify-content:space-between">
+          <span class="text-muted">Thiết bị đang dùng</span>
+          <span>{{ device_label }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span class="text-muted">Số thiết bị đã ghi nhận</span>
+          <span>{% if known_device_count is not none %}{{ known_device_count }}{% else %}—{% endif %}</span>
+        </div>
+      </div>
+      <div class="mt-8" style="font-size:12px;color:var(--text3);line-height:1.7">
+        {% if device_trust == 'trusted' %}
+        Thiết bị này đã đăng nhập thành công trước đây và được ghi nhớ — không cần xác minh thêm.
+        {% elif device_trust == 'new_device' %}
+        Đây là lần đầu tiên hệ thống ghi nhận thiết bị này cho tài khoản của bạn. Nếu không phải bạn, hãy đổi mật khẩu ngay.
+        {% else %}
+        Đặc điểm truy cập của thiết bị này bất thường (có thể là script/công cụ tự động). Giao dịch từ thiết bị này sẽ được đánh giá rủi ro cao hơn.
+        {% endif %}
+      </div>
+    </div>
   </div>
 
 </div>

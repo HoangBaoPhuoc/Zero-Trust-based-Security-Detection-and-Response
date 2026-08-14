@@ -40,6 +40,7 @@ spec:
         app: api-gateway
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/api-gateway"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: api-gateway
       volumes:
@@ -155,6 +156,7 @@ spec:
         app: payment-service
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/payment-service"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: payment-service
       volumes:
@@ -263,6 +265,7 @@ spec:
         app: fraud-detection
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/fraud-detection"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: fraud-detection
       volumes:

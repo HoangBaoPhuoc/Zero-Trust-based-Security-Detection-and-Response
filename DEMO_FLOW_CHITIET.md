@@ -5,6 +5,8 @@
 > **Môn**: NT114.Q21.ANTT  
 > **Cập nhật**: 2026-06-28 — tất cả KB dùng log thật (không inject giả), Grafana alert rules query log thật từ service pod
 
+> **Lưu ý số hiệu KB (thêm sau, 2026-08):** số KB trong tài liệu này (KB2=Fraud Gate Bypass, KB3=Lateral Movement) khớp với tên file `tests/grafana_kb*.sh`, nhưng **lệch với `scripts/run-demo.sh --kbN`** (ở đó KB2=Lateral Movement, KB3=Fraud Gate Bypass) — 2 script độc lập được đặt số khác nhau. Khi chạy lệnh, ưu tiên đối chiếu theo **tên kịch bản** (Brute Force / Fraud Gate Bypass / Lateral Movement / ...), không đối chiếu chéo bằng số KB giữa tài liệu này và README/DEPLOY.md. Xem README.md § "5 kịch bản tấn công" để biết lệnh chính xác cho từng tên.
+
 ---
 
 ## Mục lục
@@ -992,6 +994,8 @@ curl -s http://localhost:8091/blocked-ips | python3 -m json.tool
 ---
 
 ## 9. KB6 — Privilege Escalation in Container (T1611)
+
+> **Trạng thái hiện tại (đã kiểm tra lại):** `k8s/financial/security-scanner-job.yaml` tồn tại và phần Job/audit-log mô tả bên dưới là thật, nhưng **rule Grafana `privilege-escalation-alert.yml` mô tả trong luồng này chưa tồn tại** trong `plg-stack/grafana/alerting/` (chỉ có 5 rule: brute-force, fraud-gate-bypass, lateral-movement, large-response, access-denied). Nghĩa là bước "Grafana rule → FIRING → SOAR → quarantine_workload" ở dưới là **thiết kế/kế hoạch, chưa wire thật** — không demo được end-to-end như KB1-KB5. Coi phần dưới là tài liệu kỹ thuật cho hướng phát triển tiếp theo, không phải kịch bản đã chạy được.
 
 **Zero Trust principle chứng minh:** *Workload Isolation + Least Privilege cho container* — Zero Trust không chỉ áp dụng cho network, mà cả bên trong từng container. Hệ thống lab không enforce `runAsNonRoot` — security-scanner Job chạy như root và ghi log AUDIT `privilege_escalation` thật vào stdout → Promtail → Loki → Grafana.
 

@@ -243,7 +243,7 @@ check_services() {
   fi
 
   if [[ "$all_ok" == false ]]; then
-    fail "Một số services không accessible. Xem HUONG_DAN.md mục 3 để mở tunnels."; exit 1
+    fail "Một số services không accessible. Xem DEPLOY.md § 2.1 để mở tunnels."; exit 1
   fi
 
   local iso; iso=$(kubectl --context "$AWS_CONTEXT" get svc payment-service -n financial \

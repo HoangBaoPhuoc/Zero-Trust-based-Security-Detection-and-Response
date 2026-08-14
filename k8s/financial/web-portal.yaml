@@ -23,6 +23,7 @@ spec:
         app: web-portal
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/web-portal"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
     spec:
       serviceAccountName: web-portal
       volumes:

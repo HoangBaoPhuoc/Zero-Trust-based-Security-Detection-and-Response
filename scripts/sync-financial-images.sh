@@ -40,6 +40,7 @@ BATCHES+=("api-gateway payment-service fraud-detection")
 BATCHES+=("notification-service core-banking account-service")
 BATCHES+=("transaction-service soar-engine")
 BATCHES+=("web-portal security-scorer")
+BATCHES+=("ai-analyzer")
 
 log() {
   echo "[INFO] $*"

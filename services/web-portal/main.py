@@ -19,6 +19,7 @@ from collections import defaultdict, deque
 from typing import Any
 
 import httpx
+import redis.asyncio as aioredis
 from fastapi import FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -55,6 +56,16 @@ HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
 REGISTER_LIMIT_PER_HOUR = int(os.getenv("REGISTER_LIMIT_PER_HOUR", "5"))
 ENABLE_SCENARIOS = os.getenv("ENABLE_SCENARIOS", "true").lower() == "true"
 
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/0")
+DEVICE_ID_COOKIE = "ztlab_device_id"
+DEVICE_ID_MAX_AGE = 365 * 24 * 3600
+_SUSPICIOUS_UA_RE = re.compile(
+    r"curl|wget|python-requests|python-urllib|sqlmap|nmap|masscan|headless|phantomjs|scrapy|bot(?!ify)",
+    re.I,
+)
+
+redis_client: aioredis.Redis | None = None
+
 _register_attempts: dict[str, deque] = defaultdict(deque)
 _sessions: dict[str, dict[str, Any]] = {}
 
@@ -76,7 +87,20 @@ async def security_headers(request: Request, call_next):
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
     if HTTPS_ENABLED:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # Device binding: every browser gets a durable device_id on first visit,
+    # used to distinguish "thiết bị đã biết" from "thiết bị lạ" at login time.
+    if not request.cookies.get(DEVICE_ID_COOKIE):
+        response.set_cookie(
+            DEVICE_ID_COOKIE, secrets.token_urlsafe(24),
+            max_age=DEVICE_ID_MAX_AGE, httponly=True, samesite="lax", secure=HTTPS_ENABLED,
+        )
     return response
+
+
+@app.on_event("startup")
+async def _init_redis() -> None:
+    global redis_client
+    redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
 
 
 _signer = URLSafeTimedSerializer(SESSION_SECRET)
@@ -146,6 +170,60 @@ def _pkce_pair() -> tuple[str, str]:
     digest = hashlib.sha256(verifier.encode("utf-8")).digest()
     challenge = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
     return verifier, challenge
+
+
+def _parse_device_label(user_agent: str) -> str:
+    ua = user_agent or ""
+    if re.search(r"iPhone|iPad", ua, re.I):
+        os_name = "iOS"
+    elif re.search(r"Android", ua, re.I):
+        os_name = "Android"
+    elif re.search(r"Windows", ua, re.I):
+        os_name = "Windows"
+    elif re.search(r"Macintosh|Mac OS", ua, re.I):
+        os_name = "macOS"
+    elif re.search(r"Linux", ua, re.I):
+        os_name = "Linux"
+    else:
+        os_name = "Unknown OS"
+    if re.search(r"Edg/", ua):
+        browser = "Edge"
+    elif re.search(r"Chrome/", ua):
+        browser = "Chrome"
+    elif re.search(r"Firefox/", ua):
+        browser = "Firefox"
+    elif re.search(r"Safari/", ua) and "Chrome" not in ua:
+        browser = "Safari"
+    else:
+        browser = "trình duyệt không xác định"
+    return f"{browser} trên {os_name}"
+
+
+async def _evaluate_device_trust(request: Request, username: str) -> dict:
+    """Device binding: trả về device_trust (trusted|new_device|suspicious) và
+    đăng ký thiết bị mới vào Redis để lần đăng nhập sau được nhận diện là quen thuộc."""
+    device_id = request.cookies.get(DEVICE_ID_COOKIE) or secrets.token_urlsafe(24)
+    user_agent = request.headers.get("user-agent", "")
+
+    if _SUSPICIOUS_UA_RE.search(user_agent) or not user_agent:
+        trust = "suspicious"
+    else:
+        key = f"web-portal:known_devices:{username}"
+        try:
+            is_known = await redis_client.sismember(key, device_id)
+        except Exception:
+            is_known = True  # Redis down: fail open, don't punish legit users for infra issues
+        if is_known:
+            trust = "trusted"
+        else:
+            trust = "new_device"
+            try:
+                await redis_client.sadd(key, device_id)
+            except Exception:
+                pass
+
+    return {"device_id": device_id, "device_trust": trust,
+            "device_label": _parse_device_label(user_agent), "user_agent": user_agent}
 
 
 def _fmt_vnd(amount) -> str:
@@ -483,6 +561,8 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
     for sid in stale:
         _sessions.pop(sid, None)
 
+    device = await _evaluate_device_trust(request, preferred_username)
+
     session_data = {
         "username": preferred_username,
         "full_name": full_name,
@@ -492,11 +572,23 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
         "roles": realm_roles,
         "account_id": account_id,
         "logged_in_at": time.time(),
+        "device_id": device["device_id"],
+        "device_trust": device["device_trust"],
+        "device_label": device["device_label"],
     }
-    response = RedirectResponse("/dashboard", status_code=302)
+    dest = "/dashboard" if device["device_trust"] == "trusted" else f"/dashboard?new_device={device['device_trust']}"
+    response = RedirectResponse(dest, status_code=302)
     response.delete_cookie(PKCE_STATE_COOKIE)
+    response.set_cookie(DEVICE_ID_COOKIE, device["device_id"], max_age=DEVICE_ID_MAX_AGE,
+                         httponly=True, samesite="lax", secure=HTTPS_ENABLED)
     _set_session(response, session_data)
-    logger.info(json.dumps({"event": "user_login_oidc", "username": preferred_username, "account_id": account_id}))
+    logger.info(json.dumps({"event": "user_login_oidc", "username": preferred_username,
+                             "account_id": account_id, "device_trust": device["device_trust"]}))
+    if device["device_trust"] != "trusted":
+        asyncio.create_task(_push_security_event(
+            "new_device_login" if device["device_trust"] == "new_device" else "suspicious_device_login",
+            f"login username={preferred_username} device_trust={device['device_trust']} ua={device['user_agent'][:120]}",
+        ))
     return response
 
 
@@ -660,7 +752,7 @@ async def do_register(
 # ---------------------------------------------------------------------------
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard(request: Request):
+async def dashboard(request: Request, new_device: str = ""):
     session = _get_session(request)
     if not session:
         return RedirectResponse("/login", status_code=302)
@@ -670,6 +762,9 @@ async def dashboard(request: Request):
         "full_name": session.get("full_name", session.get("username")),
         "roles": session.get("roles", []),
         "account_id": session.get("account_id", ""),
+        "device_trust": session.get("device_trust", "trusted"),
+        "device_label": session.get("device_label", ""),
+        "new_device_alert": new_device,
         "page": "dashboard",
     })
 
@@ -693,14 +788,22 @@ async def profile_page(request: Request):
     session = _get_session(request)
     if not session:
         return RedirectResponse("/login", status_code=302)
+    username = session.get("username", "")
+    try:
+        known_device_count = await redis_client.scard(f"web-portal:known_devices:{username}")
+    except Exception:
+        known_device_count = None
     return templates.TemplateResponse("profile.html", {
         "request": request,
-        "username": session.get("username"),
+        "username": username,
         "full_name": session.get("full_name", session.get("username")),
         "email": session.get("email", ""),
         "roles": session.get("roles", []),
         "account_id": session.get("account_id", ""),
         "logged_in_at": session.get("logged_in_at", 0),
+        "device_trust": session.get("device_trust", "trusted"),
+        "device_label": session.get("device_label", "Không xác định"),
+        "known_device_count": known_device_count,
         "page": "profile",
     })
 
@@ -765,6 +868,7 @@ async def do_transfer(request: Request):
     body = await request.json()
     access_token = await _ensure_valid_token(session)
     client_ip = request.client.host if request.client else "unknown"
+    body["device_trust"] = session.get("device_trust", "unknown")
 
     async with httpx.AsyncClient(timeout=15) as client:
         try:
@@ -1107,6 +1211,9 @@ async def scenarios_page(request: Request):
     session = _get_session(request)
     if not session:
         return RedirectResponse("/login", status_code=302)
+    roles = session.get("roles", [])
+    if not any(r in roles for r in ("security-admin", "security-analyst")):
+        raise HTTPException(status_code=403, detail="Chỉ security-admin hoặc security-analyst mới được truy cập")
     return templates.TemplateResponse("scenarios.html", {
         "request": request,
         "username": session.get("username"),
@@ -1122,6 +1229,9 @@ async def run_scenario(scenario_id: str, request: Request) -> JSONResponse:
     session = _get_session(request)
     if not session:
         return JSONResponse({"error": "not authenticated"}, status_code=401)
+    roles = session.get("roles", [])
+    if not any(r in roles for r in ("security-admin", "security-analyst")):
+        return JSONResponse({"error": "forbidden — chỉ security-admin/security-analyst"}, status_code=403)
 
     token = session.get("access_token", "")
     account_id = session.get("account_id", "ACC-1001")

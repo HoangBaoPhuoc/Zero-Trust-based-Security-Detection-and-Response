@@ -35,6 +35,7 @@ class PaymentRequest(BaseModel):
     currency: str = Field(default="VND")
     channel: str = Field(default="api")
     country: str | None = None
+    device_trust: str = Field(default="unknown")
 
 
 def _fraud_gate_signature(trace_id: str, body: PaymentRequest, score: int, timestamp: int) -> str:

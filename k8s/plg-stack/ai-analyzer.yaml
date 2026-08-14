@@ -573,7 +573,7 @@ spec:
     spec:
       containers:
         - name: ai-analyzer
-          image: ztlab/ai-analyzer:1.2.0
+          image: ztlab/ai-analyzer:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:

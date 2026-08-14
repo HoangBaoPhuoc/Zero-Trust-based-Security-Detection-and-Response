@@ -4,7 +4,7 @@
 Hoàng Bảo Phước (23521231) · Phạm Võ Khánh Hà (23520414)  
 GVHD: ThS. Đỗ Thị Phương Uyên
 
-Hệ thống lab multi-cloud minh họa Zero Trust Security cho microservices tài chính: user đăng nhập qua Keycloak OIDC/PKCE, gọi API Gateway được bảo vệ bởi Envoy sidecar + OPA ext_authz, xử lý payment qua fraud detection, rồi ghi giao dịch tại Core Banking trên OpenStack qua SPIRE mTLS. Log từ cả hai cloud được đưa về PLG Stack (Promtail → Loki → Grafana), Grafana phát hiện 4 loại tấn công và kích hoạt SOAR Engine theo mô hình Human-in-the-Loop (HITL) — admin nhận email với nút hành động, chọn playbook, SOAR thực thi trên K8s.
+Hệ thống lab multi-cloud minh họa Zero Trust Security cho microservices tài chính: user đăng nhập qua Keycloak OIDC/PKCE, gọi API Gateway được bảo vệ bởi Envoy sidecar + OPA ext_authz, xử lý payment qua fraud detection (bao gồm tín hiệu device trust), rồi ghi giao dịch tại Core Banking trên OpenStack qua SPIRE mTLS. Log từ cả hai cloud được đưa về PLG Stack (Promtail → Loki → Grafana), Grafana phát hiện 5 loại tấn công và kích hoạt SOAR Engine theo mô hình Human-in-the-Loop (HITL) — admin nhận email với nút hành động, chọn playbook, SOAR thực thi trên K8s.
 
 ---
 
@@ -20,7 +20,7 @@ User (browser)      │                                                         
   │                 │      │ WireGuard + SPIRE mTLS cross-cloud                │
   │                 │      └──────────────────────────────────────────────────►│── OpenStack K3s
   │                 │                                                           │  core-banking
-  │                 │  Promtail → Loki → Grafana (6 alert rules)               │  account-service
+  │                 │  Promtail → Loki → Grafana (5 alert rules)               │  account-service
   │                 │                       │ attack detected (webhook thật)    │  transaction-service
   │                 │                       ▼                                   │  (spiffe://ztlab.local/openstack/*)
   │                 │               SOAR Engine (HITL · dedup 5min)             │
@@ -33,8 +33,8 @@ User (browser)      │                                                         
 - **Identity:** Keycloak OIDC/PKCE, SPIFFE/SPIRE X.509 SVIDs (trust domain `ztlab.local`, gia hạn ~30 phút)
 - **Policy:** Envoy sidecar + OPA ext_authz gRPC — JWT verify, RBAC, fraud gate, SVID check
 - **Services:** FastAPI microservices trên K3s (AWS + OpenStack), Redis, PostgreSQL
-- **Observability:** Promtail → Loki → Grafana (6 alert rules thật, gửi webhook mỗi 1 phút khi fire)
-- **Security Ops:** SOAR Engine — HITL, 6 playbooks, email HITL với action buttons, dedup 5 phút/attack_type
+- **Observability:** Promtail → Loki → Grafana (5 alert rules thật, gửi webhook mỗi 1 phút khi fire)
+- **Security Ops:** SOAR Engine — HITL, 5 playbooks, email HITL với action buttons, dedup 5 phút/attack_type
 
 ---
 
@@ -50,37 +50,23 @@ envoy/              Envoy sidecar configmap (mTLS, OPA ext_authz)
 services/           FastAPI microservices source code
 shared/             Python shared modules (logging, metrics)
 monitoring/         Prometheus scrape config
-scripts/            k8s-tunnel, open-admin-uis, run-demo, deploy, sync-images
+scripts/            k8s-tunnel, open-admin-uis, run-demo, deploy, patch-services, sync-images
 tests/              seed_db, scenario tests
+ml-dataset/         Script + tài liệu sinh dataset train/test cho nhóm ML/DL (xem ml-dataset/README.md)
 ```
 
 ---
 
 ## Bắt đầu nhanh
 
+Toàn bộ hướng dẫn deploy (lần đầu từ số 0, hoặc bật lại/redeploy hệ thống đã có sẵn) nằm ở **[DEPLOY.md](DEPLOY.md)** — không lặp lại ở đây để tránh 2 nơi lệch nhau. Tóm tắt siêu ngắn cho người đã quen hệ thống:
+
 ```bash
-# 1. Bật OpenStack VMs (sau reboot host, VMs tắt)
-source /etc/kolla/admin-openrc.sh
-openstack server list
-openstack server start os-gateway os-k3s-master os-k3s-worker-1 os-k3s-worker-2
-sleep 30
-
-# 2. Mở K8s tunnels
-bash scripts/k8s-tunnel.sh up all
-kubectl --context ctx-aws get nodes
-kubectl --context ctx-openstack get nodes
-
-# 3. Mở port-forwards (daemon tự-restart)
-bash scripts/open-admin-uis.sh
-
-# 4. Restore services về trạng thái sạch
-bash scripts/run-demo.sh --restore
-
-# 5. Chạy demo đầy đủ (normal traffic + 4 attack scenarios)
-bash scripts/run-demo.sh
+bash scripts/k8s-tunnel.sh up all      # mở tunnel tới 2 cluster
+bash scripts/open-admin-uis.sh         # mở toàn bộ port-forward (tự-restart)
+bash scripts/run-demo.sh --restore     # đưa hệ thống về trạng thái sạch
+bash scripts/run-demo.sh               # normal traffic + 4 kịch bản tấn công
 ```
-
-**Hướng dẫn đầy đủ:** [HUONG_DAN.md](HUONG_DAN.md)
 
 ---
 
@@ -107,39 +93,45 @@ bash scripts/run-demo.sh
 | `testuser01` | `Test1234!` | financial-read, financial-write | ACC-1001 |
 | `testuser02` | `Test1234!` | financial-read, financial-write | ACC-2001 |
 | `merchant01` | `Test1234!` | financial-read (chỉ đọc — demo RBAC 403) | ACC-4001 |
-| `analyst01` | `Test1234!` | security-analyst + security-admin (HITL approval) | — |
+| `demoadmin` | `Test1234!` | security-admin + security-analyst (full quyền: `/admin`, `/security`, `/scenarios`, `/monitor`, phê duyệt HITL) | — |
+| `soc01` | `Test1234!` | security-analyst — dùng để chạy `/scenarios` trên Web Portal (role-gated) | — |
+| `analyst01` | `Test1234!` | security-analyst — **login qua Keycloak hiện bị lỗi** (redirect loop ở login-actions/authenticate, chưa rõ nguyên nhân); dùng `demoadmin` hoặc `soc01` thay thế | — |
 
 ---
 
-## 6 Kịch bản tấn công Zero Trust (Grafana → SOAR)
+## 5 kịch bản tấn công Zero Trust (Grafana → SOAR)
 
-Mỗi kịch bản chứng minh 1 lớp Zero Trust enforcement thật, detection qua Grafana alert rules, phản ứng qua SOAR HITL.
+Mỗi kịch bản chứng minh 1 lớp Zero Trust enforcement thật, detection qua Grafana alert rules (`plg-stack/grafana/alerting/*.yml`), phản ứng qua SOAR HITL.
 
-| # | Tên | ATT&CK | Enforcement THẬT | Phát hiện Grafana | SOAR Playbook |
-|---|-----|--------|------------------|-------------------|---------------|
-| KB1 | Brute Force Login | T1110.001 | Keycloak từ chối 20/20 sai pass (401) | Envoy 401 count/1m by source_ip | revoke_user_sessions |
-| KB2 | Fraud Gate Bypass | T1078.004 | OPA fraud gate block amount=500M (503) | OPA deny: attack_scenario=fraud_gate_bypass | isolate_workload |
-| KB3 | Lateral Movement | T1021.007 | API GW từ chối SVID fake (403) | OPA deny: attack_scenario=lateral_movement | isolate_workload |
-| KB4 | Data Exfiltration | T1041 | Envoy đo bytes_sent thật từ 10 bulk req | Envoy bytes_sent>1MB count/5m | restrict_egress |
-| KB5 | Access Denied Spike | T1078 | OPA RBAC từ chối merchant01 POST /payments (403) | OPA deny: result=deny by source_ip | block_source_ip |
-| KB6 | Privilege Escalation | T1611 | kubectl exec xác nhận uid=0, /etc/shadow readable | Log audit: privilege_escalation keyword | quarantine_workload |
+| Tên | ATT&CK | Enforcement THẬT | Phát hiện Grafana | SOAR Playbook | Chạy bằng |
+|-----|--------|------------------|-------------------|----------------|-----------|
+| Brute Force Login | T1110.001 | Keycloak từ chối 20/20 sai pass (401) | `brute-force-alert.yml` | revoke_user_sessions | `run-demo.sh --kb1` |
+| Lateral Movement | T1021.007 | API GW từ chối SVID fake (403) | `lateral-movement-alert.yml` | isolate_workload | `run-demo.sh --kb2` |
+| Fraud Gate Bypass | T1078.004 | OPA fraud gate block amount=500M (403) | `fraud-gate-bypass-alert.yml` | isolate_workload | `run-demo.sh --kb3` |
+| Data Exfiltration | T1041 | Envoy đo bytes_sent thật (bulk response) | `large-response-alert.yml` | restrict_egress | `run-demo.sh --kb4` |
+| Access Denied Spike | T1078 | OPA RBAC từ chối merchant01 POST /payments (403) | `access-denied-alert.yml` | block_source_ip | `tests/grafana_kb5_access_denied.sh` |
+
+> **Số hiệu KB chỉ có ý nghĩa bên trong `scripts/run-demo.sh --kbN`** (dùng cho lệnh ở cột cuối). Không dùng số KB để tham chiếu chéo sang nơi khác — tránh nhầm với thứ tự liệt kê trong tài liệu khác.
+>
+> **Privilege Escalation (T1611)**: có manifest `k8s/financial/security-scanner-job.yaml` nhưng **chưa có Grafana alert rule tương ứng** — chưa nằm trong pipeline detection→SOAR tự động, chỉ verify thủ công qua `kubectl exec`. Xem đây là hướng phát triển tiếp theo, không phải kịch bản demo-được.
 
 > **HITL Flow:** severity ≥ high → SOAR tạo case `pending_approval` → email voha2005@gmail.com → admin duyệt tại Web Portal /security → playbook thực thi trên K8s.
 
 > **Dedup:** SOAR giới hạn 1 case/attack_type/5 phút. Grafana real alert fire ~1 phút sau khi log vào Loki — nếu case đã có từ script, alert của Grafana sẽ bị dedup (status=deduped).
 
 ```bash
-# Chạy 1 kịch bản:
-bash tests/grafana_kb1_brute_force.sh
-bash tests/grafana_kb2_fraud_gate.sh
-# ... kb3, kb4, kb5, kb6
-
-# Chạy tất cả 6 kịch bản:
-bash tests/grafana_run_all.sh
+# Chạy từng kịch bản (KB1-KB4 qua run-demo.sh, KB5 là script riêng):
+bash scripts/run-demo.sh --kb1   # brute force
+bash scripts/run-demo.sh --kb2   # lateral movement
+bash scripts/run-demo.sh --kb3   # fraud gate bypass
+bash scripts/run-demo.sh --kb4   # data exfiltration
+bash tests/grafana_kb5_access_denied.sh
 
 # Restore sau demo (xóa cả soar-block NetworkPolicies):
 bash scripts/run-demo.sh --restore
 ```
+
+Chi tiết vận hành/redeploy: xem **[DEPLOY.md](DEPLOY.md)**.
 
 ## Demo log hệ thống
 
