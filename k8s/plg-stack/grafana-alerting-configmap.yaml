@@ -1,0 +1,393 @@
+apiVersion: v1
+data:
+  access-denied-spike-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 10s
+      name: access-denied-spike
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: block_source_ip (Redis, TTL 24h).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → OPA Decision Log → filter source_ip.
+
+            '
+          description: ATT&CK T1078 — IP nguồn đang probe các endpoint trái phép liên
+            tiếp.
+          summary: Access denied rate tăng đột biến — api-gateway từ chối do thiếu role
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum by (source_ip) (count_over_time({namespace="financial",app="api-gateway"} | json | event="authz_denied" [1m]))
+            instant: true
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 60
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: access_denied
+          category: security
+          mitre: T1078
+          severity: high
+        noDataState: OK
+        title: Access Denied Spike
+        uid: access-denied-spike
+  brute-force-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 10s
+      name: brute-force
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: revoke_user_sessions (xóa session Keycloak của
+            user bị tấn công).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → Envoy Access Logs → filter response_code=401.
+
+            Restore nếu cần: bash scripts/run-demo.sh --restore
+
+            '
+          description: ATT&CK T1110.001 — Kẻ tấn công đang thử đoán mật khẩu. Envoy
+            ghi log 401 liên tiếp từ cùng IP nguồn.
+          summary: Brute force login — nhiều lần 401 từ cùng source_ip trong 1 phút
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum by (source_ip) (count_over_time({namespace="financial",app="api-gateway"} | json | event="jwt_verification_failed" [1m]))
+            instant: true
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 60
+            to: 0
+        execErrState: Alerting
+        for: 0s
+        labels:
+          attack_type: brute_force
+          category: security
+          mitre: T1110.001
+          severity: high
+        noDataState: OK
+        title: Brute Force Login (T1110.001)
+        uid: brute-force-login
+  fraud-gate-bypass-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 10s
+      name: fraud-gate
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: isolate_workload (patch payment-service selector
+            → 503, ngăn giao dịch mới).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → OPA Decision Log → filter attack_scenario=fraud_gate_bypass.
+
+            Restore: bash scripts/run-demo.sh --restore
+
+            '
+          description: ATT&CK T1078.004 — Request gọi POST /transactions/execute thiếu
+            hoặc sai header X-Fraud-Gate/X-Fraud-Score. OPA từ chối.
+          summary: Fraud Gate bypass — cố thực hiện giao dịch không qua fraud-detection
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [5m]))
+            instant: true
+            intervalMs: 1000
+            maxDataPoints: 43200
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: OK
+        for: 0s
+        labels:
+          attack_type: fraud_gate_bypass
+          category: security
+          gap: gap2
+          mitre: T1078.004
+          severity: critical
+        noDataState: OK
+        title: Fraud Gate Bypass (T1078.004)
+        uid: fraud-gate-bypass
+  large-response-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 10s
+      name: gap1-exfiltration
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: restrict_egress (scale core-banking xuống 0
+            replica trên OpenStack, chặn data ra ngoài).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → Envoy Access Logs → filter bytes_sent>1048576.
+
+            Restore: bash scripts/run-demo.sh --restore
+
+            '
+          description: ATT&CK T1041 — Envoy log ghi bytes_sent > 1MB. Có thể đang dump
+            database hoặc exfiltrate file từ core-banking (OpenStack).
+          summary: Response >1MB từ Envoy — nghi ngờ data exfiltration từ core-banking
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum(count_over_time({namespace="financial",app="api-gateway"} | json | event="http_request" | path=~"/transactions.*|/accounts.*" | bytes_sent > 5000 [5m]))
+            instant: true
+            intervalMs: 1000
+            maxDataPoints: 43200
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: OK
+        for: 0s
+        labels:
+          attack_type: large_response
+          category: security
+          gap: gap1
+          mitre: T1041
+          severity: high
+        noDataState: OK
+        title: Data Exfiltration — Large Response (T1041)
+        uid: gap1-large-response
+  lateral-movement-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 10s
+      name: lateral-movement
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: isolate_workload (patch payment-service selector
+            → 503, ngăn lateral movement tiếp diễn).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → OPA Decision Log → filter attack_scenario=lateral_movement.
+
+            Restore: bash scripts/run-demo.sh --restore
+
+            '
+          description: ATT&CK T1021.007 — Service dùng SPIFFE SVID ngoài trust domain
+            ztlab.local cố truy cập payment-service. OPA từ chối và ghi log.
+          summary: OPA từ chối request — SVID không hợp lệ hoặc ngoài trust domain
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum(count_over_time({namespace="financial",app="api-gateway"} | json | event="jwt_verification_failed" | reason="missing_bearer" [5m]))
+            instant: true
+            intervalMs: 1000
+            maxDataPoints: 43200
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: OK
+        for: 0s
+        labels:
+          attack_type: lateral_movement
+          category: security
+          mitre: T1021.007
+          severity: critical
+        noDataState: OK
+        title: 'Lateral Movement — Invalid SVID (T1021.007)'
+        uid: lateral-movement-svid
+  privilege-escalation-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 10s
+      name: privilege-escalation
+      orgId: 1
+      rules:
+      - annotations:
+          admin_action: 'SOAR TỰ ĐỘNG: quarantine_workload (cách ly container bị tấn công,
+            giữ lại để forensics).
+
+            Theo dõi: Web Portal /security → SOAR Cases (đăng nhập analyst01).
+
+            Xem log: Grafana → financial namespace logs → filter privilege_escalation.
+
+            Restore: kubectl rollout restart deployment/api-gateway -n financial
+
+            '
+          description: ATT&CK T1611 — Phát hiện cố gắng leo thang đặc quyền trong container
+            (setuid binary, cap_sys_admin, seccomp unconfined). Zero Trust yêu cầu mọi
+            workload chạy với least privilege.
+          summary: Phát hiện Privilege Escalation trong container — vi phạm workload isolation
+        condition: A
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum(count_over_time({namespace="financial",app="security-scanner"} | json | event="privilege_escalation" [5m]))
+            instant: true
+            intervalMs: 1000
+            maxDataPoints: 43200
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: OK
+        for: 0s
+        labels:
+          attack_type: privilege_escalation
+          category: security
+          mitre: T1611
+          severity: critical
+        noDataState: OK
+        title: Privilege Escalation in Container (T1611)
+        uid: privilege-escalation-container
+  notification-policy.yml: |
+    apiVersion: 1
+
+    contactPoints:
+      - orgId: 1
+        name: ztlab-security-admin
+        receivers:
+          - uid: ztlab-soar-webhook
+            type: webhook
+            settings:
+              url: http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook
+              httpMethod: POST
+            disableResolveMessage: true
+
+    policies:
+      - orgId: 1
+        receiver: ztlab-security-admin
+        group_by:
+          - grafana_folder
+          - alertname
+        group_wait: 0s
+        group_interval: 30s
+        repeat_interval: 5m
+        routes:
+          - receiver: ztlab-security-admin
+            matchers:
+              - 'category="security"'
+            group_wait: 0s
+            group_interval: 30s
+            repeat_interval: 5m
+  soar-health-alert.yml: |
+    apiVersion: 1
+    groups:
+    - folder: ZTLab
+      interval: 2m
+      name: soar-health
+      orgId: 1
+      rules:
+      - annotations:
+          description: SOAR Engine có thể bị down — phản ứng tự động với security incidents
+            bị vô hiệu.
+          summary: SOAR Engine pod không có log trong 5 phút
+        condition: B
+        data:
+        - datasourceUid: Loki
+          model:
+            datasource:
+              type: loki
+              uid: Loki
+            expr: sum(count_over_time({app="soar-engine"} [5m]))
+            instant: true
+            intervalMs: 1000
+            maxDataPoints: 43200
+            queryType: instant
+            refId: A
+          refId: A
+          relativeTimeRange:
+            from: 300
+            to: 0
+        - datasourceUid: __expr__
+          model:
+            conditions:
+            - evaluator:
+                params:
+                - 1
+                type: lt
+              operator:
+                type: and
+              query:
+                params:
+                - A
+              reducer:
+                params: []
+                type: last
+              type: query
+            datasource:
+              type: __expr__
+              uid: __expr__
+            expression: A
+            hide: false
+            intervalMs: 1000
+            maxDataPoints: 43200
+            refId: B
+            type: classic_conditions
+          refId: B
+          relativeTimeRange:
+            from: 300
+            to: 0
+        execErrState: OK
+        for: 2m
+        labels:
+          category: ops
+          mitre: ''
+          severity: warning
+        noDataState: Alerting
+        title: SOAR Engine Health
+        uid: soar-engine-health
+kind: ConfigMap
+metadata:
+  name: grafana-alerting
+  namespace: plg-stack

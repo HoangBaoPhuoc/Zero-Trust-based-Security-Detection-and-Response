@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: financial
+  labels:
+    app.kubernetes.io/part-of: ztlab
+    app.kubernetes.io/managed-by: kubectl
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spire
+  labels:
+    app.kubernetes.io/part-of: ztlab
+    app.kubernetes.io/managed-by: kubectl
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity
+  labels:
+    app.kubernetes.io/part-of: ztlab
+    app.kubernetes.io/managed-by: kubectl
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    app.kubernetes.io/part-of: ztlab
+    app.kubernetes.io/managed-by: kubectl

@@ -1,0 +1,463 @@
+{% extends "base.html" %}
+{% block title %}SOAR & Threat Management — ZTLab{% endblock %}
+{% block page_title %}SOAR & Threat Management{% endblock %}
+
+{% block content %}
+<div style="display:flex;flex-direction:column;gap:16px">
+
+  <!-- Stats bar -->
+  <div class="grid grid-4" style="gap:12px" id="stats-bar">
+    <div class="card" style="padding:16px;text-align:center">
+      <div style="font-size:28px;font-weight:700;color:var(--red)" id="stat-cases">—</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">SOAR Cases</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center">
+      <div style="font-size:28px;font-weight:700;color:var(--yellow)" id="stat-active">—</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Active / Executed</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center">
+      <div style="font-size:28px;font-weight:700;color:var(--accent2)" id="stat-blocked">—</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">IP bị chặn</div>
+    </div>
+    <div class="card" style="padding:16px;text-align:center">
+      <div style="font-size:28px;font-weight:700;color:var(--green)" id="stat-rolled">—</div>
+      <div style="font-size:11px;color:var(--text3);margin-top:4px">Rolled back</div>
+    </div>
+  </div>
+
+  <!-- Blocked IPs panel -->
+  <div class="card">
+    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div class="card-title">🔴 IP Đang Bị Chặn</div>
+        <div class="card-subtitle">Cập nhật real-time từ Redis — api-gateway enforce tự động</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        {% if is_admin %}
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="text" id="manual-ip" placeholder="1.2.3.4" class="form-input" style="width:150px;padding:7px 10px;font-family:monospace;font-size:13px">
+          <button class="btn btn-danger btn-sm" onclick="blockIP()">Block IP</button>
+        </div>
+        {% endif %}
+        <button class="btn btn-sm" onclick="loadAll()">↻ Refresh</button>
+      </div>
+    </div>
+    <div id="blocked-ips-container">
+      <div class="loading"><div class="spinner"></div> Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- SOAR Cases panel -->
+  <div class="card">
+    <div class="card-header" style="display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div class="card-title">🛡 SOAR Cases — Lịch sử phản ứng</div>
+        <div class="card-subtitle">Automated Playbooks: block_source_ip, isolate_workload, revoke_user_sessions, quarantine_workload</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <select id="filter-severity" class="form-input" style="width:130px;padding:7px 10px" onchange="renderCases()">
+          <option value="">Tất cả</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+        <select id="filter-status" class="form-input" style="width:160px;padding:7px 10px" onchange="renderCases()">
+          <option value="">Tất cả trạng thái</option>
+          <option value="pending_approval">Chờ duyệt</option>
+          <option value="executed">Executed</option>
+          <option value="dry_run">Dry Run</option>
+          <option value="skipped">Skipped</option>
+          <option value="failed">Failed</option>
+          <option value="rolled_back">Rolled Back</option>
+        </select>
+      </div>
+    </div>
+    <div id="cases-container">
+      <div class="loading"><div class="spinner"></div> Đang tải...</div>
+    </div>
+  </div>
+
+  <!-- Grafana iframe links -->
+  <div class="grid grid-2" style="gap:12px">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">📊 Full System Logs</div>
+        <div class="card-subtitle">Loki — toàn bộ namespace</div>
+      </div>
+      <div style="padding:8px 0 4px">
+        <a href="http://grafana.ztlab.local:8080/d/ztlab-full-logs/full-logs" target="_blank" class="btn btn-primary" style="width:100%;justify-content:center">
+          Mở Grafana Logs
+        </a>
+        <div style="margin-top:8px;font-size:12px;color:var(--text3)">
+          Hiển thị logs từ tất cả services: financial, plg-stack, identity, kube-system
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">🚨 SOAR Dashboard</div>
+        <div class="card-subtitle">Grafana — Anomaly Score & Alerts</div>
+      </div>
+      <div style="padding:8px 0 4px">
+        <a href="http://grafana.ztlab.local:8080/d/ztlab-soar/soar-dashboard" target="_blank" class="btn btn-danger" style="width:100%;justify-content:center">
+          Mở SOAR Dashboard
+        </a>
+        <div style="margin-top:8px;font-size:12px;color:var(--text3)">
+          Anomaly Score · Fraud Alerts · Security Events · Triggered Playbooks
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Case detail modal -->
+<div id="case-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--surface);border:1px solid var(--border2);border-radius:12px;width:min(700px,95vw);max-height:85vh;overflow:auto;padding:24px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:16px;font-weight:600">Chi tiết Case</div>
+      <button class="btn btn-sm" onclick="closeModal()">✕ Đóng</button>
+    </div>
+    <div id="modal-content"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+let allCases = [];
+let blockedIPs = [];
+
+// Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn tùy ý)
+const SUGGESTED_PLAYBOOKS = {
+  brute_force:          ['revoke_user_sessions', 'block_source_ip', 'isolate_workload', 'monitor_only'],
+  credential_stuffing:  ['revoke_user_sessions', 'block_source_ip', 'isolate_workload', 'monitor_only'],
+  jwt_replay:           ['revoke_user_sessions', 'block_source_ip', 'isolate_workload', 'monitor_only'],
+  fraud_gate_bypass:    ['isolate_workload', 'restrict_egress', 'block_source_ip', 'revoke_user_sessions', 'monitor_only'],
+  lateral_movement:     ['isolate_workload', 'restrict_egress', 'block_source_ip', 'revoke_user_sessions', 'monitor_only'],
+  cryptomining:         ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  port_scan:            ['block_source_ip', 'isolate_workload', 'monitor_only'],
+  exploit_probe:        ['block_source_ip', 'isolate_workload', 'restrict_egress', 'monitor_only'],
+  large_response:       ['restrict_egress', 'quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  access_denied:        ['block_source_ip', 'isolate_workload', 'monitor_only'],
+  account_manipulation: ['isolate_workload', 'revoke_user_sessions', 'block_source_ip', 'monitor_only'],
+  data_staging:         ['restrict_egress', 'quarantine_workload', 'block_source_ip', 'monitor_only'],
+  container_escape:     ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  impair_defenses:      ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+  privilege_escalation: ['quarantine_workload', 'isolate_workload', 'block_source_ip', 'monitor_only'],
+};
+const PLAYBOOK_LABELS = {
+  isolate_workload:     '🔒 Cô lập dịch vụ',
+  restrict_egress:      '🚧 Hạn chế lưu lượng',
+  quarantine_workload:  '⚠️ Cách ly workload',
+  block_source_ip:      '🚫 Chặn IP nguồn',
+  revoke_user_sessions: '🔑 Thu hồi phiên đăng nhập',
+  monitor_only:         '📊 Chỉ theo dõi',
+};
+const PLAYBOOK_BTN_STYLE = {
+  isolate_workload:     'background:#E53935',
+  restrict_egress:      'background:#F57C00',
+  quarantine_workload:  'background:#E53935',
+  block_source_ip:      'background:#C62828',
+  revoke_user_sessions: 'background:#1565C0',
+  monitor_only:         'background:#757575',
+};
+
+function esc(s) {
+  if (s == null) return '—';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function severityBadge(s) {
+  const cls = { critical: 'badge-red', high: 'badge-red', medium: 'badge-yellow', low: 'badge-blue' };
+  return `<span class="badge ${cls[s]||'badge-blue'}">${esc(s)}</span>`;
+}
+
+function statusBadge(s) {
+  const cls = { executed: 'badge-red', dry_run: 'badge-yellow', skipped: 'badge-blue',
+                failed: 'badge-red', rolled_back: 'badge-green', rollback_failed: 'badge-red',
+                pending_approval: 'badge-yellow' };
+  const label = s === 'pending_approval' ? '⏳ Chờ duyệt' : s;
+  return `<span class="badge ${cls[s]||'badge-blue'}">${label}</span>`;
+}
+
+function fmtTs(ts) {
+  if (!ts) return '—';
+  try { return new Date(ts).toLocaleString('vi-VN'); } catch { return ts; }
+}
+
+async function loadBlockedIPs() {
+  try {
+    const r = await fetch('/api/soar/blocked-ips');
+    const d = await r.json();
+    blockedIPs = d.blocked_ips || [];
+    renderBlockedIPs();
+  } catch(e) {
+    document.getElementById('blocked-ips-container').innerHTML =
+      '<div class="alert alert-error">Lỗi tải blocked IPs: ' + esc(e.message) + '</div>';
+  }
+}
+
+function renderBlockedIPs() {
+  const el = document.getElementById('blocked-ips-container');
+  document.getElementById('stat-blocked').textContent = blockedIPs.length;
+  if (!blockedIPs.length) {
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3)">Không có IP nào đang bị chặn</div>';
+    return;
+  }
+  const rows = blockedIPs.map(ip => `
+    <tr>
+      <td style="font-family:monospace;font-size:13px;color:var(--red)">${esc(ip.ip)}</td>
+      <td style="color:var(--text2)">${esc(ip.reason)}</td>
+      <td style="color:var(--text3);font-size:12px">${fmtTs(ip.ts)}</td>
+      <td style="color:var(--text3);font-size:12px">${ip.ttl_seconds ? Math.round(ip.ttl_seconds/3600)+'h TTL' : '—'}</td>
+      <td>
+        ${IS_ADMIN ? `<button class="btn btn-sm btn-green" onclick="unblockIP('${esc(ip.ip)}')">Unblock</button>` : ''}
+      </td>
+    </tr>
+  `).join('');
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">IP</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Lý do</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Thời gian</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">TTL</th>
+          <th style="padding:8px 12px"></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+async function blockIP() {
+  const ip = document.getElementById('manual-ip').value.trim();
+  if (!ip) return;
+  const r = await fetch('/api/soar/blocked-ips/' + encodeURIComponent(ip), { method: 'POST' });
+  const d = await r.json();
+  if (r.ok) {
+    document.getElementById('manual-ip').value = '';
+    await loadBlockedIPs();
+  } else {
+    alert('Lỗi: ' + (d.detail || d.error || r.status));
+  }
+}
+
+async function unblockIP(ip) {
+  if (!confirm('Bỏ chặn IP ' + ip + '?')) return;
+  const r = await fetch('/api/soar/blocked-ips/' + encodeURIComponent(ip), { method: 'DELETE' });
+  if (r.ok) await loadBlockedIPs();
+  else alert('Lỗi unblock: ' + r.status);
+}
+
+async function loadCases() {
+  try {
+    const r = await fetch('/api/soar/cases');
+    const d = await r.json();
+    allCases = Array.isArray(d) ? d.reverse() : [];
+    renderCases();
+    updateStats();
+  } catch(e) {
+    document.getElementById('cases-container').innerHTML =
+      '<div class="alert alert-error">Lỗi tải cases: ' + esc(e.message) + '</div>';
+  }
+}
+
+function updateStats() {
+  document.getElementById('stat-cases').textContent = allCases.length;
+  const pending = allCases.filter(c => c.status === 'pending_approval').length;
+  const active = allCases.filter(c => c.status === 'executed' || c.status === 'dry_run').length;
+  document.getElementById('stat-active').textContent = active;
+  document.getElementById('stat-rolled').textContent =
+    allCases.filter(c => c.status === 'rolled_back').length;
+  // Highlight pending approvals
+  const statCases = document.getElementById('stat-cases');
+  statCases.style.color = pending > 0 ? 'var(--yellow)' : 'var(--red)';
+  if (pending > 0) {
+    statCases.title = `${pending} case đang chờ phê duyệt`;
+  }
+}
+
+function renderCases() {
+  const sev = document.getElementById('filter-severity').value;
+  const st  = document.getElementById('filter-status').value;
+  const filtered = allCases.filter(c =>
+    (!sev || c.severity === sev) && (!st || c.status === st)
+  );
+  const el = document.getElementById('cases-container');
+  if (!filtered.length) {
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3)">Không có case nào</div>';
+    return;
+  }
+  const rows = filtered.slice(0, 50).map(c => `
+    <tr style="border-bottom:1px solid var(--border);cursor:pointer" onclick="showCase(${JSON.stringify(esc(c.case_id))})">
+      <td style="padding:10px 12px;font-family:monospace;font-size:12px;color:var(--text3)">${esc(c.case_id)}</td>
+      <td style="padding:10px 12px">${statusBadge(c.status)}</td>
+      <td style="padding:10px 12px">${severityBadge(c.severity)}</td>
+      <td style="padding:10px 12px;color:var(--text2)">${esc(c.attack_type)}</td>
+      <td style="padding:10px 12px;color:var(--accent2);font-family:monospace;font-size:12px">${esc(c.playbook)}</td>
+      <td style="padding:10px 12px;color:var(--text3);font-size:12px;font-family:monospace">${esc(c.source_ip)}</td>
+      <td style="padding:10px 12px;color:var(--text3);font-size:12px">${fmtTs(c.ts)}</td>
+      <td style="padding:10px 12px;white-space:nowrap">
+        ${IS_ADMIN && c.status === 'pending_approval' ?
+          `<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openActionModal('${esc(c.case_id)}')">⚡ Xử lý</button>` : ''}
+        ${IS_ADMIN && (c.status === 'executed' || c.status === 'dry_run') ?
+          `<button class="btn btn-sm" onclick="event.stopPropagation();rollback('${esc(c.case_id)}')">↩ Rollback</button>` : ''}
+      </td>
+    </tr>
+  `).join('');
+  el.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead>
+        <tr style="border-bottom:1px solid var(--border)">
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Case ID</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Status</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Severity</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Attack Type</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Playbook</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Source IP</th>
+          <th style="text-align:left;padding:8px 12px;font-size:11px;color:var(--text3);text-transform:uppercase">Thời gian</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+    ${filtered.length > 50 ? `<div style="text-align:center;padding:8px;color:var(--text3);font-size:12px">Hiển thị 50/${filtered.length} cases</div>` : ''}
+  `;
+}
+
+const _caseMap = {};
+function showCase(caseId) {
+  const c = allCases.find(x => x.case_id === caseId);
+  if (!c) return;
+  _caseMap._current = c;
+  const steps = (c.steps || []).map(s => `
+    <div style="display:flex;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
+      <span style="min-width:90px;color:var(--text3)">${esc(s.phase)}</span>
+      <span class="badge ${s.status==='completed'?'badge-green':s.status==='skipped'?'badge-blue':'badge-red'}">${esc(s.status)}</span>
+      <span style="color:var(--text2);flex:1">${esc(s.action)}</span>
+      <span style="color:var(--text3);font-size:11px">${fmtTs(s.ts)}</span>
+    </div>
+  `).join('');
+  document.getElementById('modal-content').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+      ${[
+        ['Case ID', c.case_id, 'mono'],
+        ['Status', c.status, ''],
+        ['Severity', c.severity, ''],
+        ['Attack Type', c.attack_type, ''],
+        ['Playbook', c.playbook, 'mono'],
+        ['Confidence', Math.round(c.confidence*100)+'%', ''],
+        ['Source IP', c.source_ip||'—', 'mono'],
+        ['Username', c.username||'—', ''],
+        ['Target', c.target_workload||'—', ''],
+        ['Dry Run', c.dry_run?'Yes':'No', ''],
+      ].map(([k,v,cls]) => `
+        <div style="background:var(--surface2);padding:10px 14px;border-radius:8px">
+          <div style="font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:3px">${k}</div>
+          <div class="${cls}" style="color:var(--text);font-size:13px">${esc(String(v))}</div>
+        </div>
+      `).join('')}
+    </div>
+    ${c.action ? `<div style="background:var(--surface2);padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;color:var(--green)">${esc(c.action)}</div>` : ''}
+    ${c.error ? `<div class="alert alert-error">${esc(c.error)}</div>` : ''}
+    ${steps ? `<div style="font-size:12px;font-weight:600;color:var(--text3);text-transform:uppercase;margin-bottom:8px">Playbook Steps</div><div>${steps}</div>` : ''}
+    ${IS_ADMIN && c.status === 'pending_approval' ? `
+      <div style="margin-top:16px;background:var(--surface2);border-radius:8px;padding:14px">
+        <div style="font-size:12px;font-weight:600;color:var(--text3);text-transform:uppercase;margin-bottom:10px">Chọn hành động phản ứng</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px" id="action-btns-${esc(c.case_id)}">
+          ${buildActionButtons(c)}
+        </div>
+      </div>` : ''}
+    ${IS_ADMIN && (c.status === 'executed' || c.status === 'dry_run') ?
+      `<div style="margin-top:16px;text-align:right">
+        <button class="btn btn-danger" onclick="rollback('${esc(c.case_id)}')">↩ Rollback Action</button>
+      </div>` : ''}
+  `;
+  document.getElementById('case-modal').style.display = 'flex';
+}
+
+function closeModal() {
+  document.getElementById('case-modal').style.display = 'none';
+}
+
+async function rollback(caseId) {
+  if (!confirm('Rollback case ' + caseId + '? Thao tác này sẽ khôi phục lại trạng thái trước.')) return;
+  const r = await fetch('/api/soar/cases/' + encodeURIComponent(caseId) + '/rollback', { method: 'POST' });
+  const d = await r.json();
+  if (r.ok) {
+    closeModal();
+    await loadCases();
+  } else {
+    alert('Lỗi rollback: ' + (d.detail || d.error || r.status));
+  }
+}
+
+function buildActionButtons(c) {
+  const playbooks = SUGGESTED_PLAYBOOKS[c.attack_type] || ['block_source_ip', 'monitor_only'];
+  const btnHtml = playbooks.map(pb => {
+    const label = PLAYBOOK_LABELS[pb] || pb;
+    const style = (PLAYBOOK_BTN_STYLE[pb] || '') + ';color:#fff;border:none';
+    return `<button class="btn btn-sm" style="${style}" onclick="executePlaybook('${esc(c.case_id)}','${pb}')">${label}</button>`;
+  });
+  btnHtml.push(`<button class="btn btn-sm" style="background:#9e9e9e;color:#fff;border:none" onclick="denyCase('${esc(c.case_id)}')">❌ Bỏ qua</button>`);
+  return btnHtml.join('');
+}
+
+async function executePlaybook(caseId, playbook) {
+  const label = PLAYBOOK_LABELS[playbook] || playbook;
+  if (!confirm('Thực thi "' + label + '" cho case ' + caseId + '?')) return;
+  const r = await fetch('/api/soar/cases/' + encodeURIComponent(caseId) + '/execute-playbook', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({playbook}),
+  });
+  const d = await r.json();
+  if (r.ok) {
+    closeModal();
+    await loadCases();
+    if (d.status !== 'failed') {
+      alert('✅ Đã thực thi: ' + label + '\nStatus: ' + d.status);
+    } else {
+      alert('⚠️ Thực thi gặp lỗi: ' + (d.error || '?'));
+    }
+  } else {
+    alert('Lỗi: ' + (d.detail || d.error || r.status));
+  }
+}
+
+function openActionModal(caseId) {
+  const c = allCases.find(x => x.case_id === caseId);
+  if (c) showCase(caseId);
+}
+
+async function approveCase(caseId) {
+  const r = await fetch('/api/soar/cases/' + encodeURIComponent(caseId) + '/approve', { method: 'POST' });
+  const d = await r.json();
+  if (r.ok) { closeModal(); await loadCases(); }
+  else alert('Lỗi: ' + (d.detail || d.error || r.status));
+}
+
+async function denyCase(caseId) {
+  if (!confirm('Bỏ qua case ' + caseId + '? Không có hành động nào được thực thi.')) return;
+  const r = await fetch('/api/soar/cases/' + encodeURIComponent(caseId) + '/deny', { method: 'POST' });
+  const d = await r.json();
+  if (r.ok) { closeModal(); await loadCases(); }
+  else alert('Lỗi: ' + (d.detail || d.error || r.status));
+}
+
+async function loadAll() {
+  await Promise.all([loadBlockedIPs(), loadCases()]);
+}
+
+document.getElementById('case-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+loadAll();
+setInterval(loadAll, 30000);
+</script>
+{% endblock %}

@@ -1,0 +1,302 @@
+event_type,message,service,timestamp
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730580.6681128
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730579.9935322
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730579.374388
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730578.7729528
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730578.038854
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730577.2634473
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730576.6833735
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730576.0438466
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730575.2887146
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730574.4136667
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730573.7132905
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730573.0830657
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730572.3377132
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730571.6331801
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730570.95318
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730570.0548737
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730569.193019
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730568.4090157
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730567.7434888
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730566.9373832
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730566.176945
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730566.1607187
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730566.0727718
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730566.0570889
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.9643996
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.8725114
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.7723372
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.7570348
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.6650648
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.577506
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.5618944
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.4739478
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.4583414
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.3650665
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.2771425
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.2614498
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.168489
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730565.066349
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730564.9769974
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730564.961452
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730564.9051893
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730564.0761755
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730564.060847
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.971844
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.956858
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.8630922
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.7719162
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.6685348
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.5786886
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.5626743
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.469464
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.4533105
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.363467
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.2764397
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.2607553
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.170333
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.1538987
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730563.0621655
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730562.961565
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730562.8743026
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730562.8590271
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730562.7838678
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730561.970987
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.9559245
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.8652835
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.7766764
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.7607927
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.6685429
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.5634246
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.4750512
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.4598894
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.3717308
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.3568232
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.2644613
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.1769924
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.1616337
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.0733685
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730561.057745
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730560.9627085
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730560.863328
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730560.779942
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730560.7642407
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730560.748782
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730560.1578882
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730560.0664752
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.9771423
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.9616568
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.8707662
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.8552866
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.7532258
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.66432
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.5758126
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.5601718
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.469321
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.453818
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.3643236
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.2747364
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.259889
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.1706235
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730559.154463
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.9711914
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.9560702
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.873423
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.8583455
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730558.178318
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.1625197
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.0757632
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730558.0589042
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.9658036
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.877685
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.8620272
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.7579577
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.6660962
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.5776858
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.563067
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.4731395
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.458097
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.3663793
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.2774339
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.2621517
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.1723032
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.1566138
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730557.063581
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730556.979052
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730556.9636002
+high_velocity,velocity=10 transactions window=30s from_account=ACC-1001,fraud-detection,1786730554.535817
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730551.969309
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730550.8050003
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730549.6832542
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730548.5804074
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730547.350595
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730546.1194804
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730545.1058104
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730543.7966182
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730542.7145212
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730541.6618886
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730540.6564353
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730539.557615
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730538.5634704
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730537.5591085
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730536.4643166
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730535.3607845
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730534.3578591
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730533.356654
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730532.174868
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730531.2580879
+access_denied,no_jwt payment attempt blocked,web-portal,1786730530.1790707
+access_denied,no_jwt payment attempt blocked,web-portal,1786730529.0710635
+access_denied,no_jwt payment attempt blocked,web-portal,1786730528.0782828
+access_denied,no_jwt payment attempt blocked,web-portal,1786730526.9563332
+access_denied,no_jwt payment attempt blocked,web-portal,1786730525.7613657
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730454.7558746
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730453.9906132
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730453.1911652
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730452.5360165
+cred_stuffing,credential_stuffing multiple_usernames=25 attempts=125 source_ip=203.0.113.55 common_password_attempts=125,web-portal,1786730451.851195
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730451.0763073
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730450.2810209
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730449.5664463
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730448.9065986
+cryptomining,xmrig stratum+tcp://pool.minexmr.com:4444 connected cpu_usage=98pct,web-portal,1786730448.311405
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730447.7314186
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730446.8616197
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730446.1312811
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730445.3930933
+data_exfil,bytes_sent=8388608 method=GET path=/accounts/history source_ip=10.9.8.77,web-portal,1786730444.6962361
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730443.9263594
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730443.156155
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730442.3977127
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730441.6966217
+port_scan,nmap syn scan detected source_ip=10.9.8.99 ports_tried=1024 target=api-gateway,web-portal,1786730441.1019678
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730440.4589686
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.3686228
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.353216
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.2634437
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.1757665
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.160308
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.0705621
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730440.054686
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.87719
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.8618968
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.7732105
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.7577064
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.6651623
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.5781353
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.562701
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.4743254
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.4590194
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.3696926
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.3533638
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.175799
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730439.160531
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730438.3603616
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730438.271833
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730438.257459
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730438.165238
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730438.0776882
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730438.0628502
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.9746032
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.959827
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.8679774
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.7642393
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.6769524
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.662061
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.5725071
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.5578744
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.469896
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.4551778
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.3640301
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.275546
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.260908
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.1686463
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730437.141985
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730436.4622498
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.3740637
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.3591795
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.2706227
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.2561486
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.164078
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.0755885
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730436.0605998
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.9714513
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.956561
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.776924
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.7625613
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.6744702
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.6601353
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.571958
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.5570807
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.4655924
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.3773675
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.362585
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.2727847
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730435.2568524
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730434.4628134
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.3744621
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.359881
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.2724693
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.2577093
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.1706152
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.1549754
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730434.0639234
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.9748518
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.9595294
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.8650393
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.766605
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.677039
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.661566
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.5718436
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.5560777
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.3779635
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.3623772
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.2746296
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.259851
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730433.1988661
+inject_brute_force,brute_force_detected account_locked source_ip=10.9.8.55 attempts=20,api-gateway,1786730432.5643535
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=20 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.4755993
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=19 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.4601266
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=18 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.3682294
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=17 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.3527193
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=16 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.1750467
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=15 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.1593814
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=14 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.0701253
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=13 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730432.05488
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=12 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.9655771
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=11 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.8759584
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=10 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.8600957
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=9 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.7706213
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=8 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.755196
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=7 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.6653497
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=6 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.5644498
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=5 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.477461
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=4 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.46214
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=3 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.37385
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=2 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.3583684
+inject_brute_force,jwt_verification_failed reason=invalid_jwt attempt=1 username=testuser01 source_ip=10.9.8.55,api-gateway,1786730431.294427
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730430.3118804
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730429.1126292
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730427.880216
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730426.5764165
+exploit_probe,sqlmap union select sql_injection from_account payload_anomaly=sql_injection,web-portal,1786730425.3593717
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730424.0936975
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730423.0600994
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730421.9108245
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730420.916736
+fraud_gate_bypass,fraud_block critical_amount channel=tor from=ACC-1001,web-portal,1786730419.8165827
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730418.7581036
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730417.7630477
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730416.5573876
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730415.4656026
+lateral_movement,lateral_movement invalid svid spiffe://evil.corp/attacker,web-portal,1786730414.2655585
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730413.2575505
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730412.1557312
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730411.0565047
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730410.0660481
+access_denied,jwt_forgery attempt invalid signature,web-portal,1786730408.657102
+access_denied,no_jwt payment attempt blocked,web-portal,1786730407.5565677
+access_denied,no_jwt payment attempt blocked,web-portal,1786730406.4583623
+access_denied,no_jwt payment attempt blocked,web-portal,1786730405.3640509
+access_denied,no_jwt payment attempt blocked,web-portal,1786730404.2580037
+access_denied,no_jwt payment attempt blocked,web-portal,1786730403.1824217

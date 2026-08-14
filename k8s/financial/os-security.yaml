@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opa
+  namespace: financial
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opa-config
+  namespace: financial
+data:
+  opa-config.yaml: |
+    plugins:
+      envoy_ext_authz_grpc:
+        addr: :9191
+        path: zta/crosscloud/allow
+
+    decision_logs:
+      console: true
+---
+# opa-policies ConfigMap (cross_cloud.rego, zta_policy.rego, fraud_gate.rego) is
+# created by scripts/deploy-security-stack.sh via `kubectl create configmap
+# --from-file=opa/policies/` BEFORE this file is applied — that is the single
+# source of truth. An embedded copy used to live here too; it went stale
+# (missing a live policy fix from 2026-08-13) because this file is applied
+# AFTER the --from-file step in deploy_financial_services, silently reverting
+# the fix on every full deploy-all.sh run. Do not re-add an embedded copy.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opa-server
+  namespace: financial
+  labels:
+    app: opa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opa
+  template:
+    metadata:
+      labels:
+        app: opa
+      annotations:
+        sidecar.istio.io/inject: "false"  # PDP for ext_authz, called by other sidecars' filters directly — not in migration scope
+    spec:
+      serviceAccountName: opa
+      containers:
+        - name: opa
+          image: openpolicyagent/opa:latest-envoy
+          args:
+            - "run"
+            - "--server"
+            - "--addr=0.0.0.0:8181"
+            - "--config-file=/etc/opa/opa-config.yaml"
+            - "--ignore=.*"
+            - "/policies"
+          ports:
+            - name: http
+              containerPort: 8181
+            - name: grpc-authz
+              containerPort: 9191
+          volumeMounts:
+            - name: opa-config
+              mountPath: /etc/opa
+              readOnly: true
+            - name: opa-policies
+              mountPath: /policies
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: opa-config
+          configMap:
+            name: opa-config
+        - name: opa-policies
+          configMap:
+            name: opa-policies
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opa-service
+  namespace: financial
+  labels:
+    app: opa
+spec:
+  type: ClusterIP
+  selector:
+    app: opa
+  ports:
+    - name: http
+      port: 8181
+      targetPort: 8181
+    - name: grpc-authz
+      port: 9191
+      targetPort: 9191
+# envoy-config ConfigMap used to be embedded here too — an incomplete,
+# stale copy missing outbound_listener/cross-service STATIC clusters/the
+# failure_mode_allow: false assertion that the real, currently-relied-upon
+# config (envoy/configmap.yaml, applied to BOTH clusters by
+# scripts/deploy-security-stack.sh's deploy_step_5_envoy) already has.
+# Deleted so there is exactly one source of truth for both clouds — do not
+# re-add an embedded copy here.

@@ -1,0 +1,34 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: soar-engine
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: soar-action-log-alert
+        title: "SOAR Engine — Health Check (Action Recorded)"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'count_over_time({job="soar-engine"} |= "soar_action" [10m])'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: OK
+        annotations:
+          summary: "SOAR Engine đang ghi nhận và thực thi action"
+          description: "Informational alert — xác nhận SOAR Engine hoạt động và đang xử lý events."
+        labels:
+          severity: info
+          category: health

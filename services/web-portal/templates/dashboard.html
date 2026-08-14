@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}Tổng quan — ZTLab Banking{% endblock %}
+{% block page_title %}Tổng quan{% endblock %}
+
+{% block content %}
+{% if new_device_alert %}
+<div class="alert {% if new_device_alert == 'suspicious' %}alert-error{% else %}alert-info{% endif %}" style="margin-bottom:16px">
+  {% if new_device_alert == 'suspicious' %}
+  ⚠ <div><strong>Đăng nhập từ thiết bị/nguồn bất thường.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay và liên hệ hỗ trợ.</div>
+  {% else %}
+  🔔 <div><strong>Đăng nhập từ thiết bị mới.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay. Thiết bị này sẽ được ghi nhớ cho lần sau — xem tại <a href="/profile">Hồ sơ &amp; Thiết bị</a>.</div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div style="margin-bottom:20px">
+  <div style="font-size:20px;font-weight:700">Xin chào, {{ full_name or username }}</div>
+  <div style="font-size:13px;color:var(--text3);margin-top:4px">
+    <span id="today-date"></span>
+    {% if 'security-admin' in roles %}
+    · <span class="badge badge-purple" style="font-size:11px">Admin</span>
+    {% endif %}
+  </div>
+</div>
+
+<div class="grid grid-2" style="margin-bottom:20px;align-items:start">
+  <!-- Bank card hero -->
+  <div class="bank-card">
+    <div class="bank-card-chip">💳</div>
+    <div class="bank-card-number" id="bc-account">ACC-••••</div>
+    <div class="bank-card-balance" id="bc-balance">—</div>
+    <div class="bank-card-footer">
+      <div>
+        <div class="bank-card-owner">Chủ tài khoản</div>
+        <div class="bank-card-name">{{ full_name or username }}</div>
+      </div>
+      <div class="bank-card-logo">ZTLab Bank</div>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="card" style="height:100%">
+    <div class="card-title" style="margin-bottom:14px">Thao tác nhanh</div>
+    <div class="grid grid-2" style="gap:10px">
+      <a href="/transfer" class="btn btn-primary" style="justify-content:center;padding:14px">↗ Chuyển tiền</a>
+      <button onclick="loadTransactions()" class="btn" style="justify-content:center;padding:14px">↺ Lịch sử GD</button>
+      <a href="/profile" class="btn" style="justify-content:center;padding:14px">◐ Hồ sơ</a>
+      <a href="/profile" class="btn" style="justify-content:center;padding:14px">📱 Thiết bị</a>
+    </div>
+    <hr class="divider">
+    <div style="display:flex;justify-content:space-between;font-size:12px">
+      <span class="text-muted">Thiết bị hiện tại</span>
+      <span>
+        {% if device_trust == 'trusted' %}<span class="badge badge-green">✓ Đã tin cậy</span>
+        {% elif device_trust == 'new_device' %}<span class="badge badge-yellow">🆕 Mới</span>
+        {% else %}<span class="badge badge-red">⚠ Bất thường</span>{% endif %}
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- Stats row -->
+<div class="grid grid-3" style="margin-bottom:20px">
+  <div class="stat-card">
+    <div class="stat-label">Giao dịch hôm nay</div>
+    <div class="stat-value" id="txn-today">—</div>
+    <div class="stat-sub">Trong 24 giờ qua</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Gửi đi (7 ngày)</div>
+    <div class="stat-value amount-negative" id="sent-7d" style="font-size:18px">—</div>
+    <div class="stat-sub">Tổng giao dịch gửi</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Số tài khoản</div>
+    <div class="stat-value" id="account-count-stat" style="font-size:18px">—</div>
+    <div class="stat-sub">Đang hoạt động</div>
+  </div>
+</div>
+
+<!-- Transactions table -->
+<div class="card" style="margin-bottom:20px">
+  <div class="card-header">
+    <div class="card-title">Giao dịch gần đây</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <div class="loading" id="txn-loading" style="display:none"><div class="spinner"></div></div>
+      <button onclick="loadTransactions()" class="btn btn-sm">↺ Làm mới</button>
+      <a href="/transfer" class="btn btn-primary btn-sm">+ Chuyển tiền</a>
+    </div>
+  </div>
+  <div id="txn-container">
+    <div class="loading" style="padding:20px"><div class="spinner"></div> Đang tải giao dịch...</div>
+  </div>
+</div>
+
+<!-- Trust footer strip -->
+<div class="card" style="padding:14px 20px">
+  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">
+      Giao dịch của bạn được bảo vệ bởi
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <span class="badge badge-blue" title="Xác thực danh tính qua Keycloak OIDC/PKCE">🔑 Xác thực đa lớp</span>
+      <span class="badge badge-purple" title="Mọi request được OPA kiểm tra chính sách trước khi xử lý">🛡 Kiểm soát truy cập</span>
+      <span class="badge badge-cyan" title="Kênh truyền giữa các dịch vụ được mã hoá mTLS qua SPIRE">🔒 Mã hoá nội bộ</span>
+      <span class="badge badge-green" title="Mỗi giao dịch được chấm điểm rủi ro gian lận theo thời gian thực">📊 Chống gian lận</span>
+      <span class="badge badge-yellow" title="Thiết bị đăng nhập được ghi nhớ, thiết bị lạ sẽ được đánh giá rủi ro cao hơn">📱 Tin cậy thiết bị</span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const currentUser = {{ username | tojson }};
+let myAccounts = [];
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtVND(n) {
+  return parseFloat(n).toLocaleString('vi-VN') + ' ₫';
+}
+function fmtDate(ts) {
+  return new Date(ts * 1000).toLocaleString('vi-VN', {
+    day:'2-digit', month:'2-digit', year:'numeric',
+    hour:'2-digit', minute:'2-digit',
+  });
+}
+
+document.getElementById('today-date').textContent = new Date().toLocaleDateString('vi-VN', {
+  weekday:'long', day:'numeric', month:'long', year:'numeric',
+});
+
+async function loadAccounts() {
+  try {
+    const r = await fetch('/api/account/me');
+    const d = await r.json();
+    myAccounts = d.accounts || [];
+
+    if (!myAccounts.length) {
+      document.getElementById('bc-account').textContent = 'Chưa có tài khoản';
+      document.getElementById('bc-balance').textContent = '0 ₫';
+      document.getElementById('account-count-stat').textContent = '0';
+      return;
+    }
+
+    const totalBalance = myAccounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
+    document.getElementById('bc-account').textContent = myAccounts[0].account_id;
+    document.getElementById('bc-balance').textContent = fmtVND(totalBalance);
+    document.getElementById('account-count-stat').textContent = myAccounts.length;
+
+    loadTransactions();
+  } catch(e) {
+    document.getElementById('bc-balance').textContent = 'Lỗi kết nối';
+  }
+}
+
+async function loadTransactions() {
+  document.getElementById('txn-loading').style.display = 'flex';
+  try {
+    const accountIds = myAccounts.map(a => a.account_id);
+    if (!accountIds.length) {
+      document.getElementById('txn-container').innerHTML =
+        '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Chưa có tài khoản</div>';
+      document.getElementById('txn-loading').style.display = 'none';
+      return;
+    }
+
+    // Fetch transactions for first account (main one), show all involving any of user's accounts
+    const primaryId = accountIds[0];
+    const r = await fetch(`/api/transactions?account_id=${encodeURIComponent(primaryId)}&limit=30`);
+    let txns = await r.json();
+    if (!Array.isArray(txns)) txns = [];
+
+    // Also fetch for other accounts if multiple
+    if (accountIds.length > 1) {
+      for (const aid of accountIds.slice(1)) {
+        try {
+          const r2 = await fetch(`/api/transactions?account_id=${encodeURIComponent(aid)}&limit=20`);
+          const more = await r2.json();
+          if (Array.isArray(more)) {
+            for (const t of more) {
+              if (!txns.find(x => x.transaction_id === t.transaction_id)) txns.push(t);
+            }
+          }
+        } catch(_) {}
+      }
+      txns.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+      txns = txns.slice(0, 30);
+    }
+
+    const accountIdSet = new Set(accountIds);
+    const today = new Date().toDateString();
+    const todayTxns = txns.filter(t => new Date((t.created_at||0)*1000).toDateString() === today);
+    document.getElementById('txn-today').textContent = todayTxns.length;
+
+    const cutoff7d = Date.now()/1000 - 7*86400;
+    const sent7d = txns.filter(t => accountIdSet.has(t.from_account) && t.created_at >= cutoff7d)
+                       .reduce((s, t) => s + parseFloat(t.amount||0), 0);
+    document.getElementById('sent-7d').textContent = fmtVND(sent7d);
+
+    if (!txns.length) {
+      document.getElementById('txn-container').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Chưa có giao dịch nào</div>';
+      document.getElementById('txn-loading').style.display = 'none';
+      return;
+    }
+
+    const rows = txns.map(t => {
+      const isOut = accountIdSet.has(t.from_account);
+      const sign = isOut ? '−' : '+';
+      const cls = isOut ? 'amount-negative' : 'amount-positive';
+      const partner = esc(isOut ? t.to_account : t.from_account);
+      const dir = isOut ? '↑ Gửi' : '↓ Nhận';
+      const dirColor = isOut ? 'var(--red)' : 'var(--green)';
+      const statusBadge = t.status === 'completed'
+        ? '<span class="badge badge-green">Hoàn thành</span>'
+        : `<span class="badge badge-yellow">${esc(t.status)}</span>`;
+      return `<tr>
+        <td style="color:var(--text3);font-size:12px">${esc(fmtDate(t.created_at||0))}</td>
+        <td><span style="color:${dirColor};font-size:12px;font-weight:600">${dir}</span></td>
+        <td class="mono" style="font-size:12px">${esc(isOut ? t.from_account : t.to_account)}</td>
+        <td class="mono" style="font-size:12px;color:var(--text2)">${partner}</td>
+        <td class="${cls}">${sign}${fmtVND(t.amount)}</td>
+        <td>${statusBadge}</td>
+        <td style="font-size:11px;color:var(--text3)" class="mono">${esc((t.trace_id||'').slice(0,12) || '—')}</td>
+      </tr>`;
+    }).join('');
+
+    document.getElementById('txn-container').innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Thời gian</th><th>Loại</th><th>Từ</th><th>Đến</th>
+            <th>Số tiền</th><th>Trạng thái</th><th>Trace ID</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  } catch(e) {
+    document.getElementById('txn-container').innerHTML =
+      '<div class="alert alert-error" style="margin:12px">Lỗi kết nối dịch vụ</div>';
+  }
+  document.getElementById('txn-loading').style.display = 'none';
+}
+
+loadAccounts();
+setInterval(() => { if (myAccounts.length) loadTransactions(); }, 30000);
+</script>
+{% endblock %}

@@ -1,0 +1,393 @@
+# NOTE: This file is for SINGLE-CLUSTER local testing only.
+# In the real multi-cloud deployment (deploy-all.sh), these services run on OpenStack:
+#   - core-banking, account-service, transaction-service → apply os-services.yaml on ctx-openstack
+# Do NOT apply this file to the production AWS cluster.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: core-banking
+  namespace: financial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: account-service
+  namespace: financial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: transaction-service
+  namespace: financial
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core-banking
+  namespace: financial
+  labels:
+    app: core-banking
+    cloud: aws
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core-banking
+  template:
+    metadata:
+      labels:
+        app: core-banking
+        cloud: aws
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
+    spec:
+      serviceAccountName: core-banking
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+      containers:
+        - name: core-banking
+          image: ztlab/core-banking:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: CLOUD_PROVIDER
+              value: "aws"
+            - name: MAX_ALLOWED_FRAUD_SCORE
+              value: "74"
+            - name: ACCOUNT_SERVICE_URL
+              value: "http://account-service.financial.svc.cluster.local:8080"
+            - name: TRANSACTION_SERVICE_URL
+              value: "http://transaction-service.financial.svc.cluster.local:8080"
+            - name: CORE_BANKING_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: core-banking-integrity-secret
+                  key: shared-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/core-banking"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: core-banking
+  namespace: financial
+spec:
+  type: ClusterIP
+  selector:
+    app: core-banking
+  ports:
+    - name: envoy-inbound
+      port: 15006
+      targetPort: 15006
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  namespace: financial
+  labels:
+    app: account-service
+    cloud: aws
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-service
+  template:
+    metadata:
+      labels:
+        app: account-service
+        cloud: aws
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
+    spec:
+      serviceAccountName: account-service
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+      containers:
+        - name: account-service
+          image: ztlab/account-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "until python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('postgres-accounts.financial.svc.cluster.local', 5432)); s.close()\" 2>/dev/null; do echo 'waiting for postgres-accounts...'; sleep 2; done && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: financial-common-config
+                optional: true
+          env:
+            - name: CLOUD_PROVIDER
+              value: "aws"
+            - name: ACCOUNTS_DB_HOST
+              value: "postgres-accounts.financial.svc.cluster.local"
+            - name: ACCOUNTS_DB_PORT
+              value: "5432"
+            - name: ACCOUNTS_DB_NAME
+              value: "accounts_db"
+            - name: ACCOUNTS_DB_USER
+              value: "accounts_user"
+            - name: ACCOUNTS_DB_PASS
+              value: "accounts_pass"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/account-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service
+  namespace: financial
+spec:
+  type: ClusterIP
+  selector:
+    app: account-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: envoy-inbound
+      port: 15006
+      targetPort: 15006
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  namespace: financial
+  labels:
+    app: transaction-service
+    cloud: aws
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-service
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+        cloud: aws
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
+    spec:
+      serviceAccountName: transaction-service
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+      containers:
+        - name: transaction-service
+          image: ztlab/transaction-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "until python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('postgres-txn.financial.svc.cluster.local', 5432)); s.close()\" 2>/dev/null; do echo 'waiting for postgres-txn...'; sleep 2; done && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: CLOUD_PROVIDER
+              value: "aws"
+            - name: TXN_DB_HOST
+              value: "postgres-txn.financial.svc.cluster.local"
+            - name: TXN_DB_PORT
+              value: "5432"
+            - name: TXN_DB_NAME
+              value: "transactions_db"
+            - name: TXN_DB_USER
+              value: "txn_user"
+            - name: TXN_DB_PASS
+              value: "txn_pass"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/transaction-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  namespace: financial
+spec:
+  type: ClusterIP
+  selector:
+    app: transaction-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: envoy-inbound
+      port: 15006
+      targetPort: 15006

@@ -1,0 +1,76 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: security-scanner
+  namespace: financial
+  labels:
+    app: security-scanner
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        app: security-scanner
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: security-scanner
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "-c"]
+          args:
+            - |
+              import os, json, time, sys
+
+              def cap_names(cap_hex):
+                  try:
+                      caps = int(cap_hex, 16)
+                      known = {0:"CHOWN",1:"DAC_OVERRIDE",3:"FOWNER",4:"FSETID",
+                               6:"SETGID",7:"SETUID",10:"NET_BIND_SERVICE",
+                               13:"NET_RAW",21:"SYS_ADMIN",29:"AUDIT_WRITE"}
+                      return [v for k,v in known.items() if caps & (1 << k)]
+                  except Exception:
+                      return []
+
+              uid = os.getuid()
+              gid = os.getgid()
+              cap_eff = "0"
+              try:
+                  with open("/proc/1/status") as f:
+                      for line in f:
+                          if line.startswith("CapEff:"):
+                              cap_eff = line.split()[1].strip()
+                              break
+              except Exception:
+                  pass
+
+              shadow_readable = False
+              try:
+                  with open("/etc/shadow") as f:
+                      f.read(1)
+                  shadow_readable = True
+              except Exception:
+                  pass
+
+              dangerous = cap_names(cap_eff)
+              violation = uid == 0 or shadow_readable or bool(dangerous)
+
+              record = {
+                  "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                  "level": "AUDIT",
+                  "service": "security-scanner",
+                  "cloud": "aws",
+                  "event": "privilege_escalation" if violation else "security_check_passed",
+                  "uid": uid,
+                  "gid": gid,
+                  "cap_eff": cap_eff,
+                  "dangerous_capabilities": dangerous,
+                  "shadow_readable": shadow_readable,
+                  "violation": violation,
+                  "detail": (
+                      "container running as root uid=0 with dangerous capabilities — "
+                      "violates Zero Trust least-privilege principle"
+                      if violation else "ok"
+                  )
+              }
+              print(json.dumps(record), flush=True)

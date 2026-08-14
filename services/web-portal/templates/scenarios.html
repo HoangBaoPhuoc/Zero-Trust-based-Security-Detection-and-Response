@@ -1,0 +1,315 @@
+{% extends "base.html" %}
+{% block title %}Painpoint Demo — ZTLab{% endblock %}
+{% block page_title %}Painpoint Demo — Zero Trust đang giải quyết gì{% endblock %}
+
+{% block head %}
+<style>
+  .scenario-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .scenario-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; transition: border-color .2s, box-shadow .2s; box-shadow: var(--shadow-sm); }
+  .scenario-card.running { border-color: var(--yellow); box-shadow: 0 0 0 3px var(--yellow-soft); }
+  .scenario-card.success { border-color: var(--green); }
+  .scenario-card.blocked { border-color: var(--red); }
+  .scenario-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 8px; gap: 8px; }
+  .scenario-title { font-size: 14px; font-weight: 700; }
+  .scenario-desc { font-size: 12.5px; color: var(--text2); margin-bottom: 10px; line-height: 1.55; }
+  .tag-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .mitre-tag { font-size: 10px; font-family: monospace; padding: 2px 6px; background: var(--purple-soft); color: var(--purple); border: 1px solid #ddd3fb; border-radius: 4px; white-space: nowrap; flex-shrink: 0; font-weight: 700; }
+  .layer-tag { font-size: 10px; padding: 2px 7px; border-radius: 4px; font-weight: 700; white-space: nowrap; }
+  .layer-identity  { background: var(--accent-soft); color: var(--accent2); }
+  .layer-authz     { background: var(--purple-soft); color: var(--purple); }
+  .layer-mtls      { background: var(--cyan-soft); color: var(--cyan); }
+  .layer-fraud     { background: var(--yellow-soft); color: var(--yellow); }
+  .layer-detect    { background: var(--green-soft); color: var(--green); }
+  .expected-tag { font-size: 11px; color: var(--text3); margin-bottom: 10px; display: block; line-height: 1.5; }
+  .expected-tag b { color: var(--text2); }
+  .result-box { margin-top: 10px; padding: 10px; background: var(--surface2); border-radius: 8px; border: 1px solid var(--border); font-family: monospace; font-size: 11px; max-height: 180px; overflow-y: auto; display: none; line-height: 1.6; }
+  .result-ok { color: var(--green); }
+  .result-block { color: var(--red); }
+  .result-info { color: var(--accent2); }
+  .group-intro { font-size: 13px; color: var(--text2); line-height: 1.6; margin-bottom: 14px; max-width: 760px; }
+  .section-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; color: var(--text); margin: 26px 0 4px; padding-bottom: 8px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .section-title:first-of-type { margin-top: 0; }
+  .run-btn { width: 100%; margin-top: 8px; justify-content: center; font-size: 13px; }
+  .run-btn:disabled { opacity: .5; cursor: not-allowed; }
+  .velocity-results { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+  .v-chip { font-size: 11px; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+  .v-allow { background: var(--green-soft); color: var(--green); border: 1px solid #bbf0cf; }
+  .v-block { background: var(--red-soft); color: var(--red); border: 1px solid #fecaca; }
+</style>
+{% endblock %}
+
+{% block content %}
+
+<div class="card" style="margin-bottom:24px;background:linear-gradient(135deg,#eff4ff,#f5f3ff);border-color:#c7dbfc">
+  <div style="font-size:15px;font-weight:700;margin-bottom:6px">⚡ Đây là nơi chứng minh Zero Trust hoạt động thật</div>
+  <div style="font-size:13px;color:var(--text2);line-height:1.6;max-width:820px">
+    Mỗi thẻ bên dưới mô phỏng <strong>1 kỹ thuật tấn công thật</strong> (ánh xạ MITRE ATT&amp;CK), nhắm đúng vào
+    1 lớp phòng thủ cụ thể trong kiến trúc. Nhấn "Chạy kịch bản" để gửi request thật tới hệ thống — kết quả trả về
+    trực tiếp từ Keycloak / OPA / SPIRE / Fraud Detection, không phải dữ liệu giả lập.
+  </div>
+</div>
+
+<!-- ── Nhóm 1: Zero Trust enforcement ────────────── -->
+<div class="section-title">🛡 Painpoint: Danh tính &amp; quyền truy cập giả mạo <span style="font-weight:400;color:var(--text3);text-transform:none;letter-spacing:0">— mong đợi: BỊ CHẶN</span></div>
+<div class="group-intro">
+  Kiến trúc truyền thống thường tin tưởng bất kỳ ai đã ở "bên trong mạng nội bộ". 4 kịch bản dưới đây giả lập kẻ tấn công
+  đã có quyền truy cập mạng nhưng KHÔNG có danh tính hợp lệ — Zero Trust không tin ai theo mặc định, kể cả khi đã ở trong VPC.
+</div>
+<div class="scenario-grid">
+
+  <div class="scenario-card" id="card-no-jwt">
+    <div class="scenario-header">
+      <span class="scenario-title">Không có JWT</span>
+      <span class="mitre-tag">T1078</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-identity">🔑 Lớp: Keycloak / API Gateway</span></div>
+    <div class="scenario-desc">Gọi POST /payments không có Authorization header. API Gateway chặn ngay — Envoy log ghi lại trong Loki.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> HTTP 401/403 — missing bearer token</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('no_jwt')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-no-jwt"></div>
+  </div>
+
+  <div class="scenario-card" id="card-jwt-forgery">
+    <div class="scenario-header">
+      <span class="scenario-title">JWT giả mạo (ký sai key)</span>
+      <span class="mitre-tag">T1078.001</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-identity">🔑 Lớp: Keycloak JWKS verify</span></div>
+    <div class="scenario-desc">Gửi JWT ký bằng key không phải Keycloak. API Gateway verify JWKS — signature không khớp → reject.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> HTTP 401 – invalid_signature</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('jwt_forgery')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-jwt-forgery"></div>
+  </div>
+
+  <div class="scenario-card" id="card-lateral-movement">
+    <div class="scenario-header">
+      <span class="scenario-title">Lateral Movement — SVID giả</span>
+      <span class="mitre-tag">T1021</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-mtls">🔒 Lớp: SPIRE mTLS + OPA</span></div>
+    <div class="scenario-desc">Gọi endpoint nội bộ với SVID giả <code>spiffe://evil.corp/attacker</code> → bị chặn. OPA log ghi lại — kích hoạt Grafana alert "Lateral Movement".</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> HTTP 403/404 — internal path blocked</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('lateral_movement')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-lateral-movement"></div>
+  </div>
+
+  <div class="scenario-card" id="card-fraud-gate">
+    <div class="scenario-header">
+      <span class="scenario-title">Fraud Gate Block</span>
+      <span class="mitre-tag">T1078.002</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-fraud">💰 Lớp: Fraud Detection + OPA</span></div>
+    <div class="scenario-desc">Chuyển 500,000,000 ₫ qua kênh <code>tor</code>. Fraud score=75 (500M: +55, tor: +15) → OPA từ chối → Grafana alert "Fraud Gate Bypass".</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> HTTP 403 – fraud_block</span>
+    <button class="btn btn-danger run-btn" onclick="runScenario('fraud_gate')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-fraud-gate"></div>
+  </div>
+
+</div>
+
+<!-- ── Nhóm 2: Velocity & Rate Limit ─────────────────────────────────── -->
+<div class="section-title">⏱ Painpoint: Lạm dụng tốc độ giao dịch <span style="font-weight:400;color:var(--text3);text-transform:none;letter-spacing:0">— velocity &amp; rate limit</span></div>
+<div class="group-intro">
+  Một request đơn lẻ hợp lệ có thể vô hại — nhưng 100 request hợp lệ liên tiếp trong 1 phút thì không. Đây là kiểu tấn công
+  mà kiểm tra danh tính đơn thuần không bắt được, cần theo dõi hành vi theo thời gian.
+</div>
+<div class="scenario-grid">
+
+  <div class="scenario-card" id="card-high-velocity">
+    <div class="scenario-header">
+      <span class="scenario-title">High Velocity (10 tx/15s)</span>
+      <span class="mitre-tag">T1499</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-fraud">💰 Lớp: Redis velocity counter</span></div>
+    <div class="scenario-desc">Gửi 10 giao dịch nhỏ liên tiếp. Redis đếm velocity trong 60s — fraud score tăng dần theo từng batch.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> score tăng dần, giao dịch cuối score &gt; 30</span>
+    <button class="btn run-btn" style="border-color:var(--yellow);color:var(--yellow)" onclick="runScenario('high_velocity')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-high-velocity"></div>
+  </div>
+
+  <div class="scenario-card" id="card-rate-limit">
+    <div class="scenario-header">
+      <span class="scenario-title">Rate Limit (65 req/min)</span>
+      <span class="mitre-tag">T1498</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-identity">🔑 Lớp: API Gateway rate limiter</span></div>
+    <div class="scenario-desc">Gửi 65 GET /health liên tiếp đến API Gateway. Giới hạn 60 req/min/IP — vượt ngưỡng bị block.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> req 61+ → HTTP 429 Too Many Requests</span>
+    <button class="btn run-btn" style="border-color:var(--yellow);color:var(--yellow)" onclick="runScenario('rate_limit')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-rate-limit"></div>
+  </div>
+
+</div>
+
+<!-- ── Nhóm 3: Loki Log Injection ─────────────────────────────────── -->
+<div class="section-title">📊 Painpoint: Phát hiện &amp; cảnh báo <span style="font-weight:400;color:var(--text3);text-transform:none;letter-spacing:0">— detection pipeline (PLG stack)</span></div>
+<div class="group-intro">
+  Chặn được request là chưa đủ — đội vận hành cần BIẾT ngay khi có bất thường. Các kịch bản dưới đây bơm log tấn công thật
+  vào Loki để kiểm chứng Grafana alert rule có bắt đúng và bắt kịp thời gian hay không.
+</div>
+<div class="scenario-grid">
+
+  <div class="scenario-card" id="card-inject-brute-force">
+    <div class="scenario-header">
+      <span class="scenario-title">Brute Force Login (inject)</span>
+      <span class="mitre-tag">T1110.001</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-detect">📊 Lớp: Grafana Alert Rule</span></div>
+    <div class="scenario-desc">Inject 20 log response_code=401 vào Loki stream <code>{job="envoy-access"}</code>. Grafana alert rule đánh giá mỗi 1 phút → fire ngay.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> Grafana alert "Brute Force Login" → Firing trong ~1 phút</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_brute_force')">▶ Inject vào Loki</button>
+    <div class="result-box" id="result-inject-brute-force"></div>
+  </div>
+
+  <div class="scenario-card" id="card-inject-port-scan">
+    <div class="scenario-header">
+      <span class="scenario-title">Port Scan (inject)</span>
+      <span class="mitre-tag">T1046</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-detect">📊 Lớp: Loki log stream</span></div>
+    <div class="scenario-desc">Inject log "nmap SYN scan 1024 ports" vào Loki stream <code>{job="security-events"}</code>. Quan sát trong Grafana Explore.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> log visible in Grafana Explore → {job="security-events"}</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_port_scan')">▶ Inject vào Loki</button>
+    <div class="result-box" id="result-inject-port-scan"></div>
+  </div>
+
+  <div class="scenario-card" id="card-inject-exfiltration">
+    <div class="scenario-header">
+      <span class="scenario-title">Data Exfiltration (inject)</span>
+      <span class="mitre-tag">T1041</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-detect">📊 Lớp: Grafana Alert Rule</span></div>
+    <div class="scenario-desc">Inject log bytes_sent=8MB vào Loki stream <code>{job="envoy-access", cloud="openstack"}</code>. Grafana alert rule phát hiện ngay.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> Grafana alert "Data Exfiltration Suspect" → Firing trong ~1 phút</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_exfiltration')">▶ Inject vào Loki</button>
+    <div class="result-box" id="result-inject-exfiltration"></div>
+  </div>
+
+  <div class="scenario-card" id="card-inject-cryptomining">
+    <div class="scenario-header">
+      <span class="scenario-title">Cryptomining (inject)</span>
+      <span class="mitre-tag">T1496</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-detect">📊 Lớp: Loki log stream</span></div>
+    <div class="scenario-desc">Inject log "xmrig mining pool connected" vào Loki stream <code>{job="security-events"}</code>. Quan sát trong Grafana Explore.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> log visible in Grafana Explore → {job="security-events"}</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cryptomining')">▶ Inject vào Loki</button>
+    <div class="result-box" id="result-inject-cryptomining"></div>
+  </div>
+
+  <div class="scenario-card" id="card-sqli-probe">
+    <div class="scenario-header">
+      <span class="scenario-title">SQL Injection probe</span>
+      <span class="mitre-tag">T1190</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-identity">🔑 Lớp: Input validation (Pydantic)</span></div>
+    <div class="scenario-desc">Gửi payload SQL injection thật <code>' OR '1'='1</code>. FastAPI/Pydantic validation reject input — backend không bị ảnh hưởng.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> HTTP 422 Unprocessable Entity (input validation)</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('sqli_probe')">▶ Chạy kịch bản</button>
+    <div class="result-box" id="result-sqli-probe"></div>
+  </div>
+
+  <div class="scenario-card" id="card-inject-cred-stuffing">
+    <div class="scenario-header">
+      <span class="scenario-title">Credential Stuffing (inject)</span>
+      <span class="mitre-tag">T1078.001</span>
+    </div>
+    <div class="tag-row"><span class="layer-tag layer-detect">📊 Lớp: Loki log stream</span></div>
+    <div class="scenario-desc">Inject log "25 username × 5 password = 125 lần" vào Loki stream <code>{job="security-events"}</code>. Quan sát trong Grafana Explore.</div>
+    <span class="expected-tag"><b>Kỳ vọng:</b> log visible in Grafana Explore → {job="security-events"}</span>
+    <button class="btn btn-primary run-btn" onclick="runScenario('inject_cred_stuffing')">▶ Inject vào Loki</button>
+    <div class="result-box" id="result-inject-cred-stuffing"></div>
+  </div>
+
+</div>
+
+<!-- Quick links -->
+<div class="section-title">🔗 Liên kết nhanh</div>
+<div style="display:flex;gap:10px;flex-wrap:wrap">
+  <a href="http://grafana.ztlab.local:8080/d/ztlab-security-v2" target="_blank" class="btn btn-primary">📊 Grafana Security Dashboard</a>
+  <a href="/security" class="btn">⛨ Xem SOAR Response cho các case này</a>
+  <a href="/transfer" class="btn">↗ Chuyển tiền bình thường</a>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function runScenario(scenarioId) {
+  const domId = scenarioId.replace(/_/g, '-');
+  const card = document.getElementById('card-' + domId);
+  const resultBox = document.getElementById('result-' + domId);
+  const btn = card ? card.querySelector('button') : null;
+
+  if (card) card.className = card.className.replace(/running|success|blocked/g,'').trim() + ' running';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang chạy...'; }
+  if (resultBox) { resultBox.style.display='block'; resultBox.innerHTML='<span style="color:var(--yellow)">Đang gửi request...</span>'; }
+
+  try {
+    const resp = await fetch('/api/scenarios/' + scenarioId + '/run', {method:'POST'});
+    const data = await resp.json();
+    renderResult(scenarioId, data, card, resultBox);
+  } catch(e) {
+    if (resultBox) resultBox.innerHTML = '<span class="result-block">Lỗi kết nối: ' + e.message + '</span>';
+    if (card) card.className = card.className.replace('running','blocked');
+  } finally {
+    if (btn) { btn.disabled=false; btn.textContent = btn.textContent.includes('Inject') ? '▶ Inject lại' : '▶ Chạy lại'; }
+  }
+}
+
+function fmtJson(obj) {
+  const escaped = JSON.stringify(obj, null, 2)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return escaped
+    .replace(/"score": (\d+)/g, (m,n) => `"score": <span style="color:${n>=70?'var(--red)':n>=40?'var(--yellow)':'var(--green)'}"><b>${n}</b></span>`)
+    .replace(/"gate": "blocked"/g, '"gate": <span class="result-block"><b>"blocked"</b></span>')
+    .replace(/"gate": "passed"/g, '"gate": <span class="result-ok"><b>"passed"</b></span>')
+    .replace(/"status": "completed"/g, '"status": <span class="result-ok">"completed"</span>');
+}
+
+function renderResult(id, data, card, box) {
+  if (!box) return;
+
+  if (id === 'high_velocity' && data.results) {
+    const chips = data.results.map(r => {
+      const cls = r.gate==='blocked'||r.status_code===403 ? 'v-block' : 'v-allow';
+      return `<span class="v-chip ${cls}">#${r.attempt} s=${r.fraud_score} ${r.gate||r.status_code}</span>`;
+    }).join('');
+    box.innerHTML = '<div class="velocity-results">' + chips + '</div>';
+    if (card) card.className = card.className.replace('running','success');
+    return;
+  }
+
+  if (id === 'rate_limit' && data.results) {
+    const blocked = data.results.filter(r=>r.status_code===429).length;
+    const allowed = data.results.filter(r=>r.status_code!==429).length;
+    box.innerHTML = `<span class="result-ok">✓ Allowed: ${allowed}</span>  <span class="result-block">✗ Rate-limited: ${blocked}</span>\n` +
+      data.results.slice(-6).map(r=>`<span class="${r.status_code===429?'result-block':'result-ok'}">#${r.req}→${r.status_code}</span>`).join(' ');
+    if (card) card.className = card.className.replace('running', blocked>0?'blocked':'success');
+    return;
+  }
+
+  const sc = data.status_code;
+  const isBlocked = sc >= 400;
+  if (card) card.className = card.className.replace('running', isBlocked?'blocked':'success');
+
+  let html = '';
+  if (sc) {
+    const color = sc>=400?'var(--red)':'var(--green)';
+    html += `<span style="color:${color};font-weight:bold">HTTP ${sc}</span>  `;
+  }
+  if (data.expected) {
+    html += `<span style="color:var(--text3)">← ${String(data.expected).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</span>\n\n`;
+  }
+  if (data.result === 'injected') {
+    html += `<span class="result-ok">✓ ${data.events||1} log đã inject vào Loki\n→ Kiểm tra Grafana Alerting hoặc Explore</span>`;
+  } else {
+    const payload = data.result || data;
+    html += '<pre>' + fmtJson(payload) + '</pre>';
+  }
+
+  box.innerHTML = html;
+}
+
+</script>
+{% endblock %}

@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: ztlab
+    orgId: 1
+    folder: ZTLab
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

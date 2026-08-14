@@ -1,0 +1,93 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-financial-allow-baseline
+  namespace: financial
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Intra-cluster: OS services talk to each other
+    # 15006=Envoy mTLS, 8080=app HTTP, 9191=OPA gRPC, 5432=postgres, 6379=redis
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    # Cross-cloud: AWS K3s nodes and pod subnets (via MASQUERADE on workers)
+    # 15006=Envoy mTLS inbound, 8080=plain HTTP (metrics, health checks)
+    - from:
+        - ipBlock:
+            cidr: 10.10.1.0/24
+        - ipBlock:
+            cidr: 10.10.0.0/24
+        - ipBlock:
+            cidr: 10.200.200.0/24
+        - ipBlock:
+            cidr: 192.168.101.0/24
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+    # Prometheus (monitoring namespace) scraping /metrics on port 8080
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Intra-cluster: OS services talk to each other
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    # Loki push: deployer bridge (10.10.10.1:13099 → socat → kubectl pf → Loki on AWS)
+    - to:
+        - ipBlock:
+            cidr: 10.10.10.1/32
+      ports:
+        - port: 13099
+          protocol: TCP
+    # SPIRE server on AWS (NodePort 30900 on master)
+    - to:
+        - ipBlock:
+            cidr: 10.10.1.10/32
+      ports:
+        - port: 30900
+          protocol: TCP

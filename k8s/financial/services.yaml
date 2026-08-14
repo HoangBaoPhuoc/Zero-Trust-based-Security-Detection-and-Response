@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: financial-common-config
+  namespace: financial
+data:
+  APP_PORT: "8080"
+  METRICS_PORT: "9090"
+  ACCOUNTS_DB_HOST: "postgres-accounts.financial.svc.cluster.local"
+  ACCOUNTS_DB_PORT: "5432"
+  TXN_DB_HOST: "postgres-txn.financial.svc.cluster.local"
+  TXN_DB_PORT: "5432"

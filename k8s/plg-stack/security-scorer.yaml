@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: security-scorer
+  namespace: plg-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: security-scorer
+  template:
+    metadata:
+      labels:
+        app: security-scorer
+    spec:
+      containers:
+        - name: security-scorer
+          image: ztlab/security-scorer:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+                  optional: false
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/1"
+            - name: SCORER_WINDOW_SECONDS
+              value: "900"
+            - name: SCORER_INTERVAL_SECONDS
+              value: "30"
+            - name: SCORER_MAX_EVENTS
+              value: "2000"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: security-scorer
+  namespace: plg-stack
+spec:
+  selector:
+    app: security-scorer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,0 +1,248 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-financial-allow-baseline
+  namespace: financial
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 15006
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    # SOAR engine (plg-stack) → Redis (financial) for case persistence
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 6379
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+        - port: 9191
+          protocol: TCP
+        - port: 5432
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 3100
+          protocol: TCP
+    # Cross-cloud egress: AWS → OpenStack NodePorts via WireGuard
+    # 30080=core-banking mTLS, 30082=account-service mTLS, 30083=transaction-service mTLS
+    - to:
+        - ipBlock:
+            cidr: 192.168.101.0/24
+      ports:
+        - port: 30080
+          protocol: TCP
+        - port: 30082
+          protocol: TCP
+        - port: 30083
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: plg-stack-allow-baseline
+  namespace: plg-stack
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 3000
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+    - from:
+        - ipBlock:
+            cidr: 10.10.4.0/24
+        - ipBlock:
+            cidr: 10.10.5.0/24
+        - ipBlock:
+            cidr: 10.10.0.0/24
+        - ipBlock:
+            cidr: 10.200.0.0/24
+      ports:
+        - port: 3100
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 3100
+          protocol: TCP
+        - port: 3000
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 3100
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: plg-stack
+      ports:
+        - port: 3100
+          protocol: TCP
+        - port: 8080
+          protocol: TCP
+        - port: 3000
+          protocol: TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: financial
+      ports:
+        - port: 15006
+          protocol: TCP
+        - port: 6379
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 10.43.0.1/32
+      ports:
+        - port: 443
+          protocol: TCP
+    # K3s API server direct access for Promtail kubernetes_sd
+    - to:
+        - ipBlock:
+            cidr: 10.10.1.10/32
+      ports:
+        - port: 6443
+          protocol: TCP
+    # Prometheus scrape OpenStack services + SOAR cross-cloud K8s API
+    # 30084=core-banking HTTP, 30086=account-service HTTP, 30087=transaction-service HTTP
+    # 6443=OpenStack K3s API server (SOAR restrict_egress playbook scales OpenStack workloads)
+    - to:
+        - ipBlock:
+            cidr: 192.168.101.11/32
+      ports:
+        - port: 6443
+          protocol: TCP
+        - port: 30084
+          protocol: TCP
+        - port: 30086
+          protocol: TCP
+        - port: 30087
+          protocol: TCP
+    # SMTP egress — Grafana gửi email alert qua Gmail
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 587
+          protocol: TCP
+        - port: 465
+          protocol: TCP
+    # Identity namespace (Keycloak)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: identity
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Prometheus (Grafana → scrape)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 9090
+          protocol: TCP

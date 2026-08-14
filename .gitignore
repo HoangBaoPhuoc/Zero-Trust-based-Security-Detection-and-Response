@@ -1,0 +1,32 @@
+# Secrets & credentials
+.env
+.env.ai
+*.key
+*.pem
+*.p12
+*.pfx
+.keys/
+
+# Terraform state & plans (sensitive infra state)
+**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.backup
+terraform/**/*.tfvars
+terraform/**/backup-state/
+terraform/**/tfplan*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime artifacts
+logs/
+results/
+models/*.pkl
+models/*.keras
+models/*.npy
+
+# Accidentally created directory
+~/

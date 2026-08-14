@@ -1,0 +1,161 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soar-engine
+  namespace: plg-stack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soar-engine
+  template:
+    metadata:
+      labels:
+        app: soar-engine
+    spec:
+      serviceAccountName: soar-engine
+      containers:
+        - name: soar-engine
+          image: ztlab/soar-engine:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: ai-secrets
+                optional: true
+          env:
+            - name: LOKI_URL
+              value: http://loki.plg-stack.svc.cluster.local:3100
+            - name: SCORER_URL
+              value: http://security-scorer.plg-stack.svc.cluster.local:8080
+            - name: SOAR_DRY_RUN
+              value: "false"
+            - name: SOAR_AUTO_EXECUTE
+              value: "true"
+            - name: SOAR_MIN_SEVERITY
+              value: medium
+            - name: SOAR_HITL_SEVERITY
+              value: high
+            - name: SOAR_MIN_CONFIDENCE
+              value: "0.50"
+            - name: SOAR_NAMESPACE
+              value: financial
+            - name: SOAR_CASE_STORE_PATH
+              value: /data/cases.jsonl
+            # Keycloak Admin API — for revoke_user_sessions playbook
+            - name: KEYCLOAK_URL
+              value: http://keycloak.identity.svc.cluster.local:8080
+            - name: KEYCLOAK_REALM
+              value: ztlab
+            - name: KEYCLOAK_ADMIN_USER
+              value: admin
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-admin-secret
+                  key: password
+                  optional: true
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+                  optional: false
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis.financial.svc.cluster.local:6379/0"
+            - name: SOAR_BLOCK_IP_TTL_SECONDS
+              value: "86400"
+            - name: SOAR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: ai-secrets
+                  key: SOAR_API_TOKEN
+                  optional: true
+            # SMTP — gửi email SOAR alert cho admin
+            - name: SMTP_HOST
+              value: "smtp.gmail.com"
+            - name: SMTP_PORT
+              value: "587"
+            - name: SMTP_USER
+              value: "voha2005@gmail.com"
+            - name: SMTP_FROM
+              value: "voha2005@gmail.com"
+            - name: SMTP_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-smtp-secret
+                  key: password
+                  optional: true
+            - name: ADMIN_EMAIL
+              value: "voha2005@gmail.com"
+            # URL công khai của SOAR engine — admin click từ email sẽ mở URL này
+            # port-forward: bash scripts/open-admin-uis.sh → 8091:8080
+            - name: SOAR_PUBLIC_URL
+              value: "http://127.0.0.1:8091"
+          volumeMounts:
+            - name: soar-data
+              mountPath: /data
+            - name: soar-main-patch
+              mountPath: /app/main.py
+              subPath: main.py
+            - name: openstack-kubeconfig
+              mountPath: /etc/soar/openstack-kubeconfig
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: soar-data
+          persistentVolumeClaim:
+            claimName: soar-data-pvc
+        - name: soar-main-patch
+          configMap:
+            name: soar-main-patch
+        - name: openstack-kubeconfig
+          secret:
+            secretName: soar-openstack-kubeconfig
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: soar-data-pvc
+  namespace: plg-stack
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soar-engine
+  namespace: plg-stack
+spec:
+  selector:
+    app: soar-engine
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

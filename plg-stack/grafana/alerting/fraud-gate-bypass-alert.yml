@@ -1,0 +1,43 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: fraud-gate
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: fraud-gate-bypass
+        title: "Kịch bản 2 — Fraud Gate Bypass (T1078.004)"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [10m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: OK
+        annotations:
+          summary: "Fraud Gate: giao dịch bị chặn do fraud score cao"
+          description: "ATT&CK T1078.004 — payment-service phát hiện giao dịch gian lận (fraud score ≥ 75) và từ chối. Log thật từ payment-service AUDIT event payment_blocked_fraud."
+          soar_action: |
+            ✅ SOAR đã tự động:
+            1. Block transaction ID liên quan trong Redis (TTL 1h)
+            2. Flag user account vào danh sách review
+            3. Tạo case với playbook fraud_response
+            🔧 Admin cần xem xét: Grafana → ZTLab → Fraud Gate dashboard
+        labels:
+          severity: critical
+          category: security
+          gap: gap2
+          mitre: T1078.004
+          attack_type: fraud_gate_bypass

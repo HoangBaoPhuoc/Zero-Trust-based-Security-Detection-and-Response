@@ -1,0 +1,404 @@
+{
+  "__inputs": [],
+  "__requires": [],
+  "annotations": { "list": [] },
+  "description": "ZTLab Zero Trust Security Overview — Anomaly Score, Logs, Fraud, Multi-Cloud",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "🔐 Anomaly Score (Redis 15 phút)",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "description": "Điểm bất thường tổng hợp từ Redis 15-minute window scorer",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 40 },
+              { "color": "red", "value": 70 }
+            ]
+          },
+          "mappings": [],
+          "unit": "none",
+          "min": 0, "max": 100
+        }
+      },
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "title": "Anomaly Score",
+      "type": "gauge",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "ztlab_anomaly_score",
+          "legendFormat": "Score"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 6, "w": 10, "x": 4, "y": 1 },
+      "id": 2,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "title": "Anomaly Score (15 phút)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "ztlab_anomaly_score",
+          "legendFormat": "Score tổng"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "displayMode": "list", "lineWidth": 1 },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 6, "w": 10, "x": 14, "y": 1 },
+      "id": 3,
+      "options": {
+        "reduceOptions": { "calcs": ["sum"] },
+        "orientation": "horizontal",
+        "displayMode": "gradient"
+      },
+      "title": "Security Events theo Pattern",
+      "type": "bargauge",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "increase(ztlab_anomaly_patterns_total[15m])",
+          "legendFormat": "{{pattern}}"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 },
+      "id": 101,
+      "title": "📊 Logs & Events",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 10,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": false
+      },
+      "title": "Security Logs — Tất cả Services (AWS + OpenStack)",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{namespace=\"financial\"} |~ \"(?i)(403|401|denied|fraud|block|error|attack|anomaly|lateral|scan|bypass)\"",
+          "legendFormat": "",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 11,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showTime": true,
+        "sortOrder": "Descending"
+      },
+      "title": "OPA Decisions — Deny Events",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{job=~\"opa-decisions|envoy-access\"} |~ \"(?i)(deny|denied|forbidden|403)\"",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 8 }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 16 },
+      "id": 12,
+      "title": "Log Volume theo Service",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by(app) (count_over_time({namespace=\"financial\"}[5m]))",
+          "legendFormat": "{{app}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 8 }
+        }
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 16 },
+      "id": 13,
+      "title": "Log Volume theo Cloud (AWS vs OpenStack)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by(cloud) (count_over_time({namespace=\"financial\"}[5m]))",
+          "legendFormat": "☁ {{cloud}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 102,
+      "title": "💳 Fraud Detection & Transactions",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 23 },
+      "id": 20,
+      "title": "Fraud Score Distribution",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "rate(ztlab_fraud_score_sum[5m]) / rate(ztlab_fraud_score_count[5m])",
+          "legendFormat": "Score trung bình"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "prometheus", "uid": "Prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "short"
+        }
+      },
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 23 },
+      "id": 21,
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "orientation": "horizontal", "displayMode": "lcd" },
+      "title": "Fraud Verdicts (15 phút)",
+      "type": "bargauge",
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "Prometheus" },
+          "expr": "increase(ztlab_fraud_score_count{verdict!=\"\"}[15m])",
+          "legendFormat": "{{verdict}}"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 23 },
+      "id": 22,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showTime": true,
+        "sortOrder": "Descending"
+      },
+      "title": "Fraud Events Log",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"fraud-detection\"} |= \"fraud_score_computed\"",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 },
+      "id": 103,
+      "title": "🛡 Zero Trust Controls",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 8 }
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
+      "id": 30,
+      "title": "OPA Decisions: Allow vs Deny",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by(decision) (count_over_time({job=\"opa-decisions\"}[5m]))",
+          "legendFormat": "OPA: {{decision}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 8 }
+        }
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+      "id": 31,
+      "title": "Envoy Access: HTTP Status Codes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by(response_code) (count_over_time({job=\"envoy-access\"}[5m]))",
+          "legendFormat": "HTTP {{response_code}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 38 },
+      "id": 104,
+      "title": "☁ Multi-Cloud Status",
+      "type": "row"
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 6 }
+        }
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 39 },
+      "id": 40,
+      "title": "Service Activity: AWS vs OpenStack (theo cloud label)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "sum by(cloud, app) (count_over_time({namespace=\"financial\", cloud=~\".+\"}[5m]))",
+          "legendFormat": "{{cloud}} / {{app}}",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 46 },
+      "id": 41,
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending"
+      },
+      "title": "SOAR Engine Events",
+      "type": "logs",
+      "targets": [
+        {
+          "datasource": { "type": "loki", "uid": "Loki" },
+          "expr": "{app=\"soar-engine\"}",
+          "refId": "A"
+        }
+      ]
+    }
+
+  ],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["ztlab", "zero-trust", "security", "banking"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "Asia/Ho_Chi_Minh",
+  "title": "ZTLab — Zero Trust Security Overview",
+  "uid": "ztlab-security-v2",
+  "version": 2
+}

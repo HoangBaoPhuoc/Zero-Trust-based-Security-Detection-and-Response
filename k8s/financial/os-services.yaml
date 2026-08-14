@@ -1,0 +1,388 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: core-banking
+  namespace: financial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: account-service
+  namespace: financial
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: transaction-service
+  namespace: financial
+---
+# core-banking: exposed via NodePort 30080 so AWS cluster can reach it cross-cloud
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: core-banking
+  namespace: financial
+  labels:
+    app: core-banking
+    cloud: openstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: core-banking
+  template:
+    metadata:
+      labels:
+        app: core-banking
+        cloud: openstack
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+    spec:
+      serviceAccountName: core-banking
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+      containers:
+        - name: core-banking
+          image: ztlab/core-banking:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: MAX_ALLOWED_FRAUD_SCORE
+              value: "74"
+            - name: CLOUD_PROVIDER
+              value: "openstack"
+            - name: ACCOUNT_SERVICE_URL
+              value: "http://account-service.financial.svc.cluster.local:8080"
+            - name: TRANSACTION_SERVICE_URL
+              value: "http://transaction-service.financial.svc.cluster.local:8080"
+            - name: CORE_BANKING_SHARED_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: core-banking-integrity-secret
+                  key: shared-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/core-banking"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: core-banking
+  namespace: financial
+spec:
+  type: NodePort
+  selector:
+    app: core-banking
+  ports:
+    - name: envoy
+      port: 15006
+      targetPort: 15006
+      nodePort: 30080
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30084
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: account-service
+  namespace: financial
+  labels:
+    app: account-service
+    cloud: openstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: account-service
+  template:
+    metadata:
+      labels:
+        app: account-service
+        cloud: openstack
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+    spec:
+      serviceAccountName: account-service
+      containers:
+        - name: account-service
+          image: ztlab/account-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "until python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('postgres-accounts.financial.svc.cluster.local', 5432)); s.close()\" 2>/dev/null; do echo 'waiting for postgres-accounts...'; sleep 2; done && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: ACCOUNTS_DB_HOST
+              value: "postgres-accounts.financial.svc.cluster.local"
+            - name: ACCOUNTS_DB_PORT
+              value: "5432"
+            - name: ACCOUNTS_DB_NAME
+              value: "accounts_db"
+            - name: ACCOUNTS_DB_USER
+              value: "accounts_user"
+            - name: ACCOUNTS_DB_PASS
+              value: "accounts_pass"
+            - name: CLOUD_PROVIDER
+              value: "openstack"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/account-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: account-service
+  namespace: financial
+spec:
+  type: NodePort
+  selector:
+    app: account-service
+  ports:
+    - name: envoy
+      port: 15006
+      targetPort: 15006
+      nodePort: 30082
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30086
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: transaction-service
+  namespace: financial
+  labels:
+    app: transaction-service
+    cloud: openstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: transaction-service
+  template:
+    metadata:
+      labels:
+        app: transaction-service
+        cloud: openstack
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
+        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+    spec:
+      serviceAccountName: transaction-service
+      containers:
+        - name: transaction-service
+          image: ztlab/transaction-service:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "until python3 -c \"import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('postgres-txn.financial.svc.cluster.local', 5432)); s.close()\" 2>/dev/null; do echo 'waiting for postgres-txn...'; sleep 2; done && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: TXN_DB_HOST
+              value: "postgres-txn.financial.svc.cluster.local"
+            - name: TXN_DB_PORT
+              value: "5432"
+            - name: TXN_DB_NAME
+              value: "transactions_db"
+            - name: TXN_DB_USER
+              value: "txn_user"
+            - name: TXN_DB_PASS
+              value: "txn_pass"
+            - name: CLOUD_PROVIDER
+              value: "openstack"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+        - name: envoy
+          image: envoyproxy/envoy:v1.29-latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
+          env:
+            - name: SPIFFE_ID
+              value: "spiffe://ztlab.local/openstack/transaction-service"
+          ports:
+            - containerPort: 15006
+              name: envoy-inbound
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy/envoy.yaml
+              subPath: envoy.yaml
+              readOnly: true
+            - name: spire-sockets
+              mountPath: /run/spire/sockets
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+            items:
+              - key: envoy-sidecar.yaml
+                path: envoy.yaml
+        - name: spire-sockets
+          hostPath:
+            path: /run/spire/sockets
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transaction-service
+  namespace: financial
+spec:
+  type: NodePort
+  selector:
+    app: transaction-service
+  ports:
+    - name: envoy
+      port: 15006
+      targetPort: 15006
+      nodePort: 30083
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30087

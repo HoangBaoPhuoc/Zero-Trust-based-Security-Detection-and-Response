@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Đăng nhập — ZTLab Banking</title>
+  <style>
+    :root {
+      --text: #0f172a; --text2: #475569; --text3: #8a94a6;
+      --accent: #2563eb; --accent2: #1d4ed8;
+      --green: #15803d; --red: #dc2626;
+      --border: #e5e9f0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #ffffff; color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh; display: flex;
+    }
+    .left-panel {
+      width: 440px; flex-shrink: 0;
+      background: linear-gradient(160deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%);
+      display: flex; flex-direction: column; padding: 40px;
+      color: #fff;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 60px; }
+    .brand-icon {
+      width: 44px; height: 44px; border-radius: 12px;
+      background: rgba(255,255,255,.15);
+      display: flex; align-items: center; justify-content: center; font-size: 22px;
+    }
+    .brand-name { font-size: 18px; font-weight: 700; }
+    .brand-sub { font-size: 12px; color: rgba(255,255,255,.65); margin-top: 2px; }
+    .hero-text { flex: 1; }
+    .hero-title { font-size: 30px; font-weight: 800; line-height: 1.25; margin-bottom: 12px; }
+    .hero-title span { color: #93c5fd; }
+    .hero-desc { font-size: 14px; color: rgba(255,255,255,.75); line-height: 1.6; margin-bottom: 32px; }
+    .feature-list { display: flex; flex-direction: column; gap: 10px; }
+    .feature { display: flex; align-items: center; gap: 10px; font-size: 13px; color: rgba(255,255,255,.85); }
+    .feature-icon {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: rgba(255,255,255,.12); display: flex; align-items: center;
+      justify-content: center; font-size: 13px; flex-shrink: 0;
+    }
+    .left-footer { font-size: 11px; color: rgba(255,255,255,.5); margin-top: 40px; }
+    .right-panel { flex: 1; display: flex; align-items: center; justify-content: center; padding: 40px; }
+    .login-box { width: 100%; max-width: 380px; }
+    .login-title { font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+    .login-sub { font-size: 14px; color: var(--text2); margin-bottom: 28px; }
+    .alert { padding: 11px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 20px; }
+    .alert-error { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+    .alert-success { background: #ecfdf3; border: 1px solid #bbf0cf; color: #166534; }
+    .btn-oidc {
+      width: 100%; padding: 13px; border-radius: 10px;
+      border: 1px solid var(--accent); background: var(--accent);
+      color: #fff; font-size: 15px; font-weight: 600;
+      cursor: pointer; text-align: center; text-decoration: none;
+      display: flex; align-items: center; justify-content: center; gap: 10px;
+      transition: all .15s; margin-bottom: 16px;
+    }
+    .btn-oidc:hover { background: var(--accent2); border-color: var(--accent2); }
+    .security-note {
+      margin-top: 20px; padding: 12px 14px;
+      background: #f6f8fb; border: 1px solid var(--border);
+      border-radius: 8px; font-size: 12px; color: var(--text3); text-align: center; line-height: 1.5;
+    }
+    .register-link { text-align: center; font-size: 13px; color: var(--text3); margin-top: 20px; }
+    .register-link a { color: var(--accent2); text-decoration: none; font-weight: 600; }
+    .register-link a:hover { text-decoration: underline; }
+    @media (max-width: 760px) { .left-panel { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="left-panel">
+    <div class="brand">
+      <div class="brand-icon">🔐</div>
+      <div>
+        <div class="brand-name">ZTLab Banking</div>
+        <div class="brand-sub">Zero Trust Security Platform</div>
+      </div>
+    </div>
+    <div class="hero-text">
+      <h1 class="hero-title">Bảo mật <span>Zero Trust</span> cho ngân hàng đa đám mây</h1>
+      <p class="hero-desc">Nền tảng được bảo vệ bởi Keycloak OIDC, OPA Authorization và SPIRE mTLS trên môi trường multi-cloud AWS + OpenStack.</p>
+      <div class="feature-list">
+        <div class="feature"><div class="feature-icon">🔑</div>Xác thực OIDC + PKCE với Keycloak</div>
+        <div class="feature"><div class="feature-icon">🛡</div>OPA Policy Engine bảo vệ mọi API call</div>
+        <div class="feature"><div class="feature-icon">🔒</div>SPIRE mTLS giữa tất cả microservices</div>
+        <div class="feature"><div class="feature-icon">📊</div>PLG Stack: Grafana alert rules phát hiện tấn công</div>
+        <div class="feature"><div class="feature-icon">☁</div>Multi-cloud: AWS + OpenStack</div>
+      </div>
+    </div>
+    <div class="left-footer">ZTLab © 2026 · Đồ án chuyên ngành Zero Trust · UIT</div>
+  </div>
+
+  <div class="right-panel">
+    <div class="login-box">
+      <h2 class="login-title">Đăng nhập</h2>
+      <p class="login-sub">Chào mừng trở lại. Vui lòng xác thực để tiếp tục.</p>
+
+      {% if error %}
+      <div class="alert alert-error">⚠ {{ error }}</div>
+      {% endif %}
+      {% if success %}
+      <div class="alert alert-success">✓ {{ success }}</div>
+      {% endif %}
+
+      <a href="/auth/start" class="btn-oidc">
+        🔐 &nbsp;Đăng nhập với Keycloak SSO
+      </a>
+
+      <div class="security-note">
+        🔒 Xác thực qua <strong>Authorization Code Flow + PKCE (S256)</strong>.<br>
+        Không có mật khẩu nào được gửi qua web portal.
+      </div>
+
+      <div class="register-link">
+        Chưa có tài khoản? <a href="/register">Đăng ký ngay</a>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

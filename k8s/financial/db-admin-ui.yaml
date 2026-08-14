@@ -1,0 +1,156 @@
+---
+# pgAdmin — Web UI quản lý PostgreSQL
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgadmin
+  namespace: financial
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pgadmin
+  template:
+    metadata:
+      labels:
+        app: pgadmin
+      annotations:
+        sidecar.istio.io/inject: "false"  # infra service, never had mTLS/SPIRE identity — not in migration scope
+    spec:
+      securityContext:
+        runAsUser: 5050
+        runAsGroup: 5050
+        fsGroup: 5050
+      containers:
+        - name: pgadmin
+          image: dpage/pgadmin4:8.14
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+          env:
+            - name: PGADMIN_DEFAULT_EMAIL
+              value: "admin@ztlab.com"
+            - name: PGADMIN_DEFAULT_PASSWORD
+              value: "ztlab2026"
+            - name: PGADMIN_CONFIG_SERVER_MODE
+              value: "False"
+            - name: PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED
+              value: "False"
+          volumeMounts:
+            - name: pgadmin-data
+              mountPath: /var/lib/pgadmin
+            - name: pgadmin-servers
+              mountPath: /pgadmin4/servers.json
+              subPath: servers.json
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: pgadmin-data
+          emptyDir: {}
+        - name: pgadmin-servers
+          configMap:
+            name: pgadmin-servers-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgadmin-servers-config
+  namespace: financial
+data:
+  servers.json: |
+    {
+      "Servers": {
+        "1": {
+          "Name": "ZTLab Accounts DB",
+          "Group": "ZTLab",
+          "Host": "postgres-accounts.financial.svc.cluster.local",
+          "Port": 5432,
+          "MaintenanceDB": "accounts_db",
+          "Username": "accounts_user",
+          "Password": "accounts_pass",
+          "SSLMode": "prefer"
+        },
+        "2": {
+          "Name": "ZTLab Transactions DB",
+          "Group": "ZTLab",
+          "Host": "postgres-txn.financial.svc.cluster.local",
+          "Port": 5432,
+          "MaintenanceDB": "transactions_db",
+          "Username": "txn_user",
+          "Password": "txn_pass",
+          "SSLMode": "prefer"
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgadmin
+  namespace: financial
+spec:
+  selector:
+    app: pgadmin
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+# RedisInsight — Web UI quản lý Redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redisinsight
+  namespace: financial
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redisinsight
+  template:
+    metadata:
+      labels:
+        app: redisinsight
+      annotations:
+        sidecar.istio.io/inject: "false"  # infra service, never had mTLS/SPIRE identity — not in migration scope
+    spec:
+      containers:
+        - name: redisinsight
+          image: redis/redisinsight:2.62
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5540
+          env:
+            - name: RI_APP_PORT
+              value: "5540"
+          volumeMounts:
+            - name: redisinsight-data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+      volumes:
+        - name: redisinsight-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redisinsight
+  namespace: financial
+spec:
+  selector:
+    app: redisinsight
+  ports:
+    - name: http
+      port: 5540
+      targetPort: 5540

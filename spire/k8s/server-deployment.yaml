@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spire-server
+  namespace: spire
+  labels:
+    app: spire-server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: spire-server
+  template:
+    metadata:
+      labels:
+        app: spire-server
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      nodeSelector:
+        spire-server: "true"
+      serviceAccountName: spire-server
+      containers:
+        - name: spire-server
+          image: ghcr.io/spiffe/spire-server:1.9.4
+          args:
+            - "-config"
+            - "/run/spire/config/server.conf"
+          ports:
+            - name: api
+              containerPort: 8081
+          volumeMounts:
+            - name: server-config
+              mountPath: /run/spire/config
+              readOnly: true
+            - name: server-data
+              mountPath: /opt/spire/data/server
+            - name: upstream-ca
+              mountPath: /run/spire/upstream-ca
+              readOnly: true
+      volumes:
+        - name: server-config
+          configMap:
+            name: spire-server-config
+            items:
+              - key: server.conf
+                path: server.conf
+        - name: server-data
+          hostPath:
+            path: /opt/spire/data/server
+            type: DirectoryOrCreate
+        - name: upstream-ca
+          secret:
+            secretName: spire-upstream-ca
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spire-server
+  namespace: spire
+  labels:
+    app: spire-server
+spec:
+  type: NodePort
+  selector:
+    app: spire-server
+  ports:
+    - name: api
+      port: 8081
+      targetPort: 8081
+      nodePort: 30900
+

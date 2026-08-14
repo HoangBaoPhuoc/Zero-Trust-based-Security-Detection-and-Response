@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-txn-pvc
+  namespace: financial
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-txn
+  namespace: financial
+  labels:
+    app: postgres-txn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-txn
+  template:
+    metadata:
+      labels:
+        app: postgres-txn
+      annotations:
+        sidecar.istio.io/inject: "false"  # infra service, never had mTLS/SPIRE identity — not in migration scope
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: transactions_db
+            - name: POSTGRES_USER
+              value: txn_user
+            - name: POSTGRES_PASSWORD
+              value: txn_pass
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U txn_user -d transactions_db"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-txn-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-txn
+  namespace: financial
+spec:
+  selector:
+    app: postgres-txn
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

@@ -1,0 +1,102 @@
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ztlab-security-admin
+    receivers:
+      # Kênh 1: SOAR engine tự động xử lý
+      - uid: ztlab-soar-webhook
+        type: webhook
+        settings:
+          url: "http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook"
+          httpMethod: POST
+          title: "[ZTLab SOAR] {{ .CommonAnnotations.summary }}"
+          message: "Severity: {{ .CommonLabels.severity }} | {{ .CommonAnnotations.description }}"
+        disableResolveMessage: false
+      # Kênh 2: Email cho admin
+      - uid: ztlab-admin-email
+        type: email
+        settings:
+          addresses: "voha2005@gmail.com"
+          subject: >-
+            [ZTLab SECURITY] {{ .CommonLabels.alertname }} — {{ .CommonLabels.severity | toUpper }}
+          message: |
+            🚨 CẢNH BÁO BẢO MẬT — ZTLab Zero Trust
+
+            Alert:     {{ .CommonLabels.alertname }}
+            Severity:  {{ .CommonLabels.severity | toUpper }}
+            MITRE:     {{ .CommonLabels.mitre }}
+            Time:      {{ .Alerts.Firing | len }} firing, {{ .Alerts.Resolved | len }} resolved
+
+            ─────────────────────────────────────────
+            {{ range .Alerts.Firing }}
+            [{{ .StartsAt.Format "15:04:05" }}] {{ .Annotations.summary }}
+            {{ .Annotations.description }}
+            {{ end }}
+            ─────────────────────────────────────────
+
+            SOAR REMEDIATION:
+            {{ .CommonAnnotations.soar_action }}
+
+            👉 Xem chi tiết: http://127.0.0.1:3000/alerting/list
+            👉 SOAR Cases:   http://127.0.0.1:3000/d/soar-cases
+        disableResolveMessage: false
+
+  # Kênh riêng cho lỗi hạ tầng bảo mật (SPIRE/OPA down) — CHỈ báo người,
+  # KHÔNG qua SOAR webhook. Lý do: SOAR playbook (isolate_workload/
+  # quarantine_workload) là hành động phá hủy; nếu chính SPIRE/OPA đang hỏng,
+  # để SOAR "tự xử lý" có thể khiến tình huống tệ hơn thay vì chỉ cần người
+  # vào sửa config/restart.
+  - orgId: 1
+    name: ztlab-infra-admin
+    receivers:
+      - uid: ztlab-infra-email
+        type: email
+        settings:
+          addresses: "voha2005@gmail.com"
+          subject: >-
+            [ZTLab INFRA] {{ .CommonLabels.alertname }} — hạ tầng bảo mật đang lỗi
+          message: |
+            ⚠️ HẠ TẦNG SECURITY CONTROL-PLANE ĐANG LỖI (không phải bị tấn công)
+
+            Alert:     {{ .CommonLabels.alertname }}
+            Component: {{ .CommonLabels.component }}
+
+            ─────────────────────────────────────────
+            {{ range .Alerts.Firing }}
+            {{ .Annotations.summary }}
+            {{ .Annotations.description }}
+            {{ end }}
+            ─────────────────────────────────────────
+
+            Đây KHÔNG được SOAR tự xử lý — cần admin kiểm tra tay.
+            👉 http://127.0.0.1:3000/alerting/list
+        disableResolveMessage: false
+
+policies:
+  - orgId: 1
+    receiver: ztlab-security-admin
+    group_by:
+      - grafana_folder
+      - alertname
+    group_wait: 10s
+    group_interval: 5m
+    repeat_interval: 4h
+    routes:
+      # Lỗi hạ tầng security control-plane (SPIRE/OPA) — chỉ báo người,
+      # KHÔNG qua SOAR. Đặt trước route category=security để không bị nuốt
+      # bởi matcher rộng hơn phía dưới.
+      - receiver: ztlab-infra-admin
+        matchers:
+          - 'category="infrastructure"'
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 15m
+        continue: false
+      # Tất cả alert category=security đều vào đây
+      - receiver: ztlab-security-admin
+        matchers:
+          - 'category="security"'
+        group_wait: 10s
+        group_interval: 5m
+        repeat_interval: 1h

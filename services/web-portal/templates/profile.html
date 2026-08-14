@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Hồ sơ — ZTLab Banking{% endblock %}
+{% block page_title %}Hồ sơ tài khoản{% endblock %}
+
+{% block content %}
+<div class="grid grid-2" style="max-width:900px;gap:20px;align-items:start">
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Thông tin cá nhân</div>
+      </div>
+      <table>
+        <tr>
+          <td style="color:var(--text3);width:140px;padding:10px 14px">Họ và tên</td>
+          <td style="padding:10px 14px"><strong>{{ full_name }}</strong></td>
+        </tr>
+        <tr>
+          <td style="color:var(--text3);padding:10px 14px">Tên đăng nhập</td>
+          <td style="padding:10px 14px"><span class="mono" style="color:var(--accent2)">{{ username }}</span></td>
+        </tr>
+        <tr>
+          <td style="color:var(--text3);padding:10px 14px">Email</td>
+          <td style="padding:10px 14px">{{ email or '—' }}</td>
+        </tr>
+        <tr>
+          <td style="color:var(--text3);padding:10px 14px">Đăng nhập lúc</td>
+          <td style="padding:10px 14px"><span id="login-time" class="mono text-sm">—</span></td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Quyền truy cập</div>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        {% for role in roles %}
+          {% if role in ('financial-read','financial-write','security-analyst','security-admin') %}
+            <span class="badge
+              {% if 'write' in role or 'admin' in role %}badge-green
+              {% elif 'analyst' in role %}badge-purple
+              {% else %}badge-blue{% endif %}">
+              {{ role }}
+            </span>
+          {% endif %}
+        {% endfor %}
+      </div>
+      <div class="mt-8" style="font-size:12px;color:var(--text3);line-height:1.7">
+        Quyền được xác thực tại Keycloak → OPA policy enforcement → Envoy sidecar.
+        Mỗi request đều qua kiểm tra issuer + expiry + role.
+      </div>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Tài khoản ngân hàng</div>
+        <a href="/transfer" class="btn btn-primary btn-sm">↗ Chuyển tiền</a>
+      </div>
+      <div id="accounts-loading" class="loading"><div class="spinner"></div> Đang tải...</div>
+      <div id="accounts-content" style="display:none">
+        <div class="table-wrap">
+          <table id="accounts-table">
+            <thead>
+              <tr><th>Số tài khoản</th><th>Số dư</th><th>Tiền tệ</th></tr>
+            </thead>
+            <tbody id="accounts-body"></tbody>
+          </table>
+        </div>
+        <div id="no-account" style="display:none;font-size:13px;color:var(--text3);padding:8px 0">
+          Chưa có tài khoản ngân hàng nào.<br>
+          Liên hệ quản trị viên để được cấp tài khoản.
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Bảo mật phiên làm việc</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>Xác thực JWT</span>
+          <span class="badge badge-green">✓ Keycloak RS256</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>Kiểm tra quyền</span>
+          <span class="badge badge-green">✓ OPA ext_authz</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>Phiên web</span>
+          <span class="badge badge-green">✓ Cookie HMAC-signed</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>mTLS</span>
+          <span class="badge badge-green">✓ SPIRE SVID</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+          <span>Phiên hết hạn trong</span>
+          <span class="badge badge-yellow" id="expire-in">—</span>
+        </div>
+      </div>
+      <hr class="divider" style="margin:16px 0">
+      <a href="/auth/logout" class="btn btn-danger" style="text-decoration:none;width:100%;justify-content:center">
+        ⏻ Đăng xuất khỏi hệ thống
+      </a>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Thiết bị của bạn</div>
+        {% if device_trust == 'trusted' %}<span class="badge badge-green">✓ Đã tin cậy</span>
+        {% elif device_trust == 'new_device' %}<span class="badge badge-yellow">🆕 Mới ghi nhận</span>
+        {% else %}<span class="badge badge-red">⚠ Bất thường</span>{% endif %}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px;font-size:13px">
+        <div style="display:flex;justify-content:space-between">
+          <span class="text-muted">Thiết bị đang dùng</span>
+          <span>{{ device_label }}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between">
+          <span class="text-muted">Số thiết bị đã ghi nhận</span>
+          <span>{% if known_device_count is not none %}{{ known_device_count }}{% else %}—{% endif %}</span>
+        </div>
+      </div>
+      <div class="mt-8" style="font-size:12px;color:var(--text3);line-height:1.7">
+        {% if device_trust == 'trusted' %}
+        Thiết bị này đã đăng nhập thành công trước đây và được ghi nhớ — không cần xác minh thêm.
+        {% elif device_trust == 'new_device' %}
+        Đây là lần đầu tiên hệ thống ghi nhận thiết bị này cho tài khoản của bạn. Nếu không phải bạn, hãy đổi mật khẩu ngay.
+        {% else %}
+        Đặc điểm truy cập của thiết bị này bất thường (có thể là script/công cụ tự động). Giao dịch từ thiết bị này sẽ được đánh giá rủi ro cao hơn.
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const loginAt = {{ logged_in_at | int }};
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+document.getElementById('login-time').textContent = new Date(loginAt * 1000).toLocaleString('vi-VN');
+
+function updateExpiry() {
+  const remaining = 3600 - (Date.now() / 1000 - loginAt);
+  const el = document.getElementById('expire-in');
+  if (remaining <= 0) { el.textContent = 'Đã hết hạn'; el.className = 'badge badge-red'; return; }
+  const m = Math.floor(remaining / 60), s = Math.floor(remaining % 60);
+  el.textContent = `Còn ${m}p ${s}s`;
+  if (remaining < 300) el.className = 'badge badge-red';
+  else if (remaining < 900) el.className = 'badge badge-yellow';
+  else el.className = 'badge badge-green';
+}
+updateExpiry();
+setInterval(updateExpiry, 1000);
+
+async function loadAccounts() {
+  try {
+    const r = await fetch('/api/account/me');
+    const d = await r.json();
+    document.getElementById('accounts-loading').style.display = 'none';
+    document.getElementById('accounts-content').style.display = '';
+    const accounts = d.accounts || [];
+    if (!accounts.length) {
+      document.getElementById('no-account').style.display = '';
+      document.getElementById('accounts-table').style.display = 'none';
+      return;
+    }
+    document.getElementById('accounts-body').innerHTML = accounts.map(a => `
+      <tr>
+        <td><span class="mono" style="color:var(--accent2)">${esc(a.account_id)}</span></td>
+        <td class="amount-positive">${parseFloat(a.balance).toLocaleString('vi-VN')} ₫</td>
+        <td style="color:var(--text3)">${esc(a.currency)}</td>
+      </tr>`).join('');
+  } catch(e) {
+    document.getElementById('accounts-loading').textContent = 'Lỗi kết nối account-service';
+  }
+}
+loadAccounts();
+</script>
+{% endblock %}

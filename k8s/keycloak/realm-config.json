@@ -1,0 +1,168 @@
+{
+  "realm": "ztlab",
+  "enabled": true,
+  "displayName": "ZTLab",
+  "sslRequired": "external",
+  "accessTokenLifespan": 300,
+  "ssoSessionMaxLifespan": 36000,
+  "clients": [
+    {
+      "clientId": "api-gateway",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "authorizationServicesEnabled": true,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "redirectUris": [
+        "http://api.ztlab.local/*",
+        "https://api-gateway.ztlab.local/*"
+      ],
+      "webOrigins": [
+        "+"
+      ]
+    },
+    {
+      "clientId": "web-portal",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://portal.ztlab.local/*",
+        "http://portal.ztlab.local:8080/*",
+        "http://localhost:8080/*",
+        "http://localhost:5000/*",
+        "http://localhost:18081/*",
+        "http://127.0.0.1:8080/*",
+        "http://127.0.0.1:5000/*",
+        "http://127.0.0.1:18081/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    },
+    {
+      "clientId": "siem-backend",
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "serviceAccountsEnabled": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "financial-read"
+      },
+      {
+        "name": "financial-write"
+      },
+      {
+        "name": "security-analyst"
+      },
+      {
+        "name": "security-admin"
+      }
+    ]
+  },
+  "users": [
+    {
+      "username": "testuser01",
+      "email": "testuser01@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read",
+        "financial-write"
+      ],
+      "firstName": "Test",
+      "lastName": "User01"
+    },
+    {
+      "username": "merchant01",
+      "email": "merchant01@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read"
+      ],
+      "firstName": "Merchant",
+      "lastName": "01"
+    },
+    {
+      "username": "testuser02",
+      "email": "testuser02@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read",
+        "financial-write"
+      ],
+      "firstName": "Test",
+      "lastName": "User02"
+    },
+    {
+      "username": "analyst01",
+      "email": "analyst01@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Test1234!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "security-analyst"
+      ],
+      "firstName": "Analyst",
+      "lastName": "01"
+    },
+    {
+      "username": "demoadmin",
+      "email": "demoadmin@ztlab.local",
+      "emailVerified": true,
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "DemoAdmin2026!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "financial-read",
+        "financial-write",
+        "security-analyst",
+        "security-admin"
+      ]
+    }
+  ]
+}

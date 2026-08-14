@@ -1,0 +1,36 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: lateral-movement
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: lateral-movement-svid
+        title: "Kịch bản 3 — Lateral Movement: Unauthorized Internal Path (T1021.007)"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({job="opa-decisions",opa_result="false",request_path="/payments/internal/execute"}[10m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "Lateral Movement — OPA chặn service gọi /payments/internal/execute (T1021.007)"
+          description: "ATT&CK T1021.007 — notification-service (SVID hợp lệ) cố truy cập /payments/internal/execute tại payment-service — path không nằm trong whitelist OPA cho internal service. OPA từ chối, Envoy trả 403. Log thật từ OPA decision log."
+        labels:
+          severity: critical
+          category: security
+          mitre: T1021.007
+          attack_type: lateral_movement

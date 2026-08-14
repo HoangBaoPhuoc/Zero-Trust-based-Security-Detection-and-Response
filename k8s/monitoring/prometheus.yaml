@@ -1,0 +1,186 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        cluster: ztlab-aws
+        env: ztlab
+
+    scrape_configs:
+      # AWS financial microservices — DNS resolvable within AWS cluster
+      - job_name: financial-services-aws
+        static_configs:
+          - targets:
+              - api-gateway.financial.svc.cluster.local:8080
+              - payment-service.financial.svc.cluster.local:8080
+              - fraud-detection.financial.svc.cluster.local:8080
+              - notification-service.financial.svc.cluster.local:8080
+        metrics_path: /metrics
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: '([^.]+)\..*'
+            target_label: service
+          - target_label: cloud
+            replacement: aws
+
+      # OpenStack financial services — reachable via NodePort on 192.168.101.11 (os-k3s-master)
+      - job_name: financial-services-openstack
+        static_configs:
+          - targets:
+              - 192.168.101.11:30084   # core-banking: NodePort→8080 (plain HTTP)
+              - 192.168.101.11:30086   # account-service: NodePort→8080 (HTTP; 30082=Envoy mTLS)
+              - 192.168.101.11:30087   # transaction-service: NodePort→8080 (HTTP; 30083=Envoy mTLS)
+        metrics_path: /metrics
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: '192\.168\.101\.11:(\d+)'
+            target_label: __tmp_port
+          - source_labels: [__tmp_port]
+            regex: '30084'
+            target_label: service
+            replacement: core-banking
+          - source_labels: [__tmp_port]
+            regex: '30086'
+            target_label: service
+            replacement: account-service
+          - source_labels: [__tmp_port]
+            regex: '30087'
+            target_label: service
+            replacement: transaction-service
+          - target_label: cloud
+            replacement: openstack
+
+      # Loki internal metrics
+      - job_name: loki
+        static_configs:
+          - targets:
+              - loki.plg-stack.svc.cluster.local:3100
+        metrics_path: /metrics
+
+      # PLG-stack services (security-scorer exposes ztlab_anomaly_score)
+      - job_name: plg-stack-services
+        static_configs:
+          - targets:
+              - security-scorer.plg-stack.svc.cluster.local:8080
+        metrics_path: /metrics
+        relabel_configs:
+          - source_labels: [__address__]
+            regex: '([^.]+)\..*'
+            target_label: service
+          - target_label: cloud
+            replacement: aws
+
+      # Prometheus self-scrape
+      - job_name: prometheus
+        static_configs:
+          - targets: ['localhost:9090']
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-data-pvc
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      securityContext:
+        fsGroup: 65534
+        runAsUser: 65534
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.51.0
+          args:
+            - '--config.file=/etc/prometheus/prometheus.yml'
+            - '--storage.tsdb.path=/prometheus'
+            - '--storage.tsdb.retention.time=7d'
+            - '--web.enable-lifecycle'
+          ports:
+            - containerPort: 9090
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+              readOnly: true
+            - name: data
+              mountPath: /prometheus
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: prometheus-data-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`prometheus.ztlab.local`)
+      kind: Rule
+      services:
+        - name: prometheus
+          port: 9090
