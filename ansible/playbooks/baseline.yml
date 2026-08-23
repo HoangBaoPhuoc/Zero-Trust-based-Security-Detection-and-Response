@@ -17,6 +17,12 @@
       - iptables-persistent
 
   tasks:
+    - name: Wait for cloud-init to finish (may still be running apt-get from package_upgrade)
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+      register: cloud_init_wait
+
     - name: Disable background apt services on Debian hosts
       ansible.builtin.systemd:
         name: "{{ item }}"

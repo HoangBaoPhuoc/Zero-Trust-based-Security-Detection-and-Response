@@ -16,6 +16,14 @@ spec:
       ports:
         - port: 15006
           protocol: TCP
+        # Traefik ingress (kube-system) → api-gateway/web-portal real app
+        # port, post-Istio-migration. Same bug class fixed 3x already this
+        # session (financial-internal, istio-system egress, OpenStack
+        # cross-node) — every port-15006 ingress allowance written for the
+        # hand-rolled Envoy era needs its real-port-8080 counterpart added
+        # wherever a caller lives outside the financial namespace itself.
+        - port: 8080
+          protocol: TCP
     - from:
         - namespaceSelector:
             matchLabels:
@@ -28,11 +36,29 @@ spec:
         - port: 8181
           protocol: TCP
 
+    # k8s/security-monitoring/healthcheck-cronjob.yaml (namespace spire) calls
+    # opa-service:8181/health directly to verify OPA's REST API is reachable
+    # — found missing 2026-08-24 while auditing security service outputs:
+    # every other health-check call in that CronJob worked (spire-server
+    # exec, Loki push) but this one silently got connection-refused, causing
+    # `security-control-plane-alert.yml`'s "Security Control-Plane Down"
+    # rule to fire on a false signal (OPA was actually healthy the whole
+    # time — confirmed via opa-server's own access log showing 200s).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: spire
+      ports:
+        - port: 8181
+          protocol: TCP
+
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: financial
       ports:
+        - port: 8080
+          protocol: TCP
         - port: 15006
           protocol: TCP
         - port: 9191
@@ -101,6 +127,15 @@ spec:
         - port: 30082
           protocol: TCP
         - port: 30083
+          protocol: TCP
+    # Istio (Phase 6, incremental migration) — istio-proxy sidecar needs
+    # istiod for CA (cert signing) + xDS config, both served on 15012.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - port: 15012
           protocol: TCP
 ---
 apiVersion: networking.k8s.io/v1
@@ -245,4 +280,12 @@ spec:
               kubernetes.io/metadata.name: monitoring
       ports:
         - port: 9090
+          protocol: TCP
+    # Vault — soar-engine's vault-fetch-secrets init container đọc secret
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: vault
+      ports:
+        - port: 8200
           protocol: TCP

@@ -223,6 +223,19 @@
 
 </div>
 
+<!-- Live SOAR timeline -->
+<div class="card" id="live-timeline-card" style="display:none;margin:20px 0">
+  <div class="card-header">
+    <div class="card-title">🔴 Live: Phản ứng SOAR sau khi chạy kịch bản</div>
+    <span class="badge badge-yellow" id="live-timeline-status">Đang theo dõi...</span>
+  </div>
+  <div style="font-size:11px;color:var(--text3);margin-bottom:10px">
+    Danh sách case bên dưới là dữ liệu thật từ <span class="mono">GET /api/soar/cases</span> (cùng nguồn với trang
+    <a href="/security">Ứng cứu sự cố</a>), poll mỗi 2 giây trong 30 giây kể từ lúc bấm "Chạy kịch bản" — không phải log giả lập.
+  </div>
+  <div id="live-timeline-list" style="display:flex;flex-direction:column;gap:0"></div>
+</div>
+
 <!-- Quick links -->
 <div class="section-title">🔗 Liên kết nhanh</div>
 <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -245,6 +258,9 @@ async function runScenario(scenarioId) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Đang chạy...'; }
   if (resultBox) { resultBox.style.display='block'; resultBox.innerHTML='<span style="color:var(--yellow)">Đang gửi request...</span>'; }
 
+  let seenCaseIds = new Set();
+  try { seenCaseIds = new Set((await (await fetch('/api/soar/cases')).json()).map(c => c.case_id)); } catch(e) {}
+
   try {
     const resp = await fetch('/api/scenarios/' + scenarioId + '/run', {method:'POST'});
     const data = await resp.json();
@@ -255,6 +271,49 @@ async function runScenario(scenarioId) {
   } finally {
     if (btn) { btn.disabled=false; btn.textContent = btn.textContent.includes('Inject') ? '▶ Inject lại' : '▶ Chạy lại'; }
   }
+
+  watchLiveTimeline(seenCaseIds);
+}
+
+function esc(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function watchLiveTimeline(seenCaseIds) {
+  const timelineCard = document.getElementById('live-timeline-card');
+  const list = document.getElementById('live-timeline-list');
+  const status = document.getElementById('live-timeline-status');
+  timelineCard.style.display = '';
+  status.textContent = 'Đang theo dõi...'; status.className = 'badge badge-yellow';
+  const found = [];
+
+  for (let i = 0; i < 15; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const cases = await (await fetch('/api/soar/cases')).json();
+      if (!Array.isArray(cases)) continue;
+      for (const c of cases) {
+        if (!seenCaseIds.has(c.case_id)) {
+          seenCaseIds.add(c.case_id);
+          found.unshift(c);
+          list.innerHTML = found.map(fc => {
+            const sevCls = fc.severity === 'high' ? 'badge-red' : fc.severity === 'medium' ? 'badge-yellow' : 'badge-blue';
+            return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:12.5px">
+              <span>🛡</span>
+              <div style="flex:1">
+                <div style="font-weight:600">Case <span class="mono">${esc(fc.case_id)}</span> — ${esc(fc.attack_type)}</div>
+                <div style="font-size:11px;color:var(--text3)">Playbook: ${esc(fc.playbook)} · Trạng thái: ${esc(fc.status)}</div>
+              </div>
+              <span class="badge ${sevCls}">${esc(fc.severity)}</span>
+            </div>`;
+          }).join('');
+        }
+      }
+    } catch(e) {}
+  }
+  status.textContent = found.length ? `${found.length} case mới` : 'Không có case mới (có thể alert rule chưa fire trong cửa sổ này)';
+  status.className = found.length ? 'badge badge-green' : 'badge badge-blue';
 }
 
 function fmtJson(obj) {
