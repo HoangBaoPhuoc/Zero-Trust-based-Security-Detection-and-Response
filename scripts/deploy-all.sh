@@ -1,29 +1,35 @@
 #!/usr/bin/env bash
-# Deploy the full ZTLab lab across AWS and OpenStack K3s clusters.
+# All-in-one deploy — chạy toàn bộ Bước 1 → 14 của DEPLOY.md (Phần 1) bằng 1 lệnh,
+# từ hạ tầng trống (sau `terraform destroy`) tới cluster chạy đầy đủ ứng dụng.
+# Tầng hạ tầng (SSH key, Terraform, Ansible, inventory, tunnel) do script này lo;
+# tầng ứng dụng K8s được uỷ quyền cho scripts/deploy-app.sh ở bước cuối.
 #
-# This script intentionally orchestrates the existing focused scripts instead of
-# replacing them:
-#   - scripts/k8s-tunnel.sh for ctx-aws and ctx-openstack
-#   - scripts/sync-financial-images.sh for local image import on all K3s nodes
-#   - scripts/deploy-security-stack.sh for SPIRE, OPA, Envoy, and Keycloak
+# Idempotent theo thiết kế: chạy lại an toàn sau mỗi lần `terraform destroy` —
+# tự bỏ qua các bước đã ở trạng thái đúng (tool đã cài, key-pair đã import,
+# image/flavor OpenStack đã tồn tại...) thay vì làm lại từ đầu mỗi lần.
 #
-# Usage:
-#   ./scripts/deploy-all.sh
-#   ./scripts/deploy-all.sh --skip-images
-#   ./scripts/deploy-all.sh --skip-tunnel
-#   ./scripts/deploy-all.sh --skip-security-stack
+# Dùng:
+#   bash scripts/deploy-all.sh
+#   bash scripts/deploy-all.sh --skip-tools     # bỏ Bước 1 (apt install) — máy đã cài đủ
+#   bash scripts/deploy-all.sh --from-step 9    # chạy lại từ 1 bước cụ thể (debug)
+#
+# Xem DEPLOY.md để biết chi tiết từng bước tương ứng.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
-OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
-AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
-SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
+cd "$REPO_ROOT"
 
-SKIP_IMAGES=false
-SKIP_TUNNEL=false
-SKIP_SECURITY_STACK=false
+SKIP_TOOLS=false
+FROM_STEP=1
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --skip-tools) SKIP_TOOLS=true; shift ;;
+    --from-step)  FROM_STEP="$2"; shift 2 ;;
+    *) echo "Tham số không hợp lệ: $1"; exit 1 ;;
+  esac
+done
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -31,407 +37,273 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-log()  { echo -e "${BLUE}[DEPLOY-ALL]${NC} $*"; }
+log()  { echo -e "${BLUE}[FIRST-DEPLOY]${NC} $*"; }
 ok()   { echo -e "${GREEN}[  OK  ]${NC} $*"; }
 warn() { echo -e "${YELLOW}[ WARN ]${NC} $*"; }
 fail() { echo -e "${RED}[ FAIL ]${NC} $*"; exit 1; }
 step() {
   echo -e "\n${BLUE}══════════════════════════════════════════${NC}"
-  echo -e "${BLUE} $*${NC}"
+  echo -e "${BLUE} Bước $1 — $2${NC}"
   echo -e "${BLUE}══════════════════════════════════════════${NC}"
 }
+run_step() { [[ "$FROM_STEP" -le "$1" ]]; }
 
-usage() {
-  cat <<EOF
-Usage: $(basename "$0") [--skip-images] [--skip-tunnel] [--skip-security-stack]
+START_TS=$(date +%s)
 
-Options:
-  --skip-images          Do not rebuild/sync ztlab/* images to K3s nodes
-  --skip-tunnel          Assume ctx-aws and ctx-openstack are already reachable
-  --skip-security-stack  Skip SPIRE/OPA/Envoy/Keycloak deployment
-  -h, --help             Show this help
-EOF
-}
-
-for arg in "$@"; do
-  case "$arg" in
-    --skip-images) SKIP_IMAGES=true ;;
-    --skip-tunnel) SKIP_TUNNEL=true ;;
-    --skip-security-stack) SKIP_SECURITY_STACK=true ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      usage >&2
-      fail "Unknown option: $arg"
-      ;;
-  esac
-done
-
-require_cmd() {
-  command -v "$1" >/dev/null 2>&1 || fail "Missing required command: $1"
-}
-
-kaws() {
-  kubectl --context "$AWS_CONTEXT" "$@"
-}
-
-kos() {
-  kubectl --context "$OS_CONTEXT" "$@"
-}
-
-verify_context() {
-  local ctx="$1"
-  kubectl --context "$ctx" get nodes --request-timeout=10s >/dev/null 2>&1 \
-    || fail "Cannot reach Kubernetes context: $ctx. Run ./scripts/k8s-tunnel.sh up all"
-  ok "Connected to $ctx ($(kubectl --context "$ctx" get nodes --no-headers | wc -l | tr -d ' ') nodes)"
-}
-
-wait_deployment() {
-  local ctx="$1"
-  local ns="$2"
-  local name="$3"
-  local timeout="${4:-180s}"
-
-  kubectl --context "$ctx" rollout status "deployment/$name" -n "$ns" --timeout="$timeout"
-}
-
-wait_daemonset() {
-  local ctx="$1"
-  local ns="$2"
-  local name="$3"
-  local timeout="${4:-180s}"
-
-  kubectl --context "$ctx" rollout status "daemonset/$name" -n "$ns" --timeout="$timeout"
-}
-
-wait_statefulset() {
-  local ctx="$1"
-  local ns="$2"
-  local name="$3"
-  local timeout="${4:-240s}"
-
-  kubectl --context "$ctx" rollout status "statefulset/$name" -n "$ns" --timeout="$timeout"
-}
-
-apply_namespaces() {
-  step "Step 1: Namespaces"
-  kaws apply -f "$REPO_ROOT/k8s/namespaces.yaml"
-  kos apply -f "$REPO_ROOT/k8s/namespaces.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/namespace.yaml"
-  kos apply -f "$REPO_ROOT/k8s/plg-stack/namespace.yaml"
-  ok "Namespaces ready on both clusters"
-}
-
-sync_images() {
-  step "Step 2: Images"
-  if [[ "$SKIP_IMAGES" == true ]]; then
-    log "Skipping image build/sync"
-    return
-  fi
-
-  "$REPO_ROOT/scripts/sync-financial-images.sh"
-  ok "Images synced to AWS and OpenStack K3s nodes"
-}
-
-deploy_security_stack() {
-  step "Step 3: Security stack"
-  if [[ "$SKIP_SECURITY_STACK" == true ]]; then
-    log "Skipping security stack"
-    return
-  fi
-
-  "$REPO_ROOT/scripts/deploy-security-stack.sh"
-  ok "Security stack deployed"
-}
-
-deploy_financial_infra() {
-  step "Step 4: Financial infrastructure"
-
-  # Shared ConfigMap (financial-common-config) — both clusters need it
-  kaws apply -f "$REPO_ROOT/k8s/financial/services.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/services.yaml"
-
-  # Redis: AWS only (fraud-detection velocity cache + IP block list)
-  kaws apply -f "$REPO_ROOT/k8s/financial/redis.yaml"
-  wait_deployment "$AWS_CONTEXT" financial redis 120s
-
-  # Postgres: OpenStack only (account-service + transaction-service)
-  kos apply -f "$REPO_ROOT/k8s/financial/postgres-accounts.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/postgres-txn.yaml"
-  wait_deployment "$OS_CONTEXT" financial postgres-accounts 180s
-  wait_deployment "$OS_CONTEXT" financial postgres-txn 180s
-
-  # pgAdmin → OpenStack (cùng cluster với Postgres, svc.cluster.local resolve được)
-  # RedisInsight → AWS (cùng cluster với Redis)
-  kos apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
-
-  ok "Redis on AWS, Postgres on OpenStack, DB admin UIs — ready"
-}
-
-deploy_financial_services() {
-  step "Step 5: Financial workloads"
-
-  create_financial_runtime_secrets
-  create_core_banking_integrity_secret
-
-  # OpenStack: OPA + Envoy configmaps must exist before os-services.yaml pods start
-  kos apply -f "$REPO_ROOT/k8s/financial/os-security.yaml"
-
-  # patch-api-gateway and patch-web-portal must exist before pods are scheduled
-  kaws create configmap patch-api-gateway \
-    --from-file=main.py="$REPO_ROOT/services/api-gateway/main.py" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-  kaws create configmap patch-web-portal \
-    --from-file=main.py="$REPO_ROOT/services/web-portal/main.py" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-
-  # AWS: ingress-facing + fraud + notification + web portal
-  kaws apply -f "$REPO_ROOT/k8s/financial/aws-services.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/financial/web-portal.yaml"
-  for svc in api-gateway payment-service fraud-detection notification-service web-portal; do
-    wait_deployment "$AWS_CONTEXT" financial "$svc" 180s
-  done
-
-  # OpenStack: core banking backend (requires os-security.yaml applied above)
-  kos apply -f "$REPO_ROOT/k8s/financial/os-services.yaml"
-  for svc in core-banking account-service transaction-service; do
-    wait_deployment "$OS_CONTEXT" financial "$svc" 180s
-  done
-
-  ok "AWS services, web portal, and OpenStack core banking ready"
-}
-
-keycloak_admin_password() {
-  if [[ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ]]; then
-    printf '%s' "$KEYCLOAK_ADMIN_PASSWORD"
-    return
-  fi
-
-  local encoded
-  encoded="$(kaws -n identity get secret keycloak-secret -o jsonpath='{.data.admin-password}' 2>/dev/null || true)"
-  if [[ -n "$encoded" ]]; then
-    printf '%s' "$encoded" | base64 -d
-    return
-  fi
-
-  fail "KEYCLOAK_ADMIN_PASSWORD is unset and identity/keycloak-secret does not exist"
-}
-
-create_keycloak_admin_secret() {
-  if kaws get secret keycloak-admin-secret -n plg-stack >/dev/null 2>&1; then
-    log "keycloak-admin-secret already exists"
-    return
-  fi
-  local admin_password
-  admin_password="$(keycloak_admin_password)"
-  kaws create secret generic keycloak-admin-secret -n plg-stack \
-    --from-literal=password="$admin_password"
-  ok "keycloak-admin-secret created"
-}
-
-create_ai_secret() {
-  if kaws get secret ai-secrets -n plg-stack >/dev/null 2>&1; then
-    log "ai-secrets already exists"
-    return
-  fi
-
-  kaws create secret generic ai-secrets -n plg-stack \
-    --from-literal=SOAR_DRY_RUN="${SOAR_DRY_RUN:-true}" \
-    --from-literal=SOAR_AUTO_EXECUTE="${SOAR_AUTO_EXECUTE:-true}" \
-    --from-literal=SOAR_MIN_SEVERITY="medium" \
-    --from-literal=SOAR_MIN_CONFIDENCE="0.50" \
-    --from-literal=SOAR_NAMESPACE="financial" \
-    --from-literal=SOAR_ALLOWED_CONTEXTS="${SOAR_ALLOWED_CONTEXTS:-ctx-aws,ctx-openstack}" \
-    --from-literal=SOAR_API_TOKEN="${SOAR_API_TOKEN:-}" \
-    --from-literal=SOAR_CASE_STORE_PATH="/data/cases.jsonl" \
-    --from-literal=PORTAL_URL="${PORTAL_URL:-http://portal.ztlab.local}" \
-    --from-literal=ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-}"
-}
-
-create_smtp_secret() {
-  if kaws get secret grafana-smtp-secret -n plg-stack >/dev/null 2>&1; then
-    log "grafana-smtp-secret already exists"
-    return
-  fi
-  # SMTP_PASS may be empty in lab — secret is created anyway so pods start cleanly.
-  # soar-engine references this secret with optional: true.
-  kaws create secret generic grafana-smtp-secret -n plg-stack \
-    --from-literal=password="${SMTP_PASS:-}"
-  ok "grafana-smtp-secret created"
-}
-
-create_core_banking_integrity_secret() {
-  local secret_value
-  if kaws get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
-    secret_value="$(kaws -n financial get secret core-banking-integrity-secret -o jsonpath='{.data.shared-secret}' | base64 -d)"
-    log "core-banking-integrity-secret already exists on AWS"
+# ─────────────────────────────────────────────────────────
+step 1 "Cài công cụ cần thiết"
+if run_step 1; then
+  if $SKIP_TOOLS; then
+    warn "Bỏ qua (--skip-tools)"
   else
-    secret_value="$(openssl rand -hex 32 2>/dev/null || date +%s%N)"
-    kaws create secret generic core-banking-integrity-secret -n financial \
-      --from-literal=shared-secret="$secret_value"
-    ok "core-banking-integrity-secret created on AWS"
-  fi
+    MISSING=()
+    for c in ansible ssh ssh-keygen socat curl jq openssl; do
+      command -v "$c" >/dev/null || MISSING+=("$c")
+    done
+    if [[ ${#MISSING[@]} -gt 0 ]]; then
+      log "Thiếu: ${MISSING[*]} — cài qua apt"
+      sudo apt update
+      sudo apt install -y ansible python3-pip python3-venv openssh-client openssh-server \
+                          iproute2 coreutils curl jq openssl socat
+    else
+      ok "Tool cơ bản đã đủ"
+    fi
 
-  if kos get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
-    log "core-banking-integrity-secret already exists on OpenStack"
+    command -v kubectl >/dev/null || { log "Cài kubectl"; sudo snap install kubectl --classic; }
+    command -v terraform >/dev/null || fail "Chưa có terraform — cài thủ công trước (không có trong apt mặc định), xem https://developer.hashicorp.com/terraform/install"
+    command -v aws >/dev/null || fail "Chưa có AWS CLI — cài thủ công trước"
+    command -v openstack >/dev/null || fail "Chưa có OpenStack CLI — cài thủ công trước (thường qua venv riêng)"
+
+    if ! command -v docker >/dev/null; then
+      fail "Chưa có Docker — cài Docker CE trước khi tiếp tục (xem DEPLOY.md Bước 1)"
+    fi
+    sudo systemctl enable --now docker
+    if ! groups "$USER" | grep -q docker; then
+      sudo usermod -aG docker "$USER"
+      warn "Vừa thêm $USER vào group docker — nếu lệnh docker bên dưới lỗi quyền, đăng xuất/đăng nhập lại rồi chạy lại script với --from-step 2"
+    fi
+    ok "Bước 1 xong"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────
+step 2 "Credentials .env"
+if run_step 2; then
+  [[ -f .env ]] || fail "Không thấy file .env — copy từ .env.template trước"
+  set -a; source <(grep -v '^#' .env | grep '='); set +a
+
+  if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
+    warn "Thiếu AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY trong .env"
+    read -rp "AWS_ACCESS_KEY_ID: " _akid
+    read -rsp "AWS_SECRET_ACCESS_KEY: " _asec; echo
+    [[ -n "$_akid" && -n "$_asec" ]] || fail "Không được để trống"
+    sed -i "s|^AWS_ACCESS_KEY_ID=.*|AWS_ACCESS_KEY_ID=$_akid|" .env
+    sed -i "s|^AWS_SECRET_ACCESS_KEY=.*|AWS_SECRET_ACCESS_KEY=$_asec|" .env
+    export AWS_ACCESS_KEY_ID="$_akid" AWS_SECRET_ACCESS_KEY="$_asec"
+  fi
+  export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-1}"
+  ok "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:0:6}...  region=$AWS_DEFAULT_REGION"
+
+  [[ -n "${OS_AUTH_URL:-}" ]] || fail "Thiếu OS_AUTH_URL trong .env"
+  ok "OS_AUTH_URL=$OS_AUTH_URL"
+fi
+
+# ─────────────────────────────────────────────────────────
+step 3 "SSH key AWS"
+if run_step 3; then
+  export AWS_KEY_PAIR_NAME="ztlab-key"
+  export SSH_KEY="$HOME/.ssh/$AWS_KEY_PAIR_NAME"
+  export TF_VAR_key_pair_name="$AWS_KEY_PAIR_NAME"
+
+  [[ -f "$SSH_KEY" ]] || ssh-keygen -t ed25519 -f "$SSH_KEY" -N ""
+
+  if aws ec2 describe-key-pairs --key-names "$AWS_KEY_PAIR_NAME" --region "$AWS_DEFAULT_REGION" >/dev/null 2>&1; then
+    ok "Key-pair '$AWS_KEY_PAIR_NAME' đã tồn tại trên AWS — bỏ qua import"
   else
-    kos create secret generic core-banking-integrity-secret -n financial \
-      --from-literal=shared-secret="$secret_value"
-    ok "core-banking-integrity-secret created on OpenStack"
+    log "Import key-pair '$AWS_KEY_PAIR_NAME' lên AWS"
+    aws ec2 import-key-pair \
+      --key-name "$AWS_KEY_PAIR_NAME" \
+      --public-key-material fileb://"$SSH_KEY.pub" \
+      --region "$AWS_DEFAULT_REGION"
   fi
-}
+fi
 
-create_financial_runtime_secrets() {
-  if kaws get secret web-portal-secret -n financial >/dev/null 2>&1; then
-    log "web-portal-secret already exists"
-    return
+# ─────────────────────────────────────────────────────────
+step 4 "SSH key OpenStack"
+if run_step 4; then
+  OS_KEY="$HOME/.ssh/zta-siem-soar-key"
+  [[ -f "$OS_KEY" ]] || ssh-keygen -t ed25519 -f "$OS_KEY" -N ""
+
+  if openstack keypair show zta-siem-soar-key >/dev/null 2>&1; then
+    ok "Key-pair 'zta-siem-soar-key' đã tồn tại trên OpenStack — bỏ qua"
+  else
+    log "Tạo key-pair 'zta-siem-soar-key' trên OpenStack"
+    openstack keypair create --public-key "$OS_KEY.pub" zta-siem-soar-key
   fi
+fi
 
-  local admin_password session_secret
-  admin_password="$(keycloak_admin_password)"
-  session_secret="$(openssl rand -hex 32 2>/dev/null || date +%s%N)"
-  kaws create secret generic web-portal-secret -n financial \
-    --from-literal=admin-password="$admin_password" \
-    --from-literal=session-secret="$session_secret"
-  ok "web-portal-secret created"
-}
+# ─────────────────────────────────────────────────────────
+step 5 "Provision AWS (Terraform)"
+if run_step 5; then
+  terraform -chdir=terraform/aws init -input=false
+  terraform -chdir=terraform/aws apply --auto-approve
+  ok "AWS apply xong"
+fi
 
-provision_grafana_configmaps() {
-  log "Provisioning Grafana ConfigMaps"
-  kaws delete configmap grafana-datasources grafana-dashboard-provider grafana-dashboards grafana-alerting \
-    -n plg-stack 2>/dev/null || true
-
-  kaws create configmap grafana-datasources -n plg-stack \
-    --from-file=loki-datasource.yml="$REPO_ROOT/plg-stack/grafana/datasources/loki-datasource.yml"
-  kaws create configmap grafana-dashboard-provider -n plg-stack \
-    --from-file=dashboard-provider.yml="$REPO_ROOT/plg-stack/grafana/dashboards/dashboard-provider.yml"
-  kaws create configmap grafana-dashboards -n plg-stack \
-    --from-file=zta-security-overview.json="$REPO_ROOT/plg-stack/grafana/dashboards/zta-security-overview.json" \
-    --from-file=ztlab-security-overview.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-security-overview.json" \
-    --from-file=ztlab-full-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-full-logs.json" \
-    --from-file=envoy-access-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/envoy-access-logs.json" \
-    --from-file=opa-decision-log.json="$REPO_ROOT/plg-stack/grafana/dashboards/opa-decision-log.json" \
-    --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json" \
-    --from-file=ztlab-soar-dashboard.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-soar-dashboard.json"
-  kaws create configmap grafana-alerting -n plg-stack \
-    --from-file=brute-force-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/brute-force-alert.yml" \
-    --from-file=fraud-gate-bypass-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/fraud-gate-bypass-alert.yml" \
-    --from-file=large-response-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/large-response-alert.yml" \
-    --from-file=lateral-movement-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/lateral-movement-alert.yml" \
-    --from-file=soar-engine-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/soar-engine-alert.yml" \
-    --from-file=security-control-plane-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/security-control-plane-alert.yml" \
-    --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
-}
-
-deploy_observability_response() {
-  step "Step 6: PLG, AI/SOAR, Prometheus"
-
-  # redis-auth must exist in plg-stack (soar-engine + security-scorer reference it)
-  kaws create secret generic redis-auth -n plg-stack \
-    --from-literal=password="ZTALab-Redis-2026!" \
-    --dry-run=client -o yaml | kaws apply -f -
-
-  create_keycloak_admin_secret
-  create_ai_secret
-  create_smtp_secret
-
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki-configmap.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack loki 180s
-
-  provision_grafana_configmaps
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/grafana.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack grafana 180s
-
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
-  wait_daemonset "$AWS_CONTEXT" plg-stack promtail 180s
-
-  # Ensure socat relay is persistent on AWS worker (OpenStack Promtail → Loki cross-cluster)
-  LOKI_CIP=$(kubectl --context "$AWS_CONTEXT" -n plg-stack get svc loki -o jsonpath='{.spec.clusterIP}')
-  ssh -o StrictHostKeyChecking=no -i "$SSH_KEY" \
-      -J ubuntu@52.221.255.36 ubuntu@10.10.1.11 \
-      "sudo tee /etc/systemd/system/loki-relay.service > /dev/null << 'EOF'
-[Unit]
-Description=Loki Relay (OpenStack cross-cluster)
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/socat TCP-LISTEN:31100,fork,reuseaddr TCP:${LOKI_CIP}:3100
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/null || warn "socat relay setup skipped (SSH unavailable)"
-
-  kos apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
-  # 172.10.10.1:13099 = deployer machine br-exnat interface (reachable from OpenStack via os-gateway default route)
-  # socat on deployer bridges this port to localhost:13100 → kubectl port-forward → Loki
-  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
-  wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
-
-  kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/rbac/web-portal-response-rbac.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/security-scorer.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack security-scorer 120s
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-analyzer.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack ai-analyzer 120s
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack soar-engine 180s
-
-  kaws apply -f "$REPO_ROOT/k8s/monitoring/prometheus.yaml"
-  wait_deployment "$AWS_CONTEXT" monitoring prometheus 180s
-
-  ok "PLG, AI/SOAR, and Prometheus ready on AWS"
-}
-
-apply_policies_and_ingress() {
-  step "Step 7: Network policies and ingress"
-
-  kaws apply -f "$REPO_ROOT/k8s/financial/network-policies/aws-allow-list.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/network-policies/os-allow-list.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/ingress.yaml"
-
-  ok "Network policies applied on both clusters; ingress applied on AWS"
-}
-
-verify_final() {
-  step "Step 8: Final status"
-
-  log "AWS non-system pods"
-  kaws get pods -A | grep -v kube-system || true
-
-  log "OpenStack non-system pods"
-  kos get pods -A | grep -v kube-system || true
-
-  ok "Full multi-cloud deploy flow completed"
-}
-
-main() {
-  step "Step 0: Prerequisites"
-  require_cmd kubectl
-  require_cmd bash
-  require_cmd grep
-
-  if [[ "$SKIP_TUNNEL" == false ]]; then
-    "$REPO_ROOT/scripts/k8s-tunnel.sh" up all
+# ─────────────────────────────────────────────────────────
+step 6 "Image Ubuntu OpenStack"
+if run_step 6; then
+  if openstack image list -f value -c Name | grep -qx "ubuntu-22.04"; then
+    ok "Image 'ubuntu-22.04' đã tồn tại — bỏ qua"
+  else
+    IMG_FILE="$HOME/ubuntu-22.04.img"
+    [[ -f "$IMG_FILE" ]] || wget -O "$IMG_FILE" \
+      https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+    openstack image create "ubuntu-22.04" \
+      --file "$IMG_FILE" --disk-format qcow2 --container-format bare --public
+    ok "Image tạo xong"
   fi
+fi
 
-  verify_context "$AWS_CONTEXT"
-  verify_context "$OS_CONTEXT"
+# ─────────────────────────────────────────────────────────
+step 7 "Flavor OpenStack"
+if run_step 7; then
+  EXISTING_FLAVORS=$(openstack flavor list -f value -c Name)
+  grep -qx "nano-plus" <<<"$EXISTING_FLAVORS" \
+    || openstack flavor create nano-plus --vcpus 1 --ram 1024 --disk 20 --public
+  grep -qx "m1.medium" <<<"$EXISTING_FLAVORS" \
+    || openstack flavor create m1.medium --vcpus 2 --ram 4096 --disk 40 --public
+  ok "Flavor sẵn sàng"
+fi
 
-  apply_namespaces
-  sync_images
-  deploy_security_stack
-  deploy_financial_infra
-  deploy_financial_services
-  deploy_observability_response
-  apply_policies_and_ingress
-  verify_final
-}
+# ─────────────────────────────────────────────────────────
+step 8 "Provision OpenStack (Terraform)"
+if run_step 8; then
+  terraform -chdir=terraform/openstack init -input=false
+  terraform -chdir=terraform/openstack apply --auto-approve
+  ok "OpenStack apply xong"
+fi
 
-main "$@"
+# ─────────────────────────────────────────────────────────
+step 9 "Cập nhật IP vào Ansible inventory (tự động)"
+if run_step 9; then
+  AWS_BASTION_IP=$(terraform -chdir=terraform/aws output -raw aws_bastion_pip)
+  AWS_GATEWAY_IP=$(terraform -chdir=terraform/aws output -raw aws_gateway_eip)
+  OS_GATEWAY_IP=$(terraform -chdir=terraform/openstack output -raw os_gateway_floating_ip)
+
+  [[ -n "$AWS_BASTION_IP" && -n "$AWS_GATEWAY_IP" && -n "$OS_GATEWAY_IP" ]] \
+    || fail "Thiếu output Terraform — kiểm tra Bước 5/8 đã apply thành công chưa"
+
+  log "aws_bastion=$AWS_BASTION_IP  aws_gateway=$AWS_GATEWAY_IP  os_gateway=$OS_GATEWAY_IP"
+
+  HOSTS_YML="ansible/inventory/hosts.yml"
+  cp "$HOSTS_YML" "$HOSTS_YML.bak"
+
+  python3 - "$HOSTS_YML" "$AWS_BASTION_IP" "$AWS_GATEWAY_IP" "$OS_GATEWAY_IP" <<'PYEOF'
+import re, sys
+
+path, bastion_ip, gateway_ip, os_gw_ip = sys.argv[1:5]
+content = open(path).read()
+
+content = re.sub(
+    r'(aws_bastion:\n\s+ansible_host: )\S+',
+    lambda m: m.group(1) + bastion_ip, content, count=1)
+content = re.sub(
+    r'(aws_gateway:\n\s+ansible_host: )\S+',
+    lambda m: m.group(1) + gateway_ip, content, count=1)
+
+marker = '    openstack:\n'
+before, _, after = content.partition(marker)
+if not _:
+    sys.exit("Không tìm thấy marker 'openstack:' trong hosts.yml — cấu trúc file đã thay đổi, sửa tay")
+
+# aws_private / aws_monitoring ProxyJump đều trỏ tới bastion — nằm trước marker openstack:
+before = re.sub(r'(-o ProxyJump=ubuntu@)\S+', lambda m: m.group(1) + bastion_ip, before)
+
+# os_gateway ansible_host + os_private ProxyJump — nằm sau marker openstack:
+after = re.sub(
+    r'(os_gateway:\n\s+ansible_host: )\S+',
+    lambda m: m.group(1) + os_gw_ip, after, count=1)
+after = re.sub(r'(-o ProxyJump=ubuntu@)\S+', lambda m: m.group(1) + os_gw_ip, after)
+
+open(path, 'w').write(before + marker + after)
+print("hosts.yml patched OK")
+PYEOF
+
+  ansible-inventory -i "$HOSTS_YML" --host aws_bastion | grep ansible_host
+  ansible-inventory -i "$HOSTS_YML" --host os_gateway  | grep ansible_host
+  ok "Inventory đã cập nhật (backup: $HOSTS_YML.bak)"
+fi
+
+# ─────────────────────────────────────────────────────────
+step 10 "Kiểm tra kết nối SSH + Ansible ping"
+if run_step 10; then
+  log "Chờ SSH sẵn sàng trên toàn bộ node (tối đa 5 phút)..."
+  DEADLINE=$(( $(date +%s) + 300 ))
+  until ansible -i ansible/inventory/hosts.yml all -m ping >/tmp/ansible-ping.log 2>&1; do
+    if [[ $(date +%s) -ge $DEADLINE ]]; then
+      cat /tmp/ansible-ping.log
+      fail "SSH/ping không thành công sau 5 phút — kiểm tra security group / TF_VAR_key_pair_name (xem bảng lỗi thường gặp trong DEPLOY.md)"
+    fi
+    sleep 10
+  done
+  ok "Toàn bộ node phản hồi ping"
+fi
+
+# ─────────────────────────────────────────────────────────
+step 11 "Ansible provisioning"
+if run_step 11; then
+  ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/baseline.yml
+  ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/wireguard.yml
+  ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/k3s.yml
+  ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/promtail.yml
+  ok "Ansible xong"
+fi
+
+# ─────────────────────────────────────────────────────────
+step 12 "Tunnel Kubernetes"
+if run_step 12; then
+  bash scripts/k8s-tunnel.sh up all
+
+  log "Chờ node Ready trên cả 2 cluster (tối đa 3 phút)..."
+  DEADLINE=$(( $(date +%s) + 180 ))
+  for CTX in ctx-aws ctx-openstack; do
+    until kubectl --context "$CTX" get nodes >/dev/null 2>&1; do
+      [[ $(date +%s) -lt $DEADLINE ]] || fail "Không kết nối được $CTX — kiểm tra k8s-tunnel.sh status"
+      sleep 5
+    done
+  done
+  kubectl config get-contexts
+  kubectl --context ctx-aws get nodes
+  kubectl --context ctx-openstack get nodes
+  ok "Cluster sẵn sàng"
+fi
+
+# ─────────────────────────────────────────────────────────
+step 13 "Deploy ứng dụng"
+if run_step 13; then
+  [[ -f "$HOME/kolla-venv/bin/activate" ]] && source "$HOME/kolla-venv/bin/activate"
+
+  IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh
+  export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
+  bash scripts/deploy-app.sh
+
+  kubectl --context ctx-aws get pods -A
+  kubectl --context ctx-openstack get pods -A
+  ok "Deploy ứng dụng xong"
+fi
+
+# ─────────────────────────────────────────────────────────
+step 14 "Seed data + mở UI"
+if run_step 14; then
+  python3 tests/seed_db.py
+  bash scripts/open-admin-uis.sh
+  ss -lnt | grep -E ':(18080|18081|3000|13100|8091|18082|18092|9090|5050|5540)\b' || true
+  ok "Seed + UI xong"
+fi
+
+ELAPSED=$(( $(date +%s) - START_TS ))
+echo -e "\n${GREEN}══════════════════════════════════════════${NC}"
+echo -e "${GREEN} First deploy hoàn tất trong $((ELAPSED/60))m $((ELAPSED%60))s${NC}"
+echo -e "${GREEN}══════════════════════════════════════════${NC}"
+echo "Xem DEPLOY.md Phần 2 cho vận hành hàng ngày (redeploy code, demo, health check)."

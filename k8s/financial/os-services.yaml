@@ -37,20 +37,16 @@ spec:
         cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/core-banking"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        # Istio (Phase 6 batch 4, OpenStack): migrated. NodePort 30080 (used
+        # by payment-service cross-cloud, see k8s/financial/istio-policies.yaml)
+        # keeps its number but now targets istio-proxy's transparent
+        # interception on 8080 instead of the removed hand-rolled envoy's
+        # 15006 — see the Service below.
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: core-banking
-      volumes:
-        - name: envoy-config
-          configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
       containers:
         - name: core-banking
           image: ztlab/core-banking:1.0.0
@@ -92,31 +88,6 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              value: "spiffe://ztlab.local/openstack/core-banking"
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy/envoy.yaml
-              subPath: envoy.yaml
-              readOnly: true
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -130,7 +101,7 @@ spec:
   ports:
     - name: envoy
       port: 15006
-      targetPort: 15006
+      targetPort: 8080
       nodePort: 30080
     - name: http
       port: 8080
@@ -157,7 +128,9 @@ spec:
         cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/account-service"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: account-service
       containers:
@@ -200,48 +173,6 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              value: "spiffe://ztlab.local/openstack/account-service"
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy/envoy.yaml
-              subPath: envoy.yaml
-              readOnly: true
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
-      volumes:
-        - name: envoy-config
-          configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
@@ -255,7 +186,7 @@ spec:
   ports:
     - name: envoy
       port: 15006
-      targetPort: 15006
+      targetPort: 8080
       nodePort: 30082
     - name: http
       port: 8080
@@ -282,7 +213,9 @@ spec:
         cloud: openstack
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/transaction-service"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: transaction-service
       containers:
@@ -325,48 +258,6 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              value: "spiffe://ztlab.local/openstack/transaction-service"
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy/envoy.yaml
-              subPath: envoy.yaml
-              readOnly: true
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
-      volumes:
-        - name: envoy-config
-          configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Service
@@ -380,7 +271,7 @@ spec:
   ports:
     - name: envoy
       port: 15006
-      targetPort: 15006
+      targetPort: 8080
       nodePort: 30083
     - name: http
       port: 8080

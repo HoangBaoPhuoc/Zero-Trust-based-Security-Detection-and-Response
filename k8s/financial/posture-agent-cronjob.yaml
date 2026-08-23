@@ -1,0 +1,141 @@
+# Device/workload posture detection layer — completes the Device Posture
+# pillar left half-finished by an earlier plan pass: opa/policies/zta_policy.rego
+# already had `posture_compliant` (defaults to true when the caller sends no
+# X-Device-Posture header, so it never broke existing traffic), and
+# tests/grafana_kb_t5_noncompliant_device.sh already proved the Rego logic
+# denies correctly in isolation — but nothing in the cluster ever actually
+# produced that header. This CronJob is the missing signal source.
+#
+# Compliance bar is intentionally loose, not "must be non-root": a live check
+# on 2026-08-23 found every financial-namespace service running as uid=0 with
+# a readable /etc/shadow (no securityContext set anywhere) — the exact
+# "violation" signature k8s/financial/security-scanner-job.yaml uses to
+# simulate a misconfigured pod for the KB6 demo. Enforcing that same bar here
+# would immediately 403 every real /transactions/execute call. Instead this
+# only flags what's actually dangerous: privileged containers, capabilities
+# beyond Docker's default set (SYS_ADMIN/SYS_PTRACE/NET_ADMIN/SYS_MODULE),
+# and unpinned (`:latest`/tagless) images — none of which any current
+# workload here has, so today's audit should read 100% compliant, while
+# still being a real, live check that would catch a future regression
+# (e.g. someone adding `privileged: true` for debugging and forgetting to
+# remove it).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: posture-agent
+  namespace: financial
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: posture-agent
+  namespace: financial
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: posture-agent
+  namespace: financial
+subjects:
+  - kind: ServiceAccount
+    name: posture-agent
+    namespace: financial
+roleRef:
+  kind: Role
+  name: posture-agent
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: posture-agent
+  namespace: financial
+spec:
+  schedule: "*/2 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 60
+      template:
+        metadata:
+          annotations:
+            sidecar.istio.io/inject: "false"  # short-lived audit job, not a mesh workload
+        spec:
+          serviceAccountName: posture-agent
+          restartPolicy: Never
+          containers:
+            - name: posture-agent
+              image: alpine/k8s:1.31.13
+              env:
+                - name: LOKI_PUSH_URL
+                  value: "http://loki.plg-stack.svc.cluster.local:3100/loki/api/v1/push"
+                - name: CLOUD_PROVIDER
+                  value: "aws"
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -uo pipefail
+
+                  PODS_JSON=$(kubectl get pods -n financial -o json)
+
+                  # Docker's default capability set (CHOWN/DAC_OVERRIDE/FOWNER/FSETID/
+                  # KILL/SETGID/SETUID/SETPCAP/NET_BIND_SERVICE/NET_RAW/SYS_CHROOT/
+                  # MKNOD/AUDIT_WRITE/SETFCAP) is normal even for a root-uid process —
+                  # only explicitly ADDED capabilities beyond that are a real signal.
+                  DANGEROUS_CAPS='SYS_ADMIN|SYS_PTRACE|NET_ADMIN|SYS_MODULE|ALL'
+
+                  TOTAL=0
+                  VIOLATIONS=0
+                  REASON_LIST="[]"
+
+                  while IFS=$'\t' read -r NAME APP IMAGE PRIVILEGED ADDED_CAPS; do
+                    [ -z "$NAME" ] && continue
+                    TOTAL=$((TOTAL+1))
+                    reasons=""
+
+                    if [ "$PRIVILEGED" = "true" ]; then
+                      reasons="${reasons}privileged,"
+                    fi
+                    if echo "$ADDED_CAPS" | grep -Eq "$DANGEROUS_CAPS"; then
+                      reasons="${reasons}dangerous_capability,"
+                    fi
+                    TAG="${IMAGE##*:}"
+                    if [ "$TAG" = "$IMAGE" ] || [[ "$TAG" == *latest* ]]; then
+                      reasons="${reasons}unpinned_image,"
+                    fi
+
+                    compliant="true"
+                    if [ -n "$reasons" ]; then
+                      compliant="false"
+                      VIOLATIONS=$((VIOLATIONS+1))
+                    fi
+
+                    TS_NS="$(date +%s)000000000"
+                    LOGLINE=$(cat <<EOF
+                  {"event":"posture_check","cloud":"${CLOUD_PROVIDER}","workload":"${APP}","pod":"${NAME}","image":"${IMAGE}","compliant":${compliant},"reasons":"${reasons%,}"}
+                  EOF
+                  )
+                    PAYLOAD=$(cat <<EOF
+                  {"streams":[{"stream":{"job":"posture-agent","cloud":"${CLOUD_PROVIDER}"},"values":[["${TS_NS}", $(echo "$LOGLINE" | jq -Rs .)]]}]}
+                  EOF
+                  )
+                    curl -s -o /dev/null -m 5 -X POST "$LOKI_PUSH_URL" \
+                      -H "Content-Type: application/json" -d "$PAYLOAD" || true
+
+                    echo "[posture-agent] pod=${NAME} app=${APP} compliant=${compliant} reasons=${reasons%,}"
+                  done < <(echo "$PODS_JSON" | jq -r '
+                    .items[] | select(.metadata.labels.app != null and (.metadata.labels."job-name" == null)) |
+                    . as $pod | .spec.containers[0] as $c |
+                    [$pod.metadata.name, $pod.metadata.labels.app, $c.image,
+                     ($c.securityContext.privileged // false | tostring),
+                     ($c.securityContext.capabilities.add // [] | join(","))] | @tsv
+                  ')
+
+                  echo "[posture-agent] cloud=${CLOUD_PROVIDER} checked=${TOTAL} non_compliant=${VIOLATIONS}"

@@ -46,6 +46,7 @@ FRAUD_DETECTION_URL = os.getenv("FRAUD_DETECTION_URL", "http://fraud-detection.f
 SECURITY_SCORER_URL = os.getenv("SECURITY_SCORER_URL", "http://security-scorer.plg-stack.svc.cluster.local:8080").rstrip("/")
 SOAR_ENGINE_URL = os.getenv("SOAR_ENGINE_URL", "http://soar-engine.plg-stack.svc.cluster.local:8080").rstrip("/")
 SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "")
+LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 SESSION_COOKIE = "ztlab_session"
@@ -765,6 +766,7 @@ async def dashboard(request: Request, new_device: str = ""):
         "device_trust": session.get("device_trust", "trusted"),
         "device_label": session.get("device_label", ""),
         "new_device_alert": new_device,
+        "cloud": CLOUD,
         "page": "dashboard",
     })
 
@@ -778,8 +780,26 @@ async def transfer_page(request: Request):
         "request": request,
         "username": session.get("username"),
         "full_name": session.get("full_name", session.get("username")),
+        "roles": session.get("roles", []),
         "account_id": session.get("account_id", ""),
+        "cloud": CLOUD,
         "page": "transfer",
+    })
+
+
+@app.get("/history", response_class=HTMLResponse)
+async def history_page(request: Request):
+    session = _get_session(request)
+    if not session:
+        return RedirectResponse("/login", status_code=302)
+    return templates.TemplateResponse("history.html", {
+        "request": request,
+        "username": session.get("username"),
+        "full_name": session.get("full_name", session.get("username")),
+        "roles": session.get("roles", []),
+        "account_id": session.get("account_id", ""),
+        "cloud": CLOUD,
+        "page": "history",
     })
 
 
@@ -804,6 +824,7 @@ async def profile_page(request: Request):
         "device_trust": session.get("device_trust", "trusted"),
         "device_label": session.get("device_label", "Không xác định"),
         "known_device_count": known_device_count,
+        "cloud": CLOUD,
         "page": "profile",
     })
 
@@ -889,6 +910,65 @@ async def do_transfer(request: Request):
             return JSONResponse(result, status_code=resp.status_code)
         except Exception:
             return JSONResponse({"error": "service unavailable"}, status_code=503)
+
+
+@app.get("/api/trace/{trace_id}")
+async def get_trace(trace_id: str, request: Request):
+    """Real per-hop journey of one transfer, built from each service's own
+    `event=http_request` log line (shared/logging.py::trace_middleware fires
+    this on every request, success or failure, tagged with the same
+    X-Trace-ID that api-gateway assigns and payment-service/core-banking
+    forward downstream). Not a simulation — if Loki hasn't ingested a hop yet
+    it's simply absent from the response; the caller should retry briefly
+    rather than fake completion.
+
+    Note: istio-proxy's own access log uses Envoy's own request id
+    (`%REQ(X-REQUEST-ID)%`), not this app trace_id, so mTLS/Istio hops don't
+    show up as a distinct line here even though they run on every hop below.
+    """
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    if not re.fullmatch(r"[a-zA-Z0-9\-]{1,64}", trace_id):
+        return JSONResponse({"error": "invalid trace_id"}, status_code=400)
+
+    end_ns = time.time_ns()
+    start_ns = end_ns - 5 * 60 * 10**9
+    steps: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                f"{LOKI_URL}/loki/api/v1/query_range",
+                params={
+                    "query": '{namespace="financial"} |~ "%s"' % trace_id,
+                    "start": start_ns, "end": end_ns, "limit": 100,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            for stream in data.get("data", {}).get("result", []):
+                labels = stream.get("stream", {})
+                for ts_ns, raw_line in stream.get("values", []):
+                    try:
+                        parsed = json.loads(raw_line)
+                    except Exception:
+                        continue
+                    if parsed.get("trace_id") != trace_id:
+                        continue
+                    steps.append({
+                        "timestamp_ns": int(ts_ns),
+                        "service": parsed.get("service") or labels.get("app", "?"),
+                        "event": parsed.get("event", "?"),
+                        "level": parsed.get("level", "INFO"),
+                        "method": parsed.get("method"),
+                        "path": parsed.get("path"),
+                        "status_code": parsed.get("status_code"),
+                        "duration_ms": parsed.get("duration_ms"),
+                    })
+    except Exception:
+        pass
+    steps.sort(key=lambda s: s["timestamp_ns"])
+    return JSONResponse({"trace_id": trace_id, "steps": steps})
 
 
 @app.get("/api/account/me")
@@ -1373,6 +1453,49 @@ async def api_soar_cases(request: Request):
             return JSONResponse(r.json() if r.status_code == 200 else [])
         except Exception as exc:
             return JSONResponse({"error": str(exc)}, status_code=503)
+
+
+_ATTACK_SURFACE_PATH = os.path.join(os.path.dirname(__file__), "results", "attack_surface_graph.md")
+
+
+@app.get("/api/topology-summary")
+async def api_topology_summary(request: Request):
+    """Real numbers from tests/generate_attack_surface_graph.py's last run
+    (mounted read-only from the `attack-surface-graph` ConfigMap — see
+    scripts/deploy-app.sh) — parsed from the markdown table/lists it writes,
+    not recomputed here, so this always reflects the last time that script
+    was actually run against live cluster state.
+    """
+    session = _get_session(request)
+    if not session:
+        return JSONResponse({"error": "not authenticated"}, status_code=401)
+    try:
+        with open(_ATTACK_SURFACE_PATH, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return JSONResponse({"available": False})
+
+    def _extract_row(label: str) -> tuple[str, str] | None:
+        m = re.search(rf"\|\s*{re.escape(label)}\s*\|([^|]+)\|([^|]+)\|", text)
+        return (m.group(1).strip(), m.group(2).strip()) if m else None
+
+    services_row = _extract_row("Số service (financial ns)")
+    edges_row = _extract_row("Số cạnh (đường gọi được phép)")
+    reduction_m = re.search(r"\*\*(~?[\d.]+%)\*\*", text)
+    paths_m = re.search(r"Path OPA cho phép trong `internal_service_request`.*?\n((?:- .+\n?)+)", text)
+    aws_ns_m = re.search(r"AWS:\s*(\[.+?\])", text)
+    os_ns_m = re.search(r"OpenStack:\s*(\[.+?\])", text)
+
+    return JSONResponse({
+        "available": True,
+        "services": services_row[0] if services_row else None,
+        "edges_baseline": edges_row[0] if edges_row else None,
+        "edges_zero_trust": edges_row[1] if edges_row else None,
+        "reduction_pct": reduction_m.group(1) if reduction_m else None,
+        "allowed_paths": re.findall(r"- `([^`]+)`", paths_m.group(1)) if paths_m else [],
+        "aws_allowed_namespaces": aws_ns_m.group(1) if aws_ns_m else None,
+        "openstack_allowed_namespaces": os_ns_m.group(1) if os_ns_m else None,
+    })
 
 
 @app.get("/api/soar/blocked-ips")

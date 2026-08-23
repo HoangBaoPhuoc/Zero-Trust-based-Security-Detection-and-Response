@@ -129,7 +129,13 @@ data:
             regex: financial
           - source_labels: [__meta_kubernetes_pod_container_name]
             action: keep
-            regex: envoy
+            # All 8 financial services are Istio-migrated (Phase 6) — the
+            # hand-rolled "envoy" container no longer exists anywhere.
+            # istio-proxy's access log format is configured in
+            # k8s/istio/istio-operator.yaml (accessLogFormat) to match the
+            # same JSON field names this pipeline already expects, so no
+            # downstream LogQL/alert-rule changes were needed.
+            regex: istio-proxy
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]

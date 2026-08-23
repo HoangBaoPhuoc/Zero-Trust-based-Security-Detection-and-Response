@@ -40,23 +40,18 @@ spec:
         app: api-gateway
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/api-gateway"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        # Istio (Phase 6): migrated — hand-rolled Envoy removed, istio-proxy
+        # takes over. SPIRE stays the cert source via the Workload API socket
+        # (see notification-service comment for the full mechanism).
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: api-gateway
       volumes:
         - name: patch-api-gateway
           configMap:
             name: patch-api-gateway
-        - name: envoy-config
-          configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
       containers:
         - name: api-gateway
           image: ztlab/api-gateway:1.0.0
@@ -66,8 +61,11 @@ spec:
             - containerPort: 8080
               name: http
           env:
+            # Istio intercepts this transparently and applies mTLS since
+            # payment-service is also mesh-managed — no more local envoy
+            # path router at 127.0.0.1:15001.
             - name: PAYMENT_SERVICE_URL
-              value: "http://127.0.0.1:15001"
+              value: "http://payment-service.financial.svc.cluster.local:8080"
             - name: REDIS_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -93,37 +91,6 @@ spec:
             - name: patch-api-gateway
               mountPath: /app/main.py
               subPath: main.py
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -136,7 +103,8 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: 15006
+      # Istio intercepts transparently — Service targets the real app port.
+      targetPort: 8080
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -156,33 +124,47 @@ spec:
         app: payment-service
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/payment-service"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: payment-service
       volumes:
-        - name: envoy-config
+        - name: patch-payment-service
           configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
+            name: patch-payment-service
+        - name: patch-shared
+          configMap:
+            name: patch-shared
       containers:
         - name: payment-service
           image: ztlab/payment-service:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          volumeMounts:
+            - name: patch-payment-service
+              mountPath: /app/main.py
+              subPath: main.py
+            - name: patch-shared
+              mountPath: /app/shared/posture.py
+              subPath: posture.py
           ports:
             - containerPort: 8080
               name: http
           env:
             - name: FRAUD_SERVICE_URL
-              value: "http://127.0.0.1:15001"
+              value: "http://fraud-detection.financial.svc.cluster.local:8080"
+            # core-banking is cross-cloud (OpenStack), not yet Istio-migrated
+            # — reached via ServiceEntry+DestinationRule
+            # (istio-cross-cloud-core-banking) so Istio still applies
+            # SPIRE-sourced mTLS to this external NodePort, same as before.
+            # core-banking-openstack is a selector-less Service + manually
+            # managed Endpoints (istio-policies.yaml) giving a stable
+            # internal DNS name to the OpenStack NodePort — CoreDNS resolves
+            # it natively, Istio applies ISTIO_MUTUAL to it like any other
+            # in-mesh destination.
             - name: CORE_BANKING_URL
-              value: "http://127.0.0.1:15001"
+              value: "http://core-banking-openstack.financial.svc.cluster.local:30080"
             - name: CORE_BANKING_SHARED_SECRET
               valueFrom:
                 secretKeyRef:
@@ -202,37 +184,6 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -245,7 +196,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: 15006
+      targetPort: 8080
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -265,20 +216,11 @@ spec:
         app: fraud-detection
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/fraud-detection"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: fraud-detection
-      volumes:
-        - name: envoy-config
-          configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
       containers:
         - name: fraud-detection
           image: ztlab/fraud-detection:1.0.0
@@ -309,37 +251,6 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -352,7 +263,7 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: 15006
+      targetPort: 8080
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -372,19 +283,26 @@ spec:
         app: notification-service
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/notification-service"
+        # Istio canary (Phase 6): hand-rolled Envoy sidecar removed below,
+        # istio-proxy takes over mTLS + inbound interception. SPIRE stays the
+        # cert source (not Istio's own Citadel): pilot-agent (inside
+        # istio-proxy) checks for a Workload API socket at the well-known
+        # path /var/run/secrets/workload-spiffe-uds/socket BEFORE starting
+        # Envoy — if found, it uses that as the SDS source instead of
+        # spinning up its own local Citadel-backed SDS server (confirmed via
+        # istio-proxy logs: "Workload SDS socket not found. Starting Istio
+        # SDS Server" when this mount is absent). SPIRE's agent socket speaks
+        # the Envoy SDS protocol natively and already serves secrets named
+        # "default"/"ROOTCA" — the exact names istio-proxy requests — so the
+        # SPIRE socket FILE (not just its directory) must be bind-mounted at
+        # that exact path. An earlier EnvoyFilter approach (patching the
+        # sds-grpc cluster) did NOT work — that only affects Envoy's own
+        # xDS-delivered config, not pilot-agent's pre-Envoy startup check.
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: notification-service
-      volumes:
-        - name: envoy-config
-          configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
       containers:
         - name: notification-service
           image: ztlab/notification-service:1.0.0
@@ -436,37 +354,6 @@ spec:
               port: http
             initialDelaySeconds: 15
             periodSeconds: 20
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -479,4 +366,6 @@ spec:
   ports:
     - name: http
       port: 8080
-      targetPort: 15006
+      # Istio intercepts traffic transparently via iptables — Service targets
+      # the real app port now, not the old hand-rolled Envoy's 15006.
+      targetPort: 8080
