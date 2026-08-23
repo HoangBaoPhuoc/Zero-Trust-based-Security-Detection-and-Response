@@ -1,0 +1,152 @@
+# HashiCorp Vault — thay K8s Secret thường bằng secrets manager thật.
+# File storage backend (không phải -dev mode — dev mode mất data khi restart,
+# root token hardcode, không phù hợp giữ secret thật của cluster) — nhưng vì
+# lab không có KMS/HSM ngoài để auto-unseal, unseal key được lưu trong chính
+# 1 K8s Secret của cluster (vault-unseal-keys) — đây là giản lược CÓ CHỦ ĐÍCH
+# cho phạm vi lab, không phải cấu hình khuyến nghị cho production thật (production
+# cần auto-unseal qua AWS KMS/Azure Key Vault/GCP KMS — vault sinh ra để BẢO VỆ
+# secret khỏi người có quyền đọc K8s Secret, nhưng ở đây unseal key cũng nằm
+# trong K8s Secret nên về bản chất, ai đọc được K8s Secret vẫn unseal được Vault
+# — giá trị thật của bước này là chứng minh QUY TRÌNH Vault (KV v2, K8s auth,
+# Agent Injector, audit log riêng) hoạt động đúng, không phải đạt chuẩn bảo mật
+# production).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vault
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vault-config
+  namespace: vault
+data:
+  vault.hcl: |
+    ui = true
+    listener "tcp" {
+      address     = "0.0.0.0:8200"
+      tls_disable = 1
+    }
+    storage "file" {
+      path = "/vault/data"
+    }
+    api_addr = "http://vault.vault.svc.cluster.local:8200"
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  serviceName: vault
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vault
+  template:
+    metadata:
+      labels:
+        app: vault
+    spec:
+      serviceAccountName: vault
+      containers:
+        - name: vault
+          image: hashicorp/vault:1.17
+          command: ["vault", "server", "-config=/vault/config/vault.hcl"]
+          securityContext:
+            capabilities:
+              add: ["IPC_LOCK"]
+          env:
+            - name: VAULT_UNSEAL_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vault-unseal-keys
+                  key: unseal-key
+                  optional: true
+          # Tự unseal nếu pod restart (node reboot, pod eviction...) — dùng
+          # unseal key lưu trong Secret vault-unseal-keys (tạo lúc init lần
+          # đầu). Xem ghi chú đầu file về giới hạn bảo mật của cách này (không
+          # có KMS ngoài để auto-unseal đúng chuẩn production).
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - /bin/sh
+                  - -c
+                  - |
+                    [ -z "$VAULT_UNSEAL_KEY" ] && exit 0
+                    for i in $(seq 1 30); do
+                      wget -q -O- http://127.0.0.1:8200/v1/sys/health?standbyok=true 2>/dev/null && break
+                      sleep 2
+                    done
+                    SEALED=$(wget -q -O- 'http://127.0.0.1:8200/v1/sys/seal-status' | grep -o '"sealed":[a-z]*' | cut -d: -f2)
+                    if [ "$SEALED" = "true" ]; then
+                      wget -q -O- --post-data="{\"key\":\"$VAULT_UNSEAL_KEY\"}" http://127.0.0.1:8200/v1/sys/unseal
+                    fi
+          ports:
+            - containerPort: 8200
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /vault/config
+            - name: data
+              mountPath: /vault/data
+          readinessProbe:
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+              port: 8200
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 768Mi
+      volumes:
+        - name: config
+          configMap:
+            name: vault-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vault
+  namespace: vault
+spec:
+  selector:
+    app: vault
+  ports:
+    - port: 8200
+      targetPort: 8200
+      name: http
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault
+  namespace: vault
+---
+# Cho phép Vault's Kubernetes auth method review token của mọi ServiceAccount
+# trong cluster (cần để xác thực pod nào được phép đọc secret nào).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-token-review
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: vault
+    namespace: vault

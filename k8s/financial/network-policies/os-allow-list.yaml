@@ -37,6 +37,19 @@ spec:
             cidr: 10.200.200.0/24
         - ipBlock:
             cidr: 192.168.101.0/24
+        # NodePort traffic forwarded cross-node (externalTrafficPolicy:
+        # Cluster, the k8s default) gets SNAT'd by kube-proxy to the pod
+        # network CIDR before crossing to the node that actually runs the
+        # backend pod — standard, unavoidable k8s behavior, not specific to
+        # this project. Without this rule, ANY cross-node NodePort call
+        # (same-cluster same-subnet included, e.g. os-k3s-master calling a
+        # pod on os-k3s-worker-2) gets refused by kube-router's netpol
+        # enforcement, since the masqueraded source matches no other rule
+        # here (confirmed via repro: host-namespace curl to another node's
+        # pod IP failed identically to the cross-cloud case — this was never
+        # actually cross-cloud-specific).
+        - ipBlock:
+            cidr: 10.42.0.0/16
       ports:
         - port: 15006
           protocol: TCP
@@ -90,4 +103,15 @@ spec:
             cidr: 10.10.1.10/32
       ports:
         - port: 30900
+          protocol: TCP
+    # Istio (Phase 6, OpenStack) — istio-proxy sidecar needs istiod for CA
+    # (cert signing) + xDS config, both served on 15012. Same fix as the AWS
+    # side's plg-stack→vault NetworkPolicy gap: this must exist before any
+    # pod with restricted egress starts, or its sidecar can't fetch its cert.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: istio-system
+      ports:
+        - port: 15012
           protocol: TCP

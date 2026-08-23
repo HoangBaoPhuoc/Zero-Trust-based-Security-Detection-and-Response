@@ -15,8 +15,8 @@ Hệ thống có 3 lớp log độc lập, tất cả join được với nhau q
 
 | Lớp | Nguồn (Loki `job=`) | Sinh ra bởi |
 |---|---|---|
-| Biên mạng (L4/L7 access log) | `envoy-access` | Envoy sidecar mỗi service |
-| Quyết định uỷ quyền (authorization decision) | `opa-decisions` | OPA `ext_authz` (mỗi lần Envoy hỏi "cho qua không") |
+| Biên mạng (L4/L7 access log) | `envoy-access` (tên nhãn Loki giữ nguyên từ trước migration; nội dung là log của Istio sidecar) | Istio sidecar (istio-proxy) mỗi service |
+| Quyết định uỷ quyền (authorization decision) | `opa-decisions` | OPA `ext_authz` (mỗi lần istio-proxy hỏi "cho qua không") |
 | Ứng dụng (business logic) | `kubernetes-pods` (lọc theo `app=`) | `shared/logging.py::ZTLabLogger` trong từng service Python |
 
 Một request thật (ví dụ 1 lệnh chuyển tiền) để lại dấu vết ở **cả 3 lớp cùng lúc**,
@@ -82,7 +82,7 @@ cho 1 request (dùng `pandas.pivot_table` hoặc groupby).
 
 ### Cột đặc trưng (feature columns) theo lớp
 
-**Lớp `envoy` (biên mạng — luôn có cho mọi HTTP request):**
+**Lớp `envoy` (biên mạng — luôn có cho mọi HTTP request; tên cột giữ tiền tố `envoy_` từ trước migration Istio để không phải sửa `generate_dataset.py`/pipeline hiện có, nhưng dữ liệu nguồn thật là log của istio-proxy):**
 
 | Cột | Kiểu | Ý nghĩa / giá trị ML |
 |---|---|---|
@@ -261,7 +261,7 @@ so với heuristic hiện có) mới có giá trị thay thế.
 
 ## 9. Device Trust — trụ cột Zero Trust mới (bổ sung sau khi viết bộ kit này)
 
-Hệ thống trước đây có Identity (Keycloak), Authorization (OPA), mTLS (SPIRE/Envoy),
+Hệ thống trước đây có Identity (Keycloak), Authorization (OPA), mTLS (SPIRE/Istio),
 Fraud (rule-based) nhưng **thiếu tín hiệu Device Posture/Compliance** — một trụ cột
 chuẩn của Zero Trust (NIST SP 800-207). Đã bổ sung một phiên bản thực tế, khả thi
 với môi trường trình duyệt (không giả định có agent cài trên máy khách):

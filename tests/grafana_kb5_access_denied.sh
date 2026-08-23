@@ -12,6 +12,7 @@ set -euo pipefail
 
 GW_URL="${GW_URL:-http://localhost:18080}"
 KC_URL="${KC_URL:-http://localhost:8180}"
+KC_ADMIN_PASS="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
 SCENARIO="KB5_access_denied"
 
 log()  { printf "[%s] %s\n"       "$SCENARIO" "$*"; }
@@ -22,9 +23,20 @@ fail() { printf "[%s] FAIL: %s\n" "$SCENARIO" "$*" >&2; exit 1; }
 curl -fsS "$GW_URL/health" >/dev/null || fail "API Gateway không khả dụng"
 
 # ── 2. Lấy JWT merchant01 (role=financial-read only) ─────────────────────────
+# web-portal client có directAccessGrantsEnabled=false (Zero Trust hardening — chỉ
+# cho phép PKCE flow), nên script test dùng api-gateway client (direct grant thật,
+# scope kiểm thử) + secret lấy qua Keycloak admin API, giống scripts/run-demo.sh.
+ADMIN_TOKEN=$(curl -s -X POST "$KC_URL/realms/master/protocol/openid-connect/token" \
+  -d "grant_type=password&client_id=admin-cli&username=admin&password=$KC_ADMIN_PASS" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
+[[ -n "$ADMIN_TOKEN" ]] || fail "Không lấy được Keycloak admin token"
+KC_CLIENT_SECRET=$(curl -s -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "$KC_URL/admin/realms/ztlab/clients?clientId=api-gateway" \
+  | python3 -c "import json,sys; c=json.load(sys.stdin); print(c[0]['secret'] if c else '')" 2>/dev/null)
+[[ -n "$KC_CLIENT_SECRET" ]] || fail "Không lấy được client secret của api-gateway"
 MERCHANT_TOKEN=$(curl -s -X POST "$KC_URL/realms/ztlab/protocol/openid-connect/token" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=password&client_id=web-portal&username=merchant01&password=Test1234%21&scope=openid" \
+  -d "grant_type=password&client_id=api-gateway&client_secret=$KC_CLIENT_SECRET&username=merchant01&password=Test1234%21&scope=openid" \
   | python3 -c "import sys,json; print(json.load(sys.stdin).get('access_token',''))" 2>/dev/null)
 [[ -n "$MERCHANT_TOKEN" ]] || fail "Không lấy được JWT merchant01"
 

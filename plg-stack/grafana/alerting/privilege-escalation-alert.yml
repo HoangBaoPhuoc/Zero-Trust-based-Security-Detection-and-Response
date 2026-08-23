@@ -1,0 +1,36 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: privilege-escalation
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: privilege-escalation-container
+        title: "Kịch bản 6 — Privilege Escalation in Container (T1068)"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({namespace="financial",app="security-scanner"} | json | event="privilege_escalation" [5m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "Privilege Escalation trong container — vi phạm workload isolation"
+          description: "ATT&CK T1068 — security-scanner phát hiện container chạy uid=0 với dangerous capabilities (CAP_DAC_OVERRIDE, CAP_SETUID...) hoặc /etc/shadow đọc được — vi phạm least-privilege ở tầng container, không chỉ tầng network. Log thật từ k8s/financial/security-scanner-job.yaml. (Khác T1611 'Escape to Host' — kỹ thuật đó là thoát ra ngoài container tới host, ai-analyzer.yaml có pattern riêng cho container_escape/T1611, không trùng với rule này.)"
+        labels:
+          severity: critical
+          category: security
+          mitre: T1068
+          attack_type: privilege_escalation
