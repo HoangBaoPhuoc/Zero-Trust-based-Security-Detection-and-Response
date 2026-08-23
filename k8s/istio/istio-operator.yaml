@@ -1,0 +1,58 @@
+# IstioOperator config — single source of truth for `istioctl install`
+# (scripts/deploy-app.sh's deploy_istio() applies this file, not ad-hoc
+# --set flags, so trustDomain + the OPA extension provider survive redeploy
+# and stay reviewable in one place).
+#
+# extensionProviders.opa-ext-authz replicates the hand-rolled Envoy's
+# ext_authz filter (envoy/configmap.yaml, cluster opa_ext_authz,
+# failure_mode_allow: false) for every service migrated off that sidecar —
+# see the CUSTOM AuthorizationPolicy entries in
+# k8s/financial/istio-policies.yaml that reference this provider by name.
+# Without this, a migrated service loses its OPA/Rego enforcement entirely
+# (JWT role checks, fraud-gate header, device posture, IP-block list) and
+# falls back to whatever plain ALLOW/DENY rules the AuthorizationPolicy
+# itself expresses — fine for notification-service (OPA's rule there is just
+# "valid SPIRE identity", a native Istio principal check), NOT fine for
+# api-gateway/payment-service/fraud-detection (real Rego logic with no
+# native Istio equivalent).
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  profile: minimal
+  meshConfig:
+    trustDomain: ztlab.local
+    # Istio has NO access logging by default. Before this, removing the
+    # hand-rolled Envoy sidecar silently broke the detection layer: 2 of 6
+    # Grafana alert rules (brute-force-alert.yml, large-response-alert.yml)
+    # query {job="envoy-access", ...} in Loki, a label Promtail only ever
+    # assigned to logs from a container literally named "envoy" — which no
+    # longer exists on any of the 8 migrated services. The other 4 rules use
+    # job="opa-decisions" (OPA's own decision log, unaffected — same OPA
+    # instance, same ext_authz call shape via the CUSTOM provider) or
+    # app-level JSON logs, so they kept passing in KB regression while these
+    # two would never fire again. This format intentionally matches the old
+    # hand-rolled Envoy's JSON field names (method/path/response_code/
+    # response_time/upstream/source_ip/bytes_sent/trace_id/svid) so the
+    # existing alert rules' LogQL keeps working unchanged — see the matching
+    # Promtail scrape job rename in k8s/plg-stack/promtail-daemonset.yaml
+    # (container_name regex "envoy" → "istio-proxy").
+    accessLogFile: /dev/stdout
+    accessLogEncoding: JSON
+    accessLogFormat: |
+      {
+        "timestamp": "%START_TIME%",
+        "method": "%REQ(:METHOD)%",
+        "path": "%REQ(:PATH)%",
+        "response_code": "%RESPONSE_CODE%",
+        "response_time": "%DURATION%",
+        "upstream": "%UPSTREAM_HOST%",
+        "source_ip": "%DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%",
+        "bytes_sent": "%BYTES_SENT%",
+        "trace_id": "%REQ(X-REQUEST-ID)%",
+        "svid": "%DOWNSTREAM_PEER_URI_SAN%"
+      }
+    extensionProviders:
+      - name: opa-ext-authz
+        envoyExtAuthzGrpc:
+          service: opa-service.financial.svc.cluster.local
+          port: "9191"

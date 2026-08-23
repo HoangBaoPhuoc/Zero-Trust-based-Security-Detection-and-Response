@@ -25,7 +25,7 @@ data:
 # source of truth. An embedded copy used to live here too; it went stale
 # (missing a live policy fix from 2026-08-13) because this file is applied
 # AFTER the --from-file step in deploy_financial_services, silently reverting
-# the fix on every full deploy-all.sh run. Do not re-add an embedded copy.
+# the fix on every full deploy-app.sh run. Do not re-add an embedded copy.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

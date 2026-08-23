@@ -306,7 +306,47 @@ data:
           connect_timeout: 2s
           type: STRICT_DNS
           wait_for_warm_on_init: false
-          transport_socket: *upstream_mtls
+          # notification-service is migrated to Istio (Phase 6 canary) — its
+          # inbound listener only terminates TLS on filter chains matching
+          # Istio's own ALPN protocol IDs (istio, istio-http/1.1, ...); a
+          # plain mTLS ClientHello without these falls through to a
+          # passthrough chain with no transport_socket and gets reset
+          # (confirmed via `istioctl proxy-config listener` + repro). Adding
+          # these ALPN offers here — not in the *upstream_mtls anchor other
+          # clusters share — is scoped to this one still-SPIRE-authenticated
+          # upstream, so non-migrated services are unaffected.
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              common_tls_context:
+                alpn_protocols: ["istio-http/1.1", "istio-http/1.0", "istio", "istio-h2"]
+                tls_certificate_sds_secret_configs:
+                  - name: __SPIFFE_ID__
+                    sds_config:
+                      initial_fetch_timeout: 5s
+                      api_config_source:
+                        api_type: GRPC
+                        transport_api_version: V3
+                        grpc_services:
+                          - envoy_grpc:
+                              cluster_name: spire_agent
+                combined_validation_context:
+                  default_validation_context:
+                    match_subject_alt_names:
+                      - safe_regex:
+                          google_re2: {}
+                          regex: "spiffe://ztlab\\.local/.*"
+                  validation_context_sds_secret_config:
+                    name: ROOTCA
+                    sds_config:
+                      initial_fetch_timeout: 5s
+                      api_config_source:
+                        api_type: GRPC
+                        transport_api_version: V3
+                        grpc_services:
+                          - envoy_grpc:
+                              cluster_name: spire_agent
           load_assignment:
             cluster_name: notification_service
             endpoints:

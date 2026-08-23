@@ -1,11 +1,12 @@
-{% extends "base.html" %}
-{% block title %}Hồ sơ — ZTLab Banking{% endblock %}
-{% block page_title %}Hồ sơ tài khoản{% endblock %}
+{% extends "_app_shell.html" %}
+{% block title %}Hồ sơ — ZTLab Bank{% endblock %}
+{% block page_title %}Hồ sơ{% endblock %}
+{% block header_action %}<a href="/auth/logout" class="screen-back" title="Đăng xuất">⏻</a>{% endblock %}
 
 {% block content %}
-<div class="grid grid-2" style="max-width:900px;gap:20px;align-items:start">
+<div style="display:flex;flex-direction:column;gap:14px">
 
-  <div style="display:flex;flex-direction:column;gap:16px">
+  <div style="display:flex;flex-direction:column;gap:14px">
     <div class="card">
       <div class="card-header">
         <div class="card-title">Thông tin cá nhân</div>
@@ -47,7 +48,7 @@
         {% endfor %}
       </div>
       <div class="mt-8" style="font-size:12px;color:var(--text3);line-height:1.7">
-        Quyền được xác thực tại Keycloak → OPA policy enforcement → Envoy sidecar.
+        Quyền được xác thực tại Keycloak → Istio sidecar (istio-proxy) CUSTOM AuthorizationPolicy → OPA ext_authz.
         Mỗi request đều qua kiểm tra issuer + expiry + role.
       </div>
     </div>

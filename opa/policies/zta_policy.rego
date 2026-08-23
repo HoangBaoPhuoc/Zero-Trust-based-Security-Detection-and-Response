@@ -129,6 +129,7 @@ core_transaction_with_fraud_gate if {
   method == "POST"
   startswith(path, "/transactions/execute")
   fraud_gate_valid
+  posture_compliant
 }
 
 valid_svid if {
@@ -140,10 +141,38 @@ fraud_gate_valid if {
   to_number(headers["x-fraud-score"]) < 75
 }
 
+# Device/workload posture (T5 — insider với credential hợp lệ nhưng posture fail).
+# Cập nhật 2026-08-23: payment-service giờ tự tính posture thật (in-process,
+# shared/posture.py, không gọi mạng) và gắn header X-Device-Posture thật khi
+# gọi core-banking /transactions/execute — hoàn thiện phần còn thiếu của kế
+# hoạch cũ (trước đó chỉ có rule Rego + test cô lập, chưa có nguồn tín hiệu
+# thật). Chuẩn "compliant" cố ý lỏng hơn "phải chạy non-root": kiểm tra thật
+# ngày 2026-08-23 cho thấy MỌI service ở đây đều chạy uid=0, đọc được
+# /etc/shadow, không có securityContext nào — đúng dấu hiệu "vi phạm" mà
+# k8s/financial/security-scanner-job.yaml dùng để giả lập KB6. Enforce đúng
+# chuẩn đó sẽ chặn luôn mọi giao dịch thật hiện tại. Nên compliant chỉ fail
+# khi có dấu hiệu thật sự nguy hiểm: capability vượt quá tập mặc định của
+# Docker (SYS_ADMIN/SYS_PTRACE/NET_ADMIN/SYS_MODULE/ALL) hoặc image không ghim
+# tag (`:latest`/không tag) — khớp đúng chuẩn k8s/financial/posture-agent-
+# cronjob.yaml dùng để audit định kỳ toàn bộ pod trong namespace.
+# Vẫn giữ thiết kế cộng thêm: nếu caller không gửi header (service cũ/khác
+# chưa cập nhật) thì coi như không áp dụng, cho qua — không phá traffic khác.
+# tests/grafana_kb_t5_noncompliant_device.sh vẫn giả lập trực tiếp giá trị
+# "non-compliant" qua REST API của OPA để kiểm chứng nhánh deny độc lập với
+# payment-service thật.
+posture_compliant if {
+  not headers["x-device-posture"]
+}
+
+posture_compliant if {
+  headers["x-device-posture"] == "compliant"
+}
+
 audit_log := {
-  "timestamp": time.now_ns(),
-  "action":    method,
-  "resource":  path,
-  "decision":  allow,
-  "svid":      source_principal,
+  "timestamp":         time.now_ns(),
+  "action":            method,
+  "resource":          path,
+  "decision":          allow,
+  "svid":              source_principal,
+  "device_posture":    object.get(headers, "x-device-posture", "not_reported"),
 }

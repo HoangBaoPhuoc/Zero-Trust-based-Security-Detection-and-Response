@@ -56,10 +56,53 @@ def _get(url: str) -> dict:
         return json.loads(resp.read())
 
 
-def _keycloak_token(username: str = "testuser01", password: str = "Test1234!") -> str:
+KC_ADMIN_PASS = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "ztlab-admin-2026")
+_api_gateway_secret_cache: str = ""
+
+
+def _api_gateway_client_secret() -> str:
+    # web-portal client has directAccessGrantsEnabled=false (Zero Trust hardening —
+    # browser PKCE flow only), so scripted token grants must use api-gateway instead,
+    # which requires its client secret fetched via the Keycloak admin API.
+    global _api_gateway_secret_cache
+    if _api_gateway_secret_cache:
+        return _api_gateway_secret_cache
     data = urllib.parse.urlencode({
         "grant_type": "password",
-        "client_id": "web-portal",
+        "client_id": "admin-cli",
+        "username": "admin",
+        "password": KC_ADMIN_PASS,
+    }).encode()
+    req = urllib.request.Request(
+        f"{KC_URL}/realms/master/protocol/openid-connect/token",
+        data=data,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            admin_token = json.loads(resp.read()).get("access_token", "")
+        if not admin_token:
+            return ""
+        req = urllib.request.Request(
+            f"{KC_URL}/admin/realms/ztlab/clients?clientId=api-gateway",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            clients = json.loads(resp.read())
+        _api_gateway_secret_cache = clients[0]["secret"] if clients else ""
+    except Exception:
+        return ""
+    return _api_gateway_secret_cache
+
+
+def _keycloak_token(username: str = "testuser01", password: str = "Test1234!") -> str:
+    secret = _api_gateway_client_secret()
+    if not secret:
+        return ""
+    data = urllib.parse.urlencode({
+        "grant_type": "password",
+        "client_id": "api-gateway",
+        "client_secret": secret,
         "username": username,
         "password": password,
     }).encode()

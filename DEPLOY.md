@@ -12,6 +12,10 @@ Nếu không chắc mình ở tình huống nào: chạy `kubectl config get-con
 
 ## Phần 1 — First Deploy (từ số 0)
 
+> **Rút gọn:** `bash scripts/deploy-all.sh` chạy tự động toàn bộ Bước 1→14 bên dưới (idempotent — chạy lại an toàn sau mỗi lần destroy, tự bỏ qua phần đã đúng trạng thái như tool đã cài, key-pair/image/flavor đã tồn tại). Dùng `--skip-tools` nếu máy đã cài đủ công cụ, `--from-step N` để chạy lại từ 1 bước cụ thể khi debug. Các bước dưới đây vẫn giữ để tham khảo/debug khi script dừng giữa chừng.
+>
+> Lưu ý phân biệt: `deploy-all.sh` = hạ tầng (Terraform/Ansible) + ứng dụng, dùng khi bắt đầu từ hạ tầng trống. `scripts/deploy-app.sh` (Bước 13 bên dưới) chỉ deploy lại tầng ứng dụng K8s, dùng khi VM/cluster đã có sẵn — `deploy-all.sh` tự gọi nó ở bước cuối.
+
 Làm theo thứ tự từ trên xuống. Mỗi bước phải hoàn thành trước khi sang bước tiếp theo.
 
 ### Bước 1 — Cài công cụ cần thiết
@@ -198,7 +202,7 @@ IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh   # build + copy image và
 docker images | grep '^ztlab/'                          # kiểm tra image đã build
 
 export KEYCLOAK_ADMIN_PASSWORD=ztlab-admin-2026
-bash scripts/deploy-all.sh
+bash scripts/deploy-app.sh
 
 kubectl --context ctx-aws get pods -A
 kubectl --context ctx-openstack get pods -A
@@ -265,7 +269,7 @@ curl -s -u admin:ZTALab2026! http://localhost:3000/api/health \
   | python3 -c "import sys,json; print('Grafana:', json.load(sys.stdin)['database'])"
 ```
 
-Pods phải `Running`; các microservice có sidecar Envoy phải `2/2`:
+Pods phải `Running`; các microservice có Istio sidecar (istio-proxy) phải `2/2`:
 
 ```bash
 kubectl --context ctx-aws get pods -n financial
@@ -358,6 +362,8 @@ Trạng thái cluster/dữ liệu vẫn còn nguyên khi bật lại (không ph�
 Khác với **2.6 Tắt máy** (chỉ stop VM, bật lại được ngay, dữ liệu/cluster giữ nguyên) — destroy xoá hẳn toàn bộ VM, network, volume do Terraform tạo. Muốn dùng lại phải chạy lại **Phần 1** từ đầu (kể cả Bước 6/7 upload lại image/flavor OpenStack nếu chúng cũng bị xoá thủ công).
 
 Dùng khi: dừng hẳn dự án, đổi region/tài khoản cloud, hoặc hạ tầng bị lỗi nặng cần dựng lại sạch từ số 0.
+
+> **Rút gọn:** `bash scripts/destroy-all.sh` gộp toàn bộ 3.1→3.3 bên dưới. Mặc định giữ lại SSH key-pair và image/flavor OpenStack (để `deploy-all.sh` lần sau nhanh hơn, khỏi tạo/upload lại) — dùng `--purge-keys`/`--purge-image`/`--purge-all` nếu muốn xoá sạch. `--yes` để bỏ qua bước xác nhận gõ `destroy` (dùng khi tự động hoá). `--only aws` hoặc `--only openstack` để destroy 1 bên.
 
 ### 3.1 Trước khi destroy
 

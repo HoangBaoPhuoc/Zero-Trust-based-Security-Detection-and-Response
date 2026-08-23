@@ -20,7 +20,18 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum(count_over_time({job="opa-decisions", opa_result="false", request_path="/payments"}[10m]))'
+              # Verified 2026-08-23 (post-Istio migration): tests/grafana_kb5_access_denied.sh's
+              # actual attack request goes through `kubectl port-forward svc/api-gateway`
+              # ($GW_URL), which bypasses Istio's sidecar interception entirely (see
+              # brute-force-alert.yml's identical finding + full writeup in
+              # FLOW_DETAIL.md §2.3/§4). OPA is never called for this path — api-gateway's
+              # OWN role check (services/api-gateway/main.py:_require_role) rejects it
+              # first, logging {event:"authz_denied", required_role, user, source_ip}.
+              # Confirmed via direct log capture (server: uvicorn, not istio-envoy, on
+              # the HTTP response). The old job="opa-decisions" query never matched real
+              # traffic for this test scenario either, in both the pre- and post-Istio
+              # architecture.
+              expr: 'sum(count_over_time({namespace="financial",app="api-gateway"} | json | event="authz_denied" [10m]))'
               instant: true
               queryType: instant
               refId: A

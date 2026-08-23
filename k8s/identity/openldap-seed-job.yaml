@@ -1,0 +1,26 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: openldap-seed
+  namespace: identity-directory
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: osixia/openldap:1.5.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - >
+              ldapadd -x -H ldap://openldap.identity-directory.svc.cluster.local:389
+              -D "cn=admin,dc=ztlab,dc=local" -w "ztlab-ldap-admin-2026"
+              -f /ldif/users.ldif || true
+          volumeMounts:
+            - name: seed-data
+              mountPath: /ldif
+      volumes:
+        - name: seed-data
+          configMap:
+            name: openldap-seed-users

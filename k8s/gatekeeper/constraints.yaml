@@ -1,0 +1,33 @@
+# Kết quả audit thật (2026-08-19, xem PLAN.md Phase 2): 14 vi phạm cho
+# ZTLabRequireNonRoot (toàn bộ service trong namespace financial hiện chưa
+# hardening runAsNonRoot — đã thử hardening payment-service riêng lẻ, làm gãy
+# Envoy sidecar, revert), 0 vi phạm cho ZTLabRequireImagePolicy.
+#
+# → ZTLabRequireNonRoot GIỮ dryrun vĩnh viễn cho tới khi có 1 nỗ lực hardening
+#   riêng, có kiểm soát, cho toàn bộ service (không phải việc làm vội được) —
+#   chuyển sang "deny" ngay bây giờ sẽ chặn luôn việc tạo lại pod cho TẤT CẢ
+#   14 workload đang chạy, coi như tự làm sập hệ thống.
+# → ZTLabRequireImagePolicy an toàn để bật "deny" ngay — 0 vi phạm hiện tại.
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ZTLabRequireNonRoot
+metadata:
+  name: financial-require-nonroot
+spec:
+  enforcementAction: dryrun
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["financial"]
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ZTLabRequireImagePolicy
+metadata:
+  name: financial-require-image-policy
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["financial"]
