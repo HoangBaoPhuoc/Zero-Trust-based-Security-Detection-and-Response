@@ -23,23 +23,31 @@ spec:
         app: web-portal
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/web-portal"
-        sidecar.istio.io/inject: "false"  # not yet migrated to Istio, still hand-rolled Envoy — see migration plan
+        # Istio (Phase 6 batch 3): migrated. The envoy-inbound:15006 listener
+        # this Deployment used to carry was dead code — nothing in the repo
+        # ever called web-portal via it (both its own outbound calls,
+        # API_GATEWAY_URL and FRAUD_DETECTION_URL, already dialed the target
+        # Service's plain HTTP port directly, bypassing envoy entirely; grep
+        # confirms no cluster elsewhere routes to web-portal:15006 either).
+        # Public Traefik ingress on :8080 needs no client cert, which
+        # Istio's PERMISSIVE mode already accommodates (proven by
+        # api-gateway's identical Traefik-facing setup).
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: web-portal
       volumes:
         - name: patch-web-portal
           configMap:
             name: patch-web-portal
-        - name: envoy-config
+        - name: patch-web-portal-templates
           configMap:
-            name: envoy-config
-            items:
-              - key: envoy-sidecar.yaml
-                path: envoy.yaml
-        - name: spire-sockets
-          hostPath:
-            path: /run/spire/sockets
-            type: DirectoryOrCreate
+            name: patch-web-portal-templates
+        - name: attack-surface-graph
+          configMap:
+            name: attack-surface-graph
+            optional: true
       containers:
         - name: web-portal
           image: ztlab/web-portal:1.0.0
@@ -104,6 +112,13 @@ spec:
             - name: patch-web-portal
               mountPath: /app/main.py
               subPath: main.py
+            - name: patch-web-portal-templates
+              mountPath: /app/templates
+              readOnly: true
+            - name: attack-surface-graph
+              mountPath: /app/results/attack_surface_graph.md
+              subPath: attack_surface_graph.md
+              readOnly: true
           resources:
             requests:
               cpu: 50m
@@ -111,37 +126,6 @@ spec:
             limits:
               cpu: 200m
               memory: 256Mi
-        - name: envoy
-          image: envoyproxy/envoy:v1.29-latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - sed "s|__SPIFFE_ID__|${SPIFFE_ID}|g" /etc/envoy/envoy.yaml > /tmp/envoy.yaml && envoy -c /tmp/envoy.yaml --log-level warning
-          env:
-            - name: SPIFFE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.annotations['spiffe.io/spiffeid']
-          ports:
-            - containerPort: 15006
-              name: envoy-inbound
-          volumeMounts:
-            - name: envoy-config
-              mountPath: /etc/envoy
-            - name: spire-sockets
-              mountPath: /run/spire/sockets
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 9901
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 50m
-              memory: 64Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
 ---
 apiVersion: v1
 kind: Service
@@ -155,9 +139,6 @@ spec:
     - name: http
       port: 8080
       targetPort: 8080
-    - name: envoy-inbound
-      port: 15006
-      targetPort: 15006
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute

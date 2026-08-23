@@ -1,138 +1,68 @@
-{% extends "base.html" %}
-{% block title %}Chuyển tiền — ZTLab Banking{% endblock %}
+{% extends "_app_shell.html" %}
+{% block title %}Chuyển tiền — ZTLab Bank{% endblock %}
 {% block page_title %}Chuyển tiền{% endblock %}
 
 {% block content %}
-<div class="grid grid-2" style="gap:20px;align-items:start">
+<div class="card" style="margin-bottom:14px">
+  <div id="result-box" style="display:none;margin-bottom:14px"></div>
 
-  <!-- Transfer form -->
-  <div>
-    <div class="card" style="margin-bottom:16px">
-      <div class="card-header">
-        <div class="card-title">Thực hiện chuyển khoản</div>
-      </div>
-
-      <div id="result-box" style="display:none;margin-bottom:16px"></div>
-
-      <div class="form-group">
-        <label class="form-label">Tài khoản nguồn</label>
-        <input type="text" id="from-account" value="{{ account_id }}" readonly
-               class="form-input" style="opacity:.6;cursor:not-allowed">
-      </div>
-
-      <div class="form-group">
-        <label class="form-label">Tài khoản đích</label>
-        <input type="text" id="to-account" placeholder="VD: ACC-2001" class="form-input">
-        <div class="form-hint">Nhập số tài khoản của người nhận</div>
-      </div>
-
-      <div class="form-group">
-        <label class="form-label">Số tiền (VND)</label>
-        <input type="number" id="amount" placeholder="100,000" min="1" step="1000" class="form-input">
-        <div class="form-hint" id="amount-preview" style="font-size:13px;color:var(--accent2)"></div>
-      </div>
-
-      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-        <button class="btn btn-sm" onclick="setAmount(50000)">50K</button>
-        <button class="btn btn-sm" onclick="setAmount(100000)">100K</button>
-        <button class="btn btn-sm" onclick="setAmount(500000)">500K</button>
-        <button class="btn btn-sm" onclick="setAmount(1000000)">1M</button>
-        <button class="btn btn-sm" onclick="setAmount(5000000)">5M</button>
-      </div>
-
-      <button class="btn btn-primary" id="transfer-btn" onclick="doTransfer()" style="width:100%;justify-content:center;font-size:15px;padding:12px">
-        ↗ Xác nhận chuyển tiền
-      </button>
-    </div>
-
-    <!-- Quick fill presets -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">Chuyển nhanh</div>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <button class="btn" style="justify-content:space-between" onclick="quickFill('ACC-2001',100000)">
-          <span>100,000 ₫ → ACC-2001</span><span class="badge badge-blue">Demo</span>
-        </button>
-        <button class="btn" style="justify-content:space-between" onclick="quickFill('ACC-1001',500000)">
-          <span>500,000 ₫ → ACC-1001</span><span class="badge badge-blue">Demo</span>
-        </button>
-        <button class="btn" style="justify-content:space-between" onclick="quickFill('ACC-2001',500000000)">
-          <span>500M ₫ → ACC-2001</span><span class="badge badge-red">High Risk</span>
-        </button>
-      </div>
-    </div>
+  <div class="form-group">
+    <label class="form-label">Tài khoản nguồn</label>
+    <input type="text" id="from-account" value="{{ account_id }}" readonly
+           class="form-input" style="opacity:.6;cursor:not-allowed">
+    <div class="form-hint">Tài khoản gắn với phiên đăng nhập hiện tại — số dư: <span id="from-balance">—</span></div>
   </div>
 
-  <!-- Right column -->
-  <div>
-    <!-- Balance card -->
-    <div class="bank-card" style="margin-bottom:16px">
-      <div class="bank-card-chip">💳</div>
-      <div class="bank-card-number">{{ account_id or '—' }}</div>
-      <div class="bank-card-balance" id="my-balance">Đang tải...</div>
-      <div class="bank-card-footer">
-        <div>
-          <div class="bank-card-owner">Chủ tài khoản</div>
-          <div class="bank-card-name">{{ full_name or username }}</div>
-        </div>
-        <div class="bank-card-logo">🏦</div>
-      </div>
-    </div>
-
-    <!-- Zero Trust flow visualizer -->
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title">Zero Trust Flow</div>
-        <span class="badge badge-blue" id="flow-status">Chờ</span>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:6px" id="flow-steps">
-        <div class="flow-step" id="step-jwt" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
-          <span class="step-icon">⬜</span>
-          <div>
-            <div style="font-weight:500">Xác thực JWT</div>
-            <div style="font-size:11px;color:var(--text3)">Keycloak OIDC → Bearer token</div>
-          </div>
-        </div>
-        <div class="flow-step" id="step-opa" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
-          <span class="step-icon">⬜</span>
-          <div>
-            <div style="font-weight:500">Kiểm tra quyền OPA</div>
-            <div style="font-size:11px;color:var(--text3)">Envoy ext_authz → Policy Engine</div>
-          </div>
-        </div>
-        <div class="flow-step" id="step-fraud" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
-          <span class="step-icon">⬜</span>
-          <div>
-            <div style="font-weight:500">Fraud Detection</div>
-            <div style="font-size:11px;color:var(--text3)">Score giao dịch (Redis velocity)</div>
-          </div>
-        </div>
-        <div class="flow-step" id="step-mtls" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
-          <span class="step-icon">⬜</span>
-          <div>
-            <div style="font-weight:500">mTLS Core Banking</div>
-            <div style="font-size:11px;color:var(--text3)">SPIRE SVID → OpenStack</div>
-          </div>
-        </div>
-        <div class="flow-step" id="step-account" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px">
-          <span class="step-icon">⬜</span>
-          <div>
-            <div style="font-weight:500">Account Service</div>
-            <div style="font-size:11px;color:var(--text3)">PostgreSQL: trừ/cộng số dư</div>
-          </div>
-        </div>
-        <div class="flow-step" id="step-ledger" style="display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px">
-          <span class="step-icon">⬜</span>
-          <div>
-            <div style="font-weight:500">Transaction Ledger</div>
-            <div style="font-size:11px;color:var(--text3)">Ghi sổ cái bất biến</div>
-          </div>
-        </div>
-      </div>
-      <div id="fraud-result" style="display:none;margin-top:12px"></div>
-    </div>
+  <div class="form-group">
+    <label class="form-label">Tài khoản đích</label>
+    <input type="text" id="to-account" placeholder="VD: ACC-2001" class="form-input">
+    <div class="form-hint">Nhập số tài khoản của người nhận</div>
   </div>
+
+  <div class="form-group">
+    <label class="form-label">Số tiền (VND)</label>
+    <input type="number" id="amount" placeholder="100,000" min="1" step="1000" class="form-input">
+    <div class="form-hint" id="amount-preview" style="font-size:13px;color:var(--accent2)"></div>
+  </div>
+
+  <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+    <button class="btn btn-sm" onclick="setAmount(50000)">50K</button>
+    <button class="btn btn-sm" onclick="setAmount(100000)">100K</button>
+    <button class="btn btn-sm" onclick="setAmount(500000)">500K</button>
+    <button class="btn btn-sm" onclick="setAmount(1000000)">1M</button>
+    <button class="btn btn-sm" onclick="setAmount(5000000)">5M</button>
+  </div>
+
+  <button class="btn btn-primary" id="transfer-btn" onclick="doTransfer()" style="width:100%;justify-content:center;font-size:15px;padding:12px">
+    ↗ Xác nhận chuyển tiền
+  </button>
+</div>
+
+<div class="card" style="margin-bottom:14px">
+  <div class="card-header"><div class="card-title">Chuyển nhanh (demo)</div></div>
+  <div style="display:flex;flex-direction:column;gap:6px">
+    <button class="btn" style="justify-content:space-between" onclick="quickFill('ACC-2001',100000)">
+      <span>100.000 ₫ → ACC-2001</span><span class="badge badge-blue">Demo</span>
+    </button>
+    <button class="btn" style="justify-content:space-between" onclick="quickFill('ACC-2001',500000000)">
+      <span>500 triệu ₫ → ACC-2001</span><span class="badge badge-red">Rủi ro cao</span>
+    </button>
+  </div>
+</div>
+
+<div class="card" id="journey-card" style="display:none">
+  <div class="card-header">
+    <div class="card-title">Hành trình thật của giao dịch</div>
+    <span class="badge badge-blue" id="journey-status">Đang tra log...</span>
+  </div>
+  <div style="font-size:11px;color:var(--text3);margin-bottom:10px;line-height:1.5">
+    Dữ liệu bên dưới lấy trực tiếp từ log <span class="mono">event=http_request</span> thật của từng service
+    (Loki, join theo <span class="mono">trace_id</span>) — không phải hoạt ảnh giả lập. Mỗi hop dưới đây đều
+    chạy qua mTLS Istio/SPIRE, dù dòng log riêng của istio-proxy dùng request-id khác của Envoy nên không
+    hiện thành 1 dòng riêng ở đây.
+  </div>
+  <div id="journey-steps" style="display:flex;flex-direction:column;gap:0"></div>
+  <div id="fraud-result" style="display:none;margin-top:12px"></div>
 </div>
 {% endblock %}
 
@@ -144,47 +74,72 @@ function esc(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');
 }
-
 function fmtVND(n) { return parseFloat(n).toLocaleString('vi-VN') + ' ₫'; }
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function loadMyBalance() {
-  if (!myAccountId) return;
+  if (!myAccountId) { document.getElementById('from-balance').textContent = 'chưa có tài khoản'; return; }
   try {
-    const r = await fetch('/api/balance/' + myAccountId);
+    const r = await fetch('/api/balance/' + encodeURIComponent(myAccountId));
     const d = await r.json();
-    if (d.balance !== undefined) document.getElementById('my-balance').textContent = fmtVND(d.balance);
+    if (d.balance !== undefined) document.getElementById('from-balance').textContent = fmtVND(d.balance);
   } catch(e) {}
 }
+loadMyBalance();
 
 function setAmount(val) { document.getElementById('amount').value = val; updatePreview(); }
 function quickFill(to, amt) { document.getElementById('to-account').value = to; setAmount(amt); }
 function updatePreview() {
   const v = parseFloat(document.getElementById('amount').value);
   const el = document.getElementById('amount-preview');
-  if (v > 0) el.textContent = '= ' + fmtVND(v);
-  else el.textContent = '';
+  el.textContent = v > 0 ? '= ' + fmtVND(v) : '';
 }
 document.getElementById('amount').addEventListener('input', updatePreview);
 
-function setStep(id, state, detail) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  const icon = el.querySelector('.step-icon');
-  const icons = { pending:'⬜', running:'🔄', ok:'✅', err:'❌' };
-  if (icon) icon.textContent = icons[state] || '⬜';
-  el.style.opacity = state === 'pending' ? '0.5' : '1';
-  const sub = el.querySelector('div > div:last-child');
-  if (sub && detail) { sub.textContent = detail; sub.style.color = state === 'err' ? 'var(--red)' : state === 'ok' ? 'var(--green)' : 'var(--text3)'; }
+function renderJourney(steps) {
+  const container = document.getElementById('journey-steps');
+  if (!steps.length) {
+    container.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:8px 0">Chưa thấy log (Loki có thể đang trễ vài giây) — thử "Làm mới" bên dưới.</div>';
+    return;
+  }
+  container.innerHTML = steps.map((s, i) => {
+    const ok = s.status_code && s.status_code < 400;
+    const icon = s.status_code == null ? '•' : (ok ? '✅' : '❌');
+    const dur = s.duration_ms != null ? `${s.duration_ms}ms` : '';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;${i < steps.length-1 ? 'border-bottom:1px solid var(--border)' : ''};font-size:12.5px">
+      <span>${icon}</span>
+      <div style="flex:1">
+        <div style="font-weight:600">${esc(s.service)} <span class="mono" style="color:var(--text3)">${esc(s.method||'')} ${esc(s.path||'')}</span></div>
+        <div style="font-size:11px;color:var(--text3)">${esc(s.event)}${s.status_code ? ' · HTTP '+s.status_code : ''}</div>
+      </div>
+      <div class="mono" style="font-size:11px;color:var(--text3)">${dur}</div>
+    </div>`;
+  }).join('');
 }
 
-function resetSteps() {
-  ['step-jwt','step-opa','step-fraud','step-mtls','step-account','step-ledger'].forEach(id => setStep(id, 'pending'));
-  document.getElementById('flow-status').textContent = 'Đang xử lý';
-  document.getElementById('flow-status').className = 'badge badge-yellow';
-  document.getElementById('fraud-result').style.display = 'none';
+async function pollTrace(traceId, attemptsLeft) {
+  document.getElementById('journey-card').style.display = '';
+  try {
+    const r = await fetch('/api/trace/' + encodeURIComponent(traceId));
+    const d = await r.json();
+    const steps = d.steps || [];
+    renderJourney(steps);
+    if (steps.length) {
+      document.getElementById('journey-status').textContent = steps.length + ' hop';
+      document.getElementById('journey-status').className = 'badge badge-green';
+    } else if (attemptsLeft > 0) {
+      document.getElementById('journey-status').textContent = 'Đang tra log...';
+      await delay(1200);
+      return pollTrace(traceId, attemptsLeft - 1);
+    } else {
+      document.getElementById('journey-status').textContent = 'Chưa có log';
+      document.getElementById('journey-status').className = 'badge badge-yellow';
+    }
+  } catch(e) {
+    document.getElementById('journey-status').textContent = 'Lỗi tra log';
+    document.getElementById('journey-status').className = 'badge badge-red';
+  }
 }
-
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function doTransfer() {
   const fromAccount = document.getElementById('from-account').value;
@@ -192,17 +147,15 @@ async function doTransfer() {
   const amount = parseFloat(document.getElementById('amount').value);
   const resultBox = document.getElementById('result-box');
 
+  if (!fromAccount) { resultBox.style.display='block'; resultBox.className='alert alert-error'; resultBox.textContent='Bạn chưa có tài khoản nguồn'; return; }
   if (!toAccount) { resultBox.style.display='block'; resultBox.className='alert alert-error'; resultBox.textContent='Vui lòng nhập tài khoản đích'; return; }
   if (!amount || amount <= 0) { resultBox.style.display='block'; resultBox.className='alert alert-error'; resultBox.textContent='Vui lòng nhập số tiền hợp lệ'; return; }
 
-  resetSteps(); resultBox.style.display='none';
+  resultBox.style.display = 'none';
+  document.getElementById('journey-card').style.display = 'none';
+  document.getElementById('fraud-result').style.display = 'none';
   const btn = document.getElementById('transfer-btn');
   btn.disabled = true; btn.textContent = '⏳ Đang xử lý...';
-
-  setStep('step-jwt', 'running');
-  await delay(250); setStep('step-jwt', 'ok', 'Bearer token hợp lệ');
-  setStep('step-opa', 'running');
-  await delay(200);
 
   try {
     const resp = await fetch('/api/transfer', {
@@ -210,58 +163,38 @@ async function doTransfer() {
       body: JSON.stringify({from_account: fromAccount, to_account: toAccount, amount, currency:'VND'})
     });
     const data = await resp.json();
-
-    if (resp.status === 403 || resp.status === 401) {
-      setStep('step-opa', 'err', 'Bị từ chối bởi OPA Policy');
-      document.getElementById('flow-status').textContent = 'Bị từ chối'; document.getElementById('flow-status').className = 'badge badge-red';
-    } else {
-      setStep('step-opa', 'ok', 'Quyền được chấp thuận');
-    }
+    const traceId = data.trace_id || (data.core_banking && data.core_banking.trace_id) || '';
 
     if (resp.ok) {
       const fraud = data.fraud || {};
-      const fScore = fraud.score || 0;
-      const fGate = fraud.gate || 'passed';
-      setStep('step-fraud', 'ok', `Score: ${fScore} | Gate: ${fGate}`);
-      setStep('step-mtls', 'ok', 'SVID hợp lệ → OpenStack');
-      setStep('step-account', 'ok', 'Số dư đã cập nhật');
-      setStep('step-ledger', 'ok', 'Đã ghi sổ cái');
-
       const cb = data.core_banking || {};
       resultBox.style.display='block'; resultBox.className='alert alert-success';
       resultBox.innerHTML = `<strong>✅ Chuyển tiền thành công!</strong><br>
         <span style="font-size:12px">
-          Mã GD: <code>${esc(cb.transaction_id||data.trace_id||'N/A')}</code><br>
+          Mã GD: <code>${esc(cb.transaction_id||traceId||'N/A')}</code><br>
           Số dư mới: <strong>${cb.from_balance!==undefined ? fmtVND(cb.from_balance) : '—'}</strong>
         </span>`;
-
-      if (fScore > 0) {
+      if (fraud.score !== undefined) {
         const fd = document.getElementById('fraud-result');
         fd.style.display='block';
-        const cls = fScore >= 75 ? 'badge-red' : fScore >= 40 ? 'badge-yellow' : 'badge-green';
-        fd.innerHTML = `<div style="font-size:12px;color:var(--text3)">Fraud Analysis: <span class="badge ${cls}">Score ${fScore} — ${fGate}</span> ${(fraud.reason||[]).join(', ')}</div>`;
+        const cls = fraud.score >= 75 ? 'badge-red' : fraud.score >= 40 ? 'badge-yellow' : 'badge-green';
+        fd.innerHTML = `<div style="font-size:12px;color:var(--text3)">Fraud Analysis: <span class="badge ${cls}">Score ${fraud.score} — ${esc(fraud.gate||'')}</span> ${(fraud.reason||[]).join(', ')}</div>`;
       }
       loadMyBalance();
     } else {
       const errMsg = typeof data.detail==='string' ? data.detail : (data.detail?.reason || data.error || JSON.stringify(data.detail||data));
-      if (resp.status !== 401 && resp.status !== 403) {
-        setStep('step-fraud', resp.status===409?'ok':'err', '');
-        if (resp.status===409) { setStep('step-mtls','ok'); setStep('step-account','err','Số dư không đủ'); }
-        else setStep('step-mtls','err','');
-      }
       resultBox.style.display='block'; resultBox.className='alert alert-error';
       resultBox.innerHTML = `<strong>❌ Lỗi ${resp.status}:</strong> ${esc(errMsg)}`;
-      document.getElementById('flow-status').textContent='Thất bại'; document.getElementById('flow-status').className='badge badge-red';
+    }
+
+    if (traceId) {
+      pollTrace(traceId, 4);
     }
   } catch(e) {
-    setStep('step-opa','err','Lỗi kết nối');
     resultBox.style.display='block'; resultBox.className='alert alert-error';
     resultBox.textContent='Lỗi kết nối: ' + e.message;
   }
-
-  btn.disabled=false; btn.textContent='↗ Xác nhận chuyển tiền';
+  btn.disabled = false; btn.textContent = '↗ Xác nhận chuyển tiền';
 }
-
-loadMyBalance();
 </script>
 {% endblock %}

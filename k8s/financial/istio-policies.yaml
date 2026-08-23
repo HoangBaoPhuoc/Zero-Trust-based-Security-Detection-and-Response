@@ -9,10 +9,40 @@ metadata:
   namespace: financial
 spec:
   mtls:
-    # PERMISSIVE, not STRICT: most services in this namespace still run the
-    # hand-rolled Envoy sidecar (not Istio-managed) during the migration.
-    # Flip to STRICT only once every pod in the namespace is Istio-injected
-    # (last step of Phase 5).
+    # STRICT: every pod in the financial namespace (both clusters) is now
+    # Istio-managed — api-gateway, payment-service, fraud-detection,
+    # notification-service, web-portal (AWS), core-banking, account-service,
+    # transaction-service (OpenStack). No more hand-rolled Envoy left to
+    # accommodate with PERMISSIVE's dual plaintext/mTLS filter chains.
+    mode: STRICT
+---
+# Workload-level overrides take precedence over the namespace default above.
+# api-gateway and web-portal are the only two with genuine non-mesh plain
+# HTTP callers — Traefik ingress (public API/web UI) and browsers — neither
+# of which can present a SPIRE-issued client cert. Everything else in this
+# namespace is service-to-service only and enforces STRICT via the default.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: api-gateway-permissive
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  mtls:
+    mode: PERMISSIVE
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: web-portal-permissive
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: web-portal
+  mtls:
     mode: PERMISSIVE
 ---
 # Istio's automatic mTLS expects peer certs to carry SPIFFE ID
@@ -61,3 +91,300 @@ spec:
     - to:
         - operation:
             paths: ["/health", "/ready"]
+---
+# api-gateway, payment-service, fraud-detection (Phase 6 batch 2): unlike
+# notification-service, these carry REAL Rego logic with no native Istio
+# equivalent — JWT role checks (api-gateway, external_api_request),
+# fraud-gate header + device posture (payment-service,
+# core_transaction_with_fraud_gate), IP-block list (api-gateway). Removing
+# the hand-rolled Envoy's ext_authz filter without an Istio-native
+# replacement would have silently dropped all of that enforcement — these
+# CUSTOM policies route every request through the SAME OPA instance
+# (opa-ext-authz provider, see k8s/istio/istio-operator.yaml) that the
+# hand-rolled Envoy used to call, fail-closed by default (Istio denies if the
+# ext_authz backend is unreachable unless failOpen: true is set, which it
+# isn't here).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: api-gateway-opa-authz
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: api-gateway
+  action: CUSTOM
+  provider:
+    name: opa-ext-authz
+  rules:
+    - {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: payment-service-opa-authz
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: payment-service
+  action: CUSTOM
+  provider:
+    name: opa-ext-authz
+  rules:
+    - {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: fraud-detection-opa-authz
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: fraud-detection
+  action: CUSTOM
+  provider:
+    name: opa-ext-authz
+  rules:
+    - {}
+---
+# DestinationRules for the batch-2 services — same SPIRE-custom-SPIFFE-ID
+# override as notification-service's, needed by any Istio-managed caller
+# validating these services' server cert (api-gateway/payment-service call
+# each other now that both are migrated).
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: api-gateway-custom-san
+  namespace: financial
+spec:
+  host: api-gateway.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/aws/api-gateway"
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: payment-service-custom-san
+  namespace: financial
+spec:
+  host: payment-service.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/aws/payment-service"
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: fraud-detection-custom-san
+  namespace: financial
+spec:
+  host: fraud-detection.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/aws/fraud-detection"
+---
+# core-banking, account-service, transaction-service (Phase 6 batch 4,
+# OpenStack cluster): same rationale as api-gateway/payment-service/
+# fraud-detection — real Rego logic (core_transaction_with_fraud_gate for
+# /transactions/execute, internal_service_request for /accounts and
+# /transactions), no native Istio equivalent. opa-ext-authz here resolves to
+# OpenStack's OWN local opa-service (Istio's extensionProviders are
+# per-cluster; this same istio-policies.yaml file is applied to both ctx-aws
+# and ctx-openstack — selectors simply don't match on the other cluster).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: core-banking-opa-authz
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: core-banking
+  action: CUSTOM
+  provider:
+    name: opa-ext-authz
+  rules:
+    - {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: account-service-opa-authz
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: account-service
+  action: CUSTOM
+  provider:
+    name: opa-ext-authz
+  rules:
+    - {}
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: transaction-service-opa-authz
+  namespace: financial
+spec:
+  selector:
+    matchLabels:
+      app: transaction-service
+  action: CUSTOM
+  provider:
+    name: opa-ext-authz
+  rules:
+    - {}
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: core-banking-custom-san
+  namespace: financial
+spec:
+  host: core-banking.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/core-banking"
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: account-service-custom-san
+  namespace: financial
+spec:
+  host: account-service.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/account-service"
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: transaction-service-custom-san
+  namespace: financial
+spec:
+  host: transaction-service.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/transaction-service"
+---
+# web-portal (Phase 6 batch 3): no CUSTOM/OPA AuthorizationPolicy — its
+# security model is Keycloak session/PKCE at the app layer, not
+# SPIFFE/OPA-based inbound authz (its old envoy-inbound:15006 was dead code,
+# nothing ever called it — see the Deployment comment in web-portal.yaml).
+# No native ALLOW/DENY policy either: PERMISSIVE mode + no restrictive
+# AuthorizationPolicy for this workload = same "no inbound authz enforced"
+# behavior it always had, not a regression.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: web-portal-custom-san
+  namespace: financial
+spec:
+  host: web-portal.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/aws/web-portal"
+---
+# Cross-cloud: payment-service (Istio-managed, AWS) → core-banking (still
+# hand-rolled Envoy, OpenStack) via the WireGuard-reachable NodePort.
+#
+# Tried and abandoned: a ServiceEntry with a fake hostname + STATIC
+# resolution. Istio's validation webhook rejects a raw IP as `hosts` ("domain
+# name ... cannot be all-numeric"), and a fake hostname needs Istio's DNS
+# capture (ISTIO_META_DNS_CAPTURE) to resolve — which never actually served
+# an answer for this ServiceEntry (confirmed via a raw DNS query straight to
+# istio-agent's local proxy on 15053: NXDOMAIN), even with
+# PILOT_ENABLE_IP_AUTOALLOCATE set. Root cause not fully isolated; not worth
+# more time chasing an Istio-internal DNS-serving quirk when a plain
+# Kubernetes primitive does the same job with no Istio-specific magic.
+#
+# This selector-less Service + manually-managed Endpoints is the standard
+# Kubernetes pattern for giving a stable internal DNS name to an external
+# IP — CoreDNS resolves it natively (no Istio DNS capture involved), and
+# Istio auto-discovers it as an ordinary mesh destination via the same
+# Service+Endpoints watch it uses for every other Service, so the
+# DestinationRule below applies ISTIO_MUTUAL exactly like it would for any
+# in-cluster host.
+apiVersion: v1
+kind: Service
+metadata:
+  name: core-banking-openstack
+  namespace: financial
+spec:
+  ports:
+    - name: http-port
+      port: 30080
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: core-banking-openstack
+  namespace: financial
+subsets:
+  - addresses:
+      - ip: 192.168.101.11
+    ports:
+      - name: http-port
+        port: 30080
+        protocol: TCP
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: core-banking-openstack-mtls
+  namespace: financial
+spec:
+  host: core-banking-openstack.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/core-banking"
+---
+# Found 2026-08-24 while auditing security service outputs: opa-service has
+# `sidecar.istio.io/inject: "false"` (it's the ext_authz PDP called BY
+# istio-proxy's own filter via port 9191, not a mesh member itself), but
+# regular application-level HTTP calls TO its REST API on 8181 (used by
+# scripts/deploy-security-stack.sh's health checks and
+# k8s/security-monitoring/healthcheck-cronjob.yaml) got 503 "upstream
+# connect error" from the CALLING pod's own istio-proxy — confirmed via
+# direct exec test, and confirmed opa-server's own access log showed a
+# healthy 200 for the very same request, so the failure is purely
+# client-side Istio TLS origination, never reaching the app. Istio's
+# automatic mTLS detection is supposed to notice opa-service has no sidecar
+# and fall back to plaintext, but evidently isn't doing so reliably for
+# this destination — an explicit DestinationRule removes the ambiguity.
+# Port 9191 (the real enforcement path, called internally by istio-proxy's
+# ext_authz filter via meshConfig.extensionProviders, not as a normal
+# outbound app call) was never affected by this and has been verified
+# working throughout this session regardless.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: opa-service-plaintext
+  namespace: financial
+spec:
+  host: opa-service.financial.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

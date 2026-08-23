@@ -330,86 +330,31 @@ deploy_step_4_opa() {
   log_info "OPA deployed on AWS; OS OPA (opa-config) will be configured by os-security.yaml"
 }
 
-deploy_step_5_envoy() {
-  log_step "5. Deploy Envoy ConfigMap"
+# deploy_step_5_envoy() removed (Phase 6 cleanup): all 8 financial services
+# on both clouds are migrated to Istio — nothing mounts the envoy-config
+# ConfigMap anymore (istio-proxy replaces the hand-rolled Envoy sidecar
+# entirely, SPIRE stays the cert source via the Workload API socket instead
+# of this ConfigMap's SDS cluster definitions). envoy/configmap.yaml is kept
+# in the repo as a historical reference for the pre-Istio mTLS/ext_authz
+# design, but is no longer applied by any deploy script.
 
-  # envoy/configmap.yaml is the single source of truth for envoy-config on
-  # BOTH clusters (outbound_listener + cross-service STATIC clusters + the
-  # explicit failure_mode_allow: false fail-closed assertion all live here).
-  # os-security.yaml used to also embed its own, incomplete copy of this
-  # ConfigMap; that copy is now deleted (see comment there) precisely so this
-  # is the only place it's defined — no more order-dependent drift between
-  # the two files.
-  log_info "Deploying Envoy ConfigMap on AWS..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/envoy/configmap.yaml"
-
-  log_info "Deploying Envoy ConfigMap on OpenStack..."
-  kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/envoy/configmap.yaml"
-
-  log_info "Envoy ConfigMap deployed"
-}
-
-register_spire_entry() {
-  local ctx="$1"
-  local spiffe_id="$2"
-  local parent_id="$3"
-  local ns="$4"
-  local sa="$5"
-
-  kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry create \
-    -socketPath /tmp/spire-server/private/api.sock \
-    -spiffeID "$spiffe_id" \
-    -parentID "$parent_id" \
-    -selector "k8s:ns:${ns}" \
-    -selector "k8s:sa:${sa}" \
-    -ttl 3600 >/dev/null 2>&1 || true
-}
-
-register_node_alias() {
-  local ctx="$1"
-  local spiffe_id="$2"
-  local cluster="$3"
-
-  # Node alias: parented to the SPIRE server itself (-node), matched via the
-  # k8s_psat:cluster:<name> selector that every agent in this cluster gets
-  # regardless of its own per-node UUID. Workload entries then parent to this
-  # alias instead of a specific agent, so registrations survive node
-  # replacement (new EC2 instance -> new agent UUID) without being redone.
-  kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry create \
-    -socketPath /tmp/spire-server/private/api.sock \
-    -node \
-    -spiffeID "$spiffe_id" \
-    -selector "k8s_psat:cluster:${cluster}" >/dev/null 2>&1 || true
-}
-
+# Actual registration logic lives in scripts/ensure-spire-entries.sh —
+# shared with deploy-app.sh's deploy_financial_services(), which also calls
+# it on EVERY run (not just this one-time security-stack pass). Reason: the
+# SPIRE datastore (sqlite3 on a node-pinned hostPath, see k8s/spire/*.yaml)
+# has no automatic backup — if spire-server is ever recreated in a way that
+# loses that hostPath content, every workload entry vanishes silently
+# (observed once in practice: pod recreated ~93min into a session with 0
+# registration entries left) and istio-proxy's SPIRE-backed SDS starts
+# failing ("workload is not authorized for the requested identities") for
+# any pod created after the wipe, while already-running pods keep working
+# off their cached SVID — a delayed, confusing failure mode. Re-running this
+# script on every deploy-app.sh invocation self-heals a wiped datastore on
+# the next redeploy instead of waiting for someone to notice a broken pod.
 register_spire_workloads() {
   log_step "3.3 Register SPIRE workload entries"
-
-  kubectl --context "$AWS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
-  kubectl --context "$AWS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
-  kubectl --context "$OS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
-  kubectl --context "$OS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
-
-  local aws_parent="spiffe://ztlab.local/nodes/aws-k3s"
-  local os_parent="spiffe://ztlab.local/nodes/os-k3s"
-
-  log_info "Registering node aliases (cluster-wide, survive node/agent UUID changes)..."
-  register_node_alias "$AWS_CONTEXT" "$aws_parent" "aws-k3s"
-  register_node_alias "$OS_CONTEXT" "$os_parent" "os-k3s"
-
-  log_info "Registering AWS workload SVID entries..."
-  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/api-gateway" "$aws_parent" financial api-gateway
-  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/payment-service" "$aws_parent" financial payment-service
-  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/fraud-detection" "$aws_parent" financial fraud-detection
-  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/notification-service" "$aws_parent" financial notification-service
-  register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/web-portal" "$aws_parent" financial web-portal
-
-  log_info "Registering OpenStack workload SVID entries..."
-  register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/core-banking" "$os_parent" financial core-banking
-  register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/account-service" "$os_parent" financial account-service
-  register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/transaction-service" "$os_parent" financial transaction-service
-
-  log_info "SPIRE workload registration completed"
+  AWS_CONTEXT="$AWS_CONTEXT" OS_CONTEXT="$OS_CONTEXT" TIMEOUT_WAIT="$TIMEOUT_WAIT" \
+    "$REPO_ROOT/scripts/ensure-spire-entries.sh"
 }
 
 deploy_security_healthcheck() {
@@ -423,7 +368,7 @@ deploy_security_healthcheck() {
     CLOUD_PROVIDER=aws \
     LOKI_PUSH_URL=http://loki.plg-stack.svc.cluster.local:3100/loki/api/v1/push
 
-  # OpenStack promtail cũng dùng chung đường relay này (deploy-all.sh) vì
+  # OpenStack promtail cũng dùng chung đường relay này (deploy-app.sh) vì
   # OpenStack không có Loki riêng — kế thừa cùng giới hạn: relay chạy trên
   # máy deployer, không phải cluster-native.
   kubectl --context "$OS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-cronjob.yaml"
@@ -473,9 +418,7 @@ verify_deployment() {
   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$OS_CONTEXT" "spire" "spire-agent" "true"
   check_rollout "$AWS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
-  # OS opa-server is deployed later by os-security.yaml (deploy-all.sh Step 5), not here.
-  check_configmap "$AWS_CONTEXT" "financial" "envoy-config"
-  check_configmap "$OS_CONTEXT" "financial" "envoy-config"
+  # OS opa-server is deployed later by os-security.yaml (deploy-app.sh Step 5), not here.
 
   if [ "$VERIFY_FAILED" -ne 0 ]; then
     log_error "Security stack verification failed. Check pods/events/logs before continuing."
@@ -502,7 +445,6 @@ main() {
   deploy_step_3_spire_os
   register_spire_workloads
   deploy_step_4_opa
-  deploy_step_5_envoy
   deploy_security_healthcheck
 
   # Verify

@@ -1,0 +1,211 @@
+<mxfile host="app.diagrams.net" agent="ZTLab" version="24.0.0">
+  <diagram name="Kien truc tong the" id="arch-overview">
+    <mxGraphModel dx="1800" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2000" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ===================== TITLE ===================== -->
+        <mxCell id="title" value="ZTLab — Kien truc tong the: Zero Trust Multi-Cloud (AWS + OpenStack)" style="text;html=1;fontSize=20;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="0" width="1200" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== BIG CLOUD BOXES ===================== -->
+        <mxCell id="awsBox" value="AWS Cloud &#10;K3s Cluster (ctx-aws)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=16;fontStyle=1;dashed=0;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="300" y="40" width="1020" height="900" as="geometry" />
+        </mxCell>
+        <mxCell id="osBox" value="OpenStack Private Cloud &#10;K3s Cluster (ctx-openstack)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;verticalAlign=top;fontSize=16;fontStyle=1;dashed=0;spacingTop=6;" vertex="1" parent="1">
+          <mxGeometry x="1380" y="40" width="560" height="900" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== EXTERNAL ACTORS ===================== -->
+        <mxCell id="userActor" value="Nguoi dung" style="shape=actor;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="60" y="380" width="50" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="internetCloud" value="Internet" style="shape=cloud;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="150" y="385" width="110" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== AWS: NAMESPACE HEADER ROW ===================== -->
+        <mxCell id="ns_kubesystem" value="ns: kube-system" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="80" width="220" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_traefik" value="Traefik&#10;(Ingress)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#326CE5;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=ing;" vertex="1" parent="1">
+          <mxGeometry x="390" y="112" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ns_identity" value="ns: identity" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="560" y="80" width="220" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_keycloak" value="Keycloak&#10;(OIDC / PKCE)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#B4109E;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="630" y="112" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ns_istio" value="ns: istio-system" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="800" y="80" width="220" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_istiod" value="istiod&#10;(control plane)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#466BB0;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="870" y="112" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ns_gatekeeper" value="ns: gatekeeper-system" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1040" y="80" width="260" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_gatekeeper" value="Gatekeeper&#10;(OPA admission)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#3B83BD;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="1130" y="112" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== AWS: SPIRE + PLG ROW ===================== -->
+        <mxCell id="ns_spire_aws" value="ns: spire" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="230" width="460" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_spireserver_aws" value="spire-server" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#00ADD8;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="380" y="262" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_spireagent_aws" value="spire-agent&#10;(DaemonSet)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#00ADD8;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=ds;" vertex="1" parent="1">
+          <mxGeometry x="620" y="262" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ns_plg" value="ns: plg-stack (PLG + AI/SOAR)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="800" y="230" width="500" height="320" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_prometheus" value="Prometheus" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#E6522C;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="820" y="265" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_loki" value="Loki" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#F4B400;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="980" y="265" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_grafana" value="Grafana&#10;(Alert Rules)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#F46800;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="265" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_soar" value="soar-engine" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#0F9D58;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="820" y="385" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_scorer" value="security-scorer" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#0F9D58;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="980" y="385" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_aianalyzer" value="ai-analyzer" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#0F9D58;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="385" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== AWS: FINANCIAL NAMESPACE ===================== -->
+        <mxCell id="ns_financial_aws" value="ns: financial  (moi pod deu co Istio sidecar istio-proxy, mTLS qua SPIRE SVID)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="580" width="980" height="340" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_webportal" value="web-portal" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#326CE5;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="360" y="615" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_apigateway" value="api-gateway" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#326CE5;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="640" y="615" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_paymentservice" value="payment-service" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#326CE5;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="920" y="615" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_frauddetection" value="fraud-detection" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#326CE5;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="360" y="735" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_notification" value="notification-service" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#326CE5;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="640" y="735" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_redis" value="Redis" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#8C1B1B;strokeColor=none;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="930" y="735" width="50" height="64" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== OPENSTACK: FINANCIAL NAMESPACE ===================== -->
+        <mxCell id="ns_financial_os" value="ns: financial" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="80" width="520" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_corebanking" value="core-banking" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED1944;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="1420" y="115" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_accountservice" value="account-service" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED1944;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="1620" y="115" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_transactionservice" value="transaction-service" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#ED1944;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=deploy;" vertex="1" parent="1">
+          <mxGeometry x="1820" y="115" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_pgaccounts" value="postgres-accounts" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#336791;strokeColor=none;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1430" y="240" width="50" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_pgtxn" value="postgres-txn" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#336791;strokeColor=none;fontColor=#ffffff;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1630" y="240" width="50" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_opaserver_os" value="opa-server&#10;(zta.crosscloud)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#7B61FF;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="1820" y="240" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ns_spire_os" value="ns: spire  (cung trust domain: ztlab.local)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;verticalAlign=top;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="480" width="520" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_spireserver_os" value="spire-server" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#00ADD8;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=pod;" vertex="1" parent="1">
+          <mxGeometry x="1450" y="512" width="64" height="64" as="geometry" />
+        </mxCell>
+        <mxCell id="ic_spireagent_os" value="spire-agent&#10;(DaemonSet)" style="sketch=1;outlineConnect=0;fontColor=#232F3E;gradientColor=none;fillColor=#00ADD8;strokeColor=none;dashed=0;verticalLabelPosition=bottom;verticalAlign=top;align=center;html=1;fontSize=11;fontStyle=0;aspect=fixed;shape=mxgraph.kubernetes.icon;prIcon=ds;" vertex="1" parent="1">
+          <mxGeometry x="1690" y="512" width="64" height="64" as="geometry" />
+        </mxCell>
+
+        <mxCell id="noteOs" value="Ket noi 2 cloud qua VPN/WireGuard.&#10;Khong co K8s API server chung — moi cluster tu quan ly,&#10;chi chia se cung 1 SPIRE trust domain va OPA policy dong bo tay." style="text;html=1;align=left;verticalAlign=top;fontSize=11;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1400" y="660" width="500" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== EDGES ===================== -->
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;" edge="1" parent="1" source="userActor" target="internetCloud">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="internetCloud" target="ic_traefik">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_traefik" target="ic_webportal">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="route" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_traefik" target="ic_apigateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="OIDC/PKCE" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;dashed=1;" edge="1" parent="1" source="ic_webportal" target="ic_keycloak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="Bearer JWT (mTLS)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_webportal" target="ic_apigateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="mTLS (SVID)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_apigateway" target="ic_paymentservice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="/score" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_paymentservice" target="ic_frauddetection">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="CROSS-CLOUD mTLS (SPIRE) + OPA zta.crosscloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=11;fontStyle=1;strokeColor=#B85450;strokeWidth=3;" edge="1" parent="1" source="ic_paymentservice" target="ic_corebanking">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="update balance" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_corebanking" target="ic_accountservice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="write ledger" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=10;" edge="1" parent="1" source="ic_corebanking" target="ic_transactionservice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="cap SVID" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=9;dashed=1;strokeColor=#00ADD8;" edge="1" parent="1" source="ic_spireserver_aws" target="ns_financial_aws">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" value="cap SVID" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=9;dashed=1;strokeColor=#00ADD8;" edge="1" parent="1" source="ic_spireserver_os" target="ns_financial_os">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" value="sidecar inject + xDS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=9;dashed=1;strokeColor=#466BB0;" edge="1" parent="1" source="ic_istiod" target="ns_financial_aws">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="logs / metrics" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=9;dashed=1;strokeColor=#999999;" edge="1" parent="1" source="ns_financial_aws" target="ns_plg">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" value="admission control (dryrun)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=9;dashed=1;strokeColor=#3B83BD;" edge="1" parent="1" source="ic_gatekeeper" target="ns_financial_aws">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" value="ext_authz gRPC :9191" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=9;dashed=1;strokeColor=#7B61FF;" edge="1" parent="1" source="ic_opaserver_os" target="ic_corebanking">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== LEGEND ===================== -->
+        <mxCell id="legend" value="Chu thich mau:  Xanh duong = AWS service  |  Do = OpenStack service  |  Xam = ha tang / quan sat  |  Duong net dut = quan he ho tro (SVID, sidecar, log, admission)  |  Duong do dam = giao dich xuyen cloud that" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="960" width="1800" height="30" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

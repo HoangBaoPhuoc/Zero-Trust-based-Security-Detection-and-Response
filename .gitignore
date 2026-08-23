@@ -30,3 +30,7 @@ models/*.npy
 
 # Accidentally created directory
 ~/
+
+# istioctl auto-downloaded by scripts/deploy-app.sh (deploy_istio) if not
+# already on PATH — pinned version, not project source
+.istio-*/
