@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from shared.logging import ZTLabLogger, trace_middleware
 from shared.metrics import CROSS_CLOUD_LATENCY, TXN_TOTAL, SERVICE_UP
+from shared.posture import DEVICE_POSTURE, DEVICE_POSTURE_REASONS
 
 SERVICE = "payment-service"
 CLOUD = "aws"
@@ -26,6 +27,7 @@ app.add_middleware(trace_middleware(SERVICE, CLOUD))
 app.mount("/metrics", make_asgi_app())
 logger = ZTLabLogger(SERVICE, CLOUD)
 SERVICE_UP.labels(service=SERVICE, cloud=CLOUD).set(1)
+logger.info("device_posture_self_check", posture=DEVICE_POSTURE, reasons=DEVICE_POSTURE_REASONS)
 
 
 class PaymentRequest(BaseModel):
@@ -99,6 +101,7 @@ async def process_payment(req: Request, body: PaymentRequest):
                     "X-Fraud-Score": str(score),
                     "X-Fraud-Timestamp": str(ts),
                     "X-Fraud-Gate-Signature": _fraud_gate_signature(trace_id, body, score, ts),
+                    "X-Device-Posture": DEVICE_POSTURE,
                 },
             )
             latency = time.time() - start

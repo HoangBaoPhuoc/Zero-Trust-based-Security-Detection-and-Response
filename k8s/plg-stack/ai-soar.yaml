@@ -14,11 +14,72 @@ spec:
         app: soar-engine
     spec:
       serviceAccountName: soar-engine
+      # Vault init-container pattern — thay cho Vault Agent Injector (không
+      # deploy injector webhook đầy đủ để giảm rủi ro/thời gian, nhưng cơ chế
+      # cốt lõi giống hệt: đăng nhập Vault bằng K8s ServiceAccount token, ghi
+      # secret ra file trên volume dùng chung, container chính source file đó
+      # trước khi khởi động — không cần sửa code app.
+      initContainers:
+        - name: vault-fetch-secrets
+          image: hashicorp/vault:1.17
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              VAULT_TOKEN=""
+              # Overlay network giữa các node đôi khi có nhiễu ngắn (vài giây)
+              # ngay sau khi Service/pod mới được tạo — retry thay vì fail
+              # ngay ở lần thử đầu, nhưng vẫn fail cứng (exit 1) nếu Vault
+              # thật sự không trả về token hợp lệ sau khi đã thử lại.
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                LOGIN_RESP=$(wget -q -O- --header="Content-Type: application/json" \
+                  --post-data="{\"role\":\"soar-engine\",\"jwt\":\"$JWT\"}" \
+                  http://vault.vault.svc.cluster.local:8200/v1/auth/kubernetes/login || true)
+                VAULT_TOKEN=$(echo "$LOGIN_RESP" | sed -n 's/.*"client_token":"\([^"]*\)".*/\1/p')
+                [ -n "$VAULT_TOKEN" ] && break
+                echo "vault-fetch-secrets: login attempt $i/10 failed, retrying in 3s..." >&2
+                sleep 3
+              done
+              if [ -z "$VAULT_TOKEN" ]; then
+                echo "vault-fetch-secrets: FATAL — Vault login failed after retries, last response: $LOGIN_RESP" >&2
+                exit 1
+              fi
+              # Phân biệt "Vault không trả lời được" (lỗi thật, cần retry/fail
+              # cứng) với "Vault trả lời hợp lệ nhưng password rỗng" (hợp lệ
+              # trong lab — SMTP_PASS có thể không được set lúc deploy, xem
+              # comment ở create_smtp_secret() trong scripts/deploy-app.sh —
+              # secret vẫn được tạo rỗng để pod khởi động sạch sẽ).
+              SECRET_RESP=""
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                SECRET_RESP=$(wget -q -O- --header="X-Vault-Token: $VAULT_TOKEN" \
+                  http://vault.vault.svc.cluster.local:8200/v1/secret/data/grafana-smtp-secret || true)
+                case "$SECRET_RESP" in
+                  *'"data":{"data":'*) break ;;
+                esac
+                echo "vault-fetch-secrets: secret read attempt $i/10 failed, retrying in 3s..." >&2
+                sleep 3
+              done
+              case "$SECRET_RESP" in
+                *'"data":{"data":'*) ;;
+                *)
+                  echo "vault-fetch-secrets: FATAL — Vault did not return a valid secret response after retries: $SECRET_RESP" >&2
+                  exit 1
+                  ;;
+              esac
+              SMTP_PASS=$(echo "$SECRET_RESP" | sed -n 's/.*"password":"\([^"]*\)".*/\1/p')
+              [ -z "$SMTP_PASS" ] && echo "vault-fetch-secrets: WARNING — grafana-smtp-secret password is empty (SMTP_PASS not set at deploy time), continuing anyway" >&2
+              echo "SMTP_PASS=${SMTP_PASS}" > /vault/secrets/smtp.env
+              echo "vault-fetch-secrets: OK"
+          volumeMounts:
+            - name: vault-secrets
+              mountPath: /vault/secrets
       containers:
         - name: soar-engine
           image: ztlab/soar-engine:1.0.0
           imagePullPolicy: IfNotPresent
-          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          command: ["/bin/sh", "-c", "set -a && . /vault/secrets/smtp.env && set +a && exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
           ports:
             - name: http
               containerPort: 8080
@@ -83,12 +144,9 @@ spec:
               value: "voha2005@gmail.com"
             - name: SMTP_FROM
               value: "voha2005@gmail.com"
-            - name: SMTP_PASS
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-smtp-secret
-                  key: password
-                  optional: true
+            # SMTP_PASS không còn lấy từ K8s Secret — đọc từ file do init
+            # container vault-fetch-secrets ghi (source qua command ở trên,
+            # xem k8s/vault/vault.yaml + docs/vault-migration.md).
             - name: ADMIN_EMAIL
               value: "voha2005@gmail.com"
             # URL công khai của SOAR engine — admin click từ email sẽ mở URL này
@@ -103,6 +161,9 @@ spec:
               subPath: main.py
             - name: openstack-kubeconfig
               mountPath: /etc/soar/openstack-kubeconfig
+              readOnly: true
+            - name: vault-secrets
+              mountPath: /vault/secrets
               readOnly: true
           readinessProbe:
             httpGet:
@@ -133,6 +194,9 @@ spec:
         - name: openstack-kubeconfig
           secret:
             secretName: soar-openstack-kubeconfig
+        - name: vault-secrets
+          emptyDir:
+            medium: Memory
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

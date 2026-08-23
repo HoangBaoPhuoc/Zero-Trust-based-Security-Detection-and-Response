@@ -1,0 +1,187 @@
+<mxfile host="app.diagrams.net" agent="ZTLab" version="24.0.0">
+  <diagram name="Luong hoat dong end-to-end" id="e2e-flow">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="1750" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="ZTLab — Luong hoat dong End-to-End: Chuyen khoan Zero Trust (Multi-Cloud)" style="text;html=1;fontSize=18;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="10" width="900" height="30" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== ZONE BANDS (drawn first) ===================== -->
+        <mxCell id="zoneClient" value="Client / Dang nhap" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=13;fontStyle=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="900" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="zoneAws" value="AWS Cloud — web-portal / api-gateway / payment-service / fraud-detection + Istio sidecar + OPA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;verticalAlign=top;fontSize=13;fontStyle=1;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="190" width="900" height="710" as="geometry" />
+        </mxCell>
+        <mxCell id="zoneOs" value="OpenStack Cloud — core-banking / account-service / transaction-service + Istio sidecar + OPA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;verticalAlign=top;fontSize=13;fontStyle=1;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1000" width="900" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="zoneObs" value="Observability &amp; Response — Loki / Grafana / SOAR Engine" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;verticalAlign=top;fontSize=13;fontStyle=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1340" width="900" height="220" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== STEP NUMBER CIRCLES + BOXES ===================== -->
+        <!-- Step 1 -->
+        <mxCell id="n1" value="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="90" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s1" value="🔐 Nguoi dung dang nhap qua Keycloak (Authorization Code Flow + PKCE, S256).&#10;web-portal nhan access_token + tao session (cookie ky HMAC), luu account_id gan voi phien dang nhap nay." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="80" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 2 -->
+        <mxCell id="n2" value="2" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="200" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="Nguoi dung bam &quot;Chuyen tien&quot; tren giao dien phone-frame → web-portal nhan POST /api/transfer (from_account co dinh theo phien dang nhap, khong cho chon nhieu tai khoan nguon)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="190" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 3 -->
+        <mxCell id="n3" value="3" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="300" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="🔒 web-portal → api-gateway: POST /payments (header Authorization: Bearer JWT), di qua Istio sidecar (istio-proxy) — ket noi duoc boc mTLS tu dong bang SVID cua SPIRE." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="290" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 4 -->
+        <mxCell id="n4" value="4" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="400" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s4" value="api-gateway tu xac thuc: verify chu ky JWT (RS256, JWKS tu Keycloak, kiem tra issuer + expiry), kiem tra rate limit theo IP, kiem tra IP co trong blocklist khong." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="390" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 5 -->
+        <mxCell id="n5" value="5" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="500" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s5" value="🛡 istio-proxy cua api-gateway goi OPA qua CUSTOM AuthorizationPolicy (ext_authz gRPC, cong 9191): kiem tra role tu JWT claims (financial-write) — allow hoac tu choi 403 ngay tai lop mesh." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="490" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 6 -->
+        <mxCell id="n6" value="6" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="600" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s6" value="🔒 api-gateway → payment-service (mTLS, SVID: spiffe://ztlab.local/aws/payment-service ↔ spiffe://ztlab.local/aws/api-gateway) — danh tinh workload xac minh boi SPIRE, khong dung IP/hostname de tin cay." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="590" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 7 -->
+        <mxCell id="n7" value="7" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="700" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s7" value="payment-service → fraud-detection: POST /score (amount, channel, country, device_trust, velocity tu Redis) → nhan ve {score, verdict, reason, gate}. Score >= 75 → gate=blocked, chan ngay truoc khi cham core-banking." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="690" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 8 -->
+        <mxCell id="n8" value="8" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="800" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s8" value="📋 payment-service tu kiem tra Device Posture (doc /proc/self/status ngay trong tien trinh, khong goi mang): capability nguy hiem hay khong → gan gia tri &quot;compliant&quot;/&quot;non-compliant&quot; de dung o buoc sau." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="790" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 9 (CROSS-CLOUD, highlighted) -->
+        <mxCell id="n9" value="9" style="ellipse;whiteSpace=wrap;html=1;fillColor=#B85450;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="900" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s9" value="🌐 CROSS-CLOUD: payment-service (AWS) → core-banking (OpenStack), qua Service+Endpoints thu cong (khong co K8s Service goc). mTLS boi SPIRE (chung 1 trust domain ztlab.local ca 2 cloud). Header dinh kem: X-Fraud-Gate, X-Fraud-Score, X-Fraud-Gate-Signature (HMAC), X-Device-Posture." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#B85450;strokeWidth=2;fontSize=12;fontStyle=1;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="890" width="780" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Step 10 -->
+        <mxCell id="n10" value="10" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1010" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s10" value="🛡 istio-proxy (core-banking) → OPA rieng cua OpenStack: policy zta.crosscloud.allow (KHONG phai zta.authz — day la policy that dang enforce duong nay). Kiem tra: source/destination principal dung cap, method+path hop le, VA posture_compliant cho rieng /transactions/execute." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1000" width="780" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Step 11 -->
+        <mxCell id="n11" value="11" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1120" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s11" value="🗄 core-banking → account-service: tru/cong so du (atomic DB transaction). Neu so du khong du → 409 insufficient balance, tra ve nguyen ven khong ghi so cai." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1110" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 12 -->
+        <mxCell id="n12" value="12" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1220" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s12" value="🗄 core-banking → transaction-service: ghi so cai giao dich (ledger, immutable) voi trace_id chung xuyen suot toan bo hop tren." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d79b00;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1210" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 13 (transition) -->
+        <mxCell id="n13" value="13" style="ellipse;whiteSpace=wrap;html=1;fillColor=#666666;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1310" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s13" value="✅ Ket qua tra nguoc qua tung hop: core-banking → payment-service → api-gateway → web-portal → hien thi &quot;Chuyen tien thanh cong&quot; + so du moi cho nguoi dung." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1300" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 14 -->
+        <mxCell id="n14" value="14" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1420" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s14" value="📊 Song song: moi hop istio-proxy ghi access log (JSON) + moi service ghi app log (event=http_request, trace_id) → tat ca chay vao Loki. Grafana Alert Rules (6 kich ban KB1-KB6) truy van lien tuc theo thoi gian thuc." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1410" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Step 15 -->
+        <mxCell id="n15" value="15" style="ellipse;whiteSpace=wrap;html=1;fillColor=#333333;fontColor=#ffffff;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1520" width="50" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="s15" value="🚨 Neu phat hien bat thuong (VD: fraud gate bypass, brute force, truy cap trai phep) → Grafana bao webhook → SOAR Engine tu dong tao case, chay playbook (block IP, revoke session) hoac cho Admin duyet qua HITL (Grafana / email)." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;fontSize=12;align=left;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="140" y="1510" width="780" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ===================== SEQUENTIAL ARROWS ===================== -->
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s1" target="s2"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s2" target="s3"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s3" target="s4"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s4" target="s5"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s5" target="s6"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s6" target="s7"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s7" target="s8"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a8" value="CROSS-CLOUD" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=3;strokeColor=#B85450;fontColor=#B85450;fontStyle=1;fontSize=11;" edge="1" parent="1" source="s8" target="s9"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s9" target="s10"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s10" target="s11"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s11" target="s12"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a12" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s12" target="s13"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;" edge="1" parent="1" source="s13" target="s14"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;exitX=0.5;exitY=1;entryX=0.5;entryY=0;strokeWidth=2;dashed=1;" edge="1" parent="1" source="s14" target="s15"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- side branch: step7 fraud block -->
+        <mxCell id="branchFraud" value="verdict = block&#10;(score >= 75) → 403 ngay, dung tai day" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="695" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="abranch1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#b85450;" edge="1" parent="1" source="s7" target="branchFraud"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- side branch: step10 posture deny -->
+        <mxCell id="branchPosture" value="posture_compliant = false&#10;→ allow=false, 403 tai OPA" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="1010" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="abranch2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#b85450;" edge="1" parent="1" source="s10" target="branchPosture"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <!-- side branch: step11 insufficient balance -->
+        <mxCell id="branchBalance" value="so du khong du&#10;→ 409 insufficient balance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="950" y="1120" width="200" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="abranch3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;dashed=1;strokeColor=#b85450;" edge="1" parent="1" source="s11" target="branchBalance"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="legend2" value="Chu thich:  🔐 Xac thuc  |  🔒 mTLS/SVID  |  🛡 OPA/Authorization  |  🗄 Database  |  📊 Quan sat/Log  |  🚨 Phan ung su co  |  Hop mau vang + vien do = ranh gioi xuyen cloud  |  Hop mau hong net dut = nhanh tu choi that" style="text;html=1;align=left;verticalAlign=middle;fontSize=11;fontColor=#666666;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1590" width="900" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

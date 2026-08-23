@@ -64,6 +64,7 @@ TARGETS_BY_ATTACK = {
     "data_staging":         {"context": "ctx-openstack",  "workload": "account-service"},
     "container_escape":     {"context": "ctx-aws",        "workload": "api-gateway"},
     "impair_defenses":      {"context": "ctx-aws",        "workload": "api-gateway"},
+    "privilege_escalation": {"context": "ctx-aws",        "workload": "api-gateway"},
 }
 
 PLAYBOOK_BY_ATTACK = {
@@ -81,6 +82,7 @@ PLAYBOOK_BY_ATTACK = {
     "data_staging":         "restrict_egress",
     "container_escape":     "quarantine_workload",
     "impair_defenses":      "quarantine_workload",
+    "privilege_escalation": "quarantine_workload",
 }
 
 MITRE_BY_ATTACK: dict[str, str] = {
@@ -98,6 +100,7 @@ MITRE_BY_ATTACK: dict[str, str] = {
     "data_staging":         "T1074",
     "container_escape":     "T1611",
     "impair_defenses":      "T1562",
+    "privilege_escalation": "T1068",
 }
 
 ALLOWED_PLAYBOOKS = {
@@ -125,6 +128,7 @@ ATTACK_DISPLAY_NAMES: dict[str, str] = {
     "data_staging":         "Data Staging — Bulk Export (T1074)",
     "container_escape":     "Container Escape Attempt (T1611)",
     "impair_defenses":      "Impair Defenses (T1562)",
+    "privilege_escalation": "Privilege Escalation in Container (T1068)",
 }
 
 # Danh sách playbooks gợi ý cho từng loại tấn công (admin chọn, không giới hạn)
@@ -821,6 +825,7 @@ _LOKI_SEARCH_TERMS: dict[str, str] = {
     "data_staging":         "bulk.export|data.staging|large.query|bulk_export|staging",
     "container_escape":     "container.escape|cap_sys_admin|cap_net_admin|seccomp|privileged|escape",
     "impair_defenses":      "impair.defense|disable.log|opa.admin|prometheus.scrape|loki.push|impair",
+    "privilege_escalation": "privilege_escalation|setuid|cap_dac_override|cap_sys_admin|uid=0",
 }
 
 _EVIDENCE_NAMESPACE_WIDE = {"lateral_movement", "fraud_gate_bypass"}

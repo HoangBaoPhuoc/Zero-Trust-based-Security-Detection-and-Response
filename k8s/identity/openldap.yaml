@@ -1,0 +1,105 @@
+# OpenLDAP — nguồn directory GIẢ LẬP cho mục đích minh hoạ "sync user từ
+# corporate directory vào Keycloak" (mục SCIM trong file tham khảo). Lab này
+# không có LDAP/AD doanh nghiệp thật — đây là nguồn dựng riêng để có cái sync,
+# không phản ánh nhu cầu vận hành thật. Ghi rõ trong README/docs khi tham chiếu.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: identity-directory
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openldap
+  namespace: identity-directory
+  labels:
+    app: openldap
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openldap
+  template:
+    metadata:
+      labels:
+        app: openldap
+    spec:
+      containers:
+        - name: openldap
+          image: osixia/openldap:1.5.0
+          env:
+            - name: LDAP_ORGANISATION
+              value: "ZTLab Demo Directory"
+            - name: LDAP_DOMAIN
+              value: "ztlab.local"
+            - name: LDAP_ADMIN_PASSWORD
+              value: "ztlab-ldap-admin-2026"
+            - name: LDAP_TLS
+              value: "false"
+          ports:
+            - containerPort: 389
+              name: ldap
+          readinessProbe:
+            tcpSocket:
+              port: 389
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openldap
+  namespace: identity-directory
+spec:
+  selector:
+    app: openldap
+  ports:
+    - port: 389
+      targetPort: 389
+      name: ldap
+---
+# Seed 3 user mẫu — chạy 1 lần sau khi openldap Ready:
+#   kubectl apply -f k8s/identity/openldap.yaml
+#   kubectl wait --for=condition=Ready pod -l app=openldap -n identity-directory --timeout=60s
+#   kubectl apply -f k8s/identity/openldap-seed-job.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openldap-seed-users
+  namespace: identity-directory
+data:
+  users.ldif: |
+    dn: ou=people,dc=ztlab,dc=local
+    objectClass: organizationalUnit
+    ou: people
+
+    dn: uid=directory.user01,ou=people,dc=ztlab,dc=local
+    objectClass: inetOrgPerson
+    uid: directory.user01
+    cn: Directory User 01
+    sn: User01
+    mail: directory.user01@ztlab.local
+    userPassword: Test1234!
+
+    dn: uid=directory.user02,ou=people,dc=ztlab,dc=local
+    objectClass: inetOrgPerson
+    uid: directory.user02
+    cn: Directory User 02
+    sn: User02
+    mail: directory.user02@ztlab.local
+    userPassword: Test1234!
+
+    dn: uid=directory.analyst,ou=people,dc=ztlab,dc=local
+    objectClass: inetOrgPerson
+    uid: directory.analyst
+    cn: Directory Analyst
+    sn: Analyst
+    mail: directory.analyst@ztlab.local
+    userPassword: Test1234!

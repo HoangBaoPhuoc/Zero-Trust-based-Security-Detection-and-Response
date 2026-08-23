@@ -82,7 +82,7 @@ start_tunnels() {
       echo "AWS tunnel already listening on 127.0.0.1:${AWS_LOCAL_PORT}; skipping."
     else
       local aws_log="/tmp/ztlab-aws-k8s-tunnel.log"
-      setsid ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o BatchMode=yes         -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"         -o ConnectionAttempts=1         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o StrictHostKeyChecking=no         -L "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443"         -J "${SSH_USER}@${AWS_BASTION_IP}"         "${SSH_USER}@${AWS_MASTER_IP}" >"$aws_log" 2>&1 < /dev/null &
+      setsid ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o BatchMode=yes         -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"         -o ConnectionAttempts=1         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o UserKnownHostsFile=/dev/null         -o StrictHostKeyChecking=no         -L "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443"         -J "${SSH_USER}@${AWS_BASTION_IP}"         "${SSH_USER}@${AWS_MASTER_IP}" >"$aws_log" 2>&1 < /dev/null &
       if ! wait_for_local_port "$AWS_LOCAL_PORT" 20; then
         cat "$aws_log" >&2 2>/dev/null || true
         echo "Failed to start AWS tunnel on 127.0.0.1:${AWS_LOCAL_PORT}" >&2
@@ -122,6 +122,7 @@ pull_remote_kubeconfig() {
   if [[ "$cloud" == "aws" ]]; then
     timeout "$SSH_COMMAND_TIMEOUT" ssh \
       -i "$SSH_KEY" \
+      -o UserKnownHostsFile=/dev/null \
       -o StrictHostKeyChecking=no \
       -o BatchMode=yes \
       -o ConnectTimeout="$SSH_CONNECT_TIMEOUT" \
