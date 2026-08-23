@@ -147,6 +147,15 @@ import_archive_on_nodes() {
   done
 }
 
+ensure_tunnels_up() {
+  log "Ensuring K8s API tunnels are up before restarting deployments"
+  local scope="all"
+  if [[ "$SKIP_PUSH_OPENSTACK" == "true" ]]; then
+    scope="aws"
+  fi
+  "$REPO_ROOT/scripts/k8s-tunnel.sh" up "$scope"
+}
+
 restart_financial_deployments() {
   log "Restarting financial deployments on ctx-aws"
   kubectl --context ctx-aws -n financial rollout restart deployment || true
@@ -192,6 +201,7 @@ main() {
   save_archive
   copy_archive_to_nodes
   import_archive_on_nodes
+  ensure_tunnels_up
   restart_financial_deployments
   verify_quick
 

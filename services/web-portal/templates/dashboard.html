@@ -1,111 +1,88 @@
-{% extends "base.html" %}
-{% block title %}Tổng quan — ZTLab Banking{% endblock %}
-{% block page_title %}Tổng quan{% endblock %}
+{% extends "_app_shell.html" %}
+{% block title %}Tổng quan — ZTLab Bank{% endblock %}
+{% block page_title %}Xin chào, {{ (full_name or username).split(' ')[-1] }}{% endblock %}
 
 {% block content %}
 {% if new_device_alert %}
-<div class="alert {% if new_device_alert == 'suspicious' %}alert-error{% else %}alert-info{% endif %}" style="margin-bottom:16px">
+<div class="alert {% if new_device_alert == 'suspicious' %}alert-error{% else %}alert-info{% endif %}" style="margin-bottom:14px">
   {% if new_device_alert == 'suspicious' %}
-  ⚠ <div><strong>Đăng nhập từ thiết bị/nguồn bất thường.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay và liên hệ hỗ trợ.</div>
+  ⚠ <div><strong>Đăng nhập từ thiết bị/nguồn bất thường.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay.</div>
   {% else %}
-  🔔 <div><strong>Đăng nhập từ thiết bị mới.</strong> Nếu không phải bạn, hãy đổi mật khẩu ngay. Thiết bị này sẽ được ghi nhớ cho lần sau — xem tại <a href="/profile">Hồ sơ &amp; Thiết bị</a>.</div>
+  🔔 <div><strong>Đăng nhập từ thiết bị mới.</strong> Xem chi tiết tại <a href="/profile">Hồ sơ</a>.</div>
   {% endif %}
 </div>
 {% endif %}
 
-<div style="margin-bottom:20px">
-  <div style="font-size:20px;font-weight:700">Xin chào, {{ full_name or username }}</div>
-  <div style="font-size:13px;color:var(--text3);margin-top:4px">
-    <span id="today-date"></span>
-    {% if 'security-admin' in roles %}
-    · <span class="badge badge-purple" style="font-size:11px">Admin</span>
-    {% endif %}
+<!-- Bank card: the one account tied to this login (no picker — matches how
+     a real banking app works: you sign in as an account, you don't choose
+     among several after the fact). -->
+<div class="bank-card" style="margin-bottom:14px">
+  <div class="bank-card-chip">💳</div>
+  <div class="bank-card-number" id="bc-account">{{ account_id or 'Chưa có tài khoản' }}</div>
+  <div class="bank-card-balance" id="bc-balance">—</div>
+  <div id="bc-sparkline" style="height:36px;margin-bottom:14px"></div>
+  <div class="bank-card-footer">
+    <div>
+      <div class="bank-card-owner">Chủ tài khoản</div>
+      <div class="bank-card-name">{{ full_name or username }}</div>
+    </div>
+    <div class="bank-card-logo">ZTLab Bank</div>
   </div>
 </div>
 
-<div class="grid grid-2" style="margin-bottom:20px;align-items:start">
-  <!-- Bank card hero -->
-  <div class="bank-card">
-    <div class="bank-card-chip">💳</div>
-    <div class="bank-card-number" id="bc-account">ACC-••••</div>
-    <div class="bank-card-balance" id="bc-balance">—</div>
-    <div class="bank-card-footer">
-      <div>
-        <div class="bank-card-owner">Chủ tài khoản</div>
-        <div class="bank-card-name">{{ full_name or username }}</div>
-      </div>
-      <div class="bank-card-logo">ZTLab Bank</div>
-    </div>
-  </div>
-
-  <!-- Quick actions -->
-  <div class="card" style="height:100%">
-    <div class="card-title" style="margin-bottom:14px">Thao tác nhanh</div>
-    <div class="grid grid-2" style="gap:10px">
-      <a href="/transfer" class="btn btn-primary" style="justify-content:center;padding:14px">↗ Chuyển tiền</a>
-      <button onclick="loadTransactions()" class="btn" style="justify-content:center;padding:14px">↺ Lịch sử GD</button>
-      <a href="/profile" class="btn" style="justify-content:center;padding:14px">◐ Hồ sơ</a>
-      <a href="/profile" class="btn" style="justify-content:center;padding:14px">📱 Thiết bị</a>
-    </div>
-    <hr class="divider">
-    <div style="display:flex;justify-content:space-between;font-size:12px">
-      <span class="text-muted">Thiết bị hiện tại</span>
-      <span>
-        {% if device_trust == 'trusted' %}<span class="badge badge-green">✓ Đã tin cậy</span>
-        {% elif device_trust == 'new_device' %}<span class="badge badge-yellow">🆕 Mới</span>
-        {% else %}<span class="badge badge-red">⚠ Bất thường</span>{% endif %}
-      </span>
-    </div>
-  </div>
+<!-- Quick actions -->
+<div class="grid" style="grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px">
+  <a href="/transfer" class="btn btn-primary" style="flex-direction:column;padding:12px 4px;font-size:11px;gap:4px">
+    <span style="font-size:18px">↗</span> Chuyển tiền
+  </a>
+  <a href="/history" class="btn" style="flex-direction:column;padding:12px 4px;font-size:11px;gap:4px">
+    <span style="font-size:18px">☰</span> Lịch sử
+  </a>
+  <a href="/profile" class="btn" style="flex-direction:column;padding:12px 4px;font-size:11px;gap:4px">
+    <span style="font-size:18px">◐</span> Hồ sơ
+  </a>
+  <a href="/profile" class="btn" style="flex-direction:column;padding:12px 4px;font-size:11px;gap:4px">
+    <span style="font-size:18px">📱</span> Thiết bị
+  </a>
 </div>
 
 <!-- Stats row -->
-<div class="grid grid-3" style="margin-bottom:20px">
-  <div class="stat-card">
-    <div class="stat-label">Giao dịch hôm nay</div>
-    <div class="stat-value" id="txn-today">—</div>
-    <div class="stat-sub">Trong 24 giờ qua</div>
+<div class="grid grid-3" style="margin-bottom:14px;gap:8px">
+  <div class="stat-card" style="padding:12px">
+    <div class="stat-label" style="font-size:10px">Hôm nay</div>
+    <div class="stat-value" id="txn-today" style="font-size:18px">—</div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Gửi đi (7 ngày)</div>
-    <div class="stat-value amount-negative" id="sent-7d" style="font-size:18px">—</div>
-    <div class="stat-sub">Tổng giao dịch gửi</div>
+  <div class="stat-card" style="padding:12px">
+    <div class="stat-label" style="font-size:10px">Gửi (7 ngày)</div>
+    <div class="stat-value amount-negative" id="sent-7d" style="font-size:14px">—</div>
   </div>
-  <div class="stat-card">
-    <div class="stat-label">Số tài khoản</div>
-    <div class="stat-value" id="account-count-stat" style="font-size:18px">—</div>
-    <div class="stat-sub">Đang hoạt động</div>
+  <div class="stat-card" style="padding:12px">
+    <div class="stat-label" style="font-size:10px">Nhận (7 ngày)</div>
+    <div class="stat-value amount-positive" id="received-7d" style="font-size:14px">—</div>
   </div>
 </div>
 
-<!-- Transactions table -->
-<div class="card" style="margin-bottom:20px">
+<!-- Transactions -->
+<div class="card" style="margin-bottom:14px">
   <div class="card-header">
     <div class="card-title">Giao dịch gần đây</div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <div class="loading" id="txn-loading" style="display:none"><div class="spinner"></div></div>
-      <button onclick="loadTransactions()" class="btn btn-sm">↺ Làm mới</button>
-      <a href="/transfer" class="btn btn-primary btn-sm">+ Chuyển tiền</a>
-    </div>
+    <a href="/history" class="btn btn-sm">Xem tất cả</a>
   </div>
   <div id="txn-container">
-    <div class="loading" style="padding:20px"><div class="spinner"></div> Đang tải giao dịch...</div>
+    <div class="loading" style="padding:16px"><div class="spinner"></div> Đang tải...</div>
   </div>
 </div>
 
 <!-- Trust footer strip -->
-<div class="card" style="padding:14px 20px">
-  <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
-    <div style="font-size:11px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px">
-      Giao dịch của bạn được bảo vệ bởi
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <span class="badge badge-blue" title="Xác thực danh tính qua Keycloak OIDC/PKCE">🔑 Xác thực đa lớp</span>
-      <span class="badge badge-purple" title="Mọi request được OPA kiểm tra chính sách trước khi xử lý">🛡 Kiểm soát truy cập</span>
-      <span class="badge badge-cyan" title="Kênh truyền giữa các dịch vụ được mã hoá mTLS qua SPIRE">🔒 Mã hoá nội bộ</span>
-      <span class="badge badge-green" title="Mỗi giao dịch được chấm điểm rủi ro gian lận theo thời gian thực">📊 Chống gian lận</span>
-      <span class="badge badge-yellow" title="Thiết bị đăng nhập được ghi nhớ, thiết bị lạ sẽ được đánh giá rủi ro cao hơn">📱 Tin cậy thiết bị</span>
-    </div>
+<div class="card" style="padding:12px 14px">
+  <div style="font-size:10px;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">
+    Được bảo vệ bởi
+  </div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <span class="badge badge-blue">🔑 OIDC/PKCE</span>
+    <span class="badge badge-purple">🛡 OPA Policy</span>
+    <span class="badge badge-cyan">🔒 mTLS (SPIRE)</span>
+    <span class="badge badge-green">📊 Chống gian lận</span>
   </div>
 </div>
 {% endblock %}
@@ -113,140 +90,107 @@
 {% block scripts %}
 <script>
 const currentUser = {{ username | tojson }};
-let myAccounts = [];
+const myAccountId = {{ account_id | tojson }};
 
 function esc(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function fmtVND(n) {
-  return parseFloat(n).toLocaleString('vi-VN') + ' ₫';
-}
+function fmtVND(n) { return parseFloat(n).toLocaleString('vi-VN') + ' ₫'; }
 function fmtDate(ts) {
-  return new Date(ts * 1000).toLocaleString('vi-VN', {
-    day:'2-digit', month:'2-digit', year:'numeric',
-    hour:'2-digit', minute:'2-digit',
-  });
+  return new Date(ts * 1000).toLocaleString('vi-VN', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'});
 }
 
-document.getElementById('today-date').textContent = new Date().toLocaleDateString('vi-VN', {
-  weekday:'long', day:'numeric', month:'long', year:'numeric',
-});
+// Small dependency-free SVG sparkline — real running-balance series derived
+// from the account's own transaction history, not a decorative placeholder.
+function renderSparkline(elId, points) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!points || points.length < 2) { el.innerHTML = ''; return; }
+  const w = 340, h = 36, pad = 2;
+  const min = Math.min(...points), max = Math.max(...points);
+  const range = (max - min) || 1;
+  const step = (w - pad*2) / (points.length - 1);
+  const coords = points.map((v, i) => [pad + i*step, h - pad - ((v - min) / range) * (h - pad*2)]);
+  const path = coords.map((p, i) => (i === 0 ? 'M' : 'L') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const areaPath = path + ` L${coords[coords.length-1][0].toFixed(1)},${h} L${coords[0][0].toFixed(1)},${h} Z`;
+  el.innerHTML = `<svg width="100%" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <path d="${areaPath}" fill="rgba(255,255,255,.12)"></path>
+    <path d="${path}" fill="none" stroke="rgba(255,255,255,.85)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+  </svg>`;
+}
 
-async function loadAccounts() {
+async function loadBalance() {
+  if (!myAccountId) { document.getElementById('bc-balance').textContent = '0 ₫'; return; }
   try {
-    const r = await fetch('/api/account/me');
+    const r = await fetch('/api/balance/' + encodeURIComponent(myAccountId));
     const d = await r.json();
-    myAccounts = d.accounts || [];
-
-    if (!myAccounts.length) {
-      document.getElementById('bc-account').textContent = 'Chưa có tài khoản';
-      document.getElementById('bc-balance').textContent = '0 ₫';
-      document.getElementById('account-count-stat').textContent = '0';
-      return;
-    }
-
-    const totalBalance = myAccounts.reduce((s, a) => s + parseFloat(a.balance || 0), 0);
-    document.getElementById('bc-account').textContent = myAccounts[0].account_id;
-    document.getElementById('bc-balance').textContent = fmtVND(totalBalance);
-    document.getElementById('account-count-stat').textContent = myAccounts.length;
-
-    loadTransactions();
+    if (d.balance !== undefined) document.getElementById('bc-balance').textContent = fmtVND(d.balance);
   } catch(e) {
     document.getElementById('bc-balance').textContent = 'Lỗi kết nối';
   }
 }
 
 async function loadTransactions() {
-  document.getElementById('txn-loading').style.display = 'flex';
+  if (!myAccountId) return;
   try {
-    const accountIds = myAccounts.map(a => a.account_id);
-    if (!accountIds.length) {
-      document.getElementById('txn-container').innerHTML =
-        '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Chưa có tài khoản</div>';
-      document.getElementById('txn-loading').style.display = 'none';
-      return;
-    }
-
-    // Fetch transactions for first account (main one), show all involving any of user's accounts
-    const primaryId = accountIds[0];
-    const r = await fetch(`/api/transactions?account_id=${encodeURIComponent(primaryId)}&limit=30`);
+    const r = await fetch(`/api/transactions?account_id=${encodeURIComponent(myAccountId)}&limit=30`);
     let txns = await r.json();
     if (!Array.isArray(txns)) txns = [];
+    txns.sort((a, b) => (a.created_at || 0) - (b.created_at || 0));
 
-    // Also fetch for other accounts if multiple
-    if (accountIds.length > 1) {
-      for (const aid of accountIds.slice(1)) {
-        try {
-          const r2 = await fetch(`/api/transactions?account_id=${encodeURIComponent(aid)}&limit=20`);
-          const more = await r2.json();
-          if (Array.isArray(more)) {
-            for (const t of more) {
-              if (!txns.find(x => x.transaction_id === t.transaction_id)) txns.push(t);
-            }
-          }
-        } catch(_) {}
-      }
-      txns.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
-      txns = txns.slice(0, 30);
-    }
-
-    const accountIdSet = new Set(accountIds);
     const today = new Date().toDateString();
     const todayTxns = txns.filter(t => new Date((t.created_at||0)*1000).toDateString() === today);
     document.getElementById('txn-today').textContent = todayTxns.length;
 
     const cutoff7d = Date.now()/1000 - 7*86400;
-    const sent7d = txns.filter(t => accountIdSet.has(t.from_account) && t.created_at >= cutoff7d)
+    const sent7d = txns.filter(t => t.from_account === myAccountId && t.created_at >= cutoff7d)
                        .reduce((s, t) => s + parseFloat(t.amount||0), 0);
     document.getElementById('sent-7d').textContent = fmtVND(sent7d);
+    const received7d = txns.filter(t => t.to_account === myAccountId && t.created_at >= cutoff7d)
+                       .reduce((s, t) => s + parseFloat(t.amount||0), 0);
+    document.getElementById('received-7d').textContent = fmtVND(received7d);
 
-    if (!txns.length) {
+    // Real running-balance series for the sparkline: walk transactions
+    // chronologically backwards from the balance loaded via loadBalance().
+    const balText = document.getElementById('bc-balance').textContent.replace(/[^\d]/g, '');
+    let bal = parseFloat(balText || '0');
+    const series = [bal];
+    for (let i = txns.length - 1; i >= 0; i--) {
+      const t = txns[i];
+      const amt = parseFloat(t.amount || 0);
+      bal = t.from_account === myAccountId ? bal + amt : bal - amt;
+      series.unshift(bal);
+    }
+    renderSparkline('bc-sparkline', series);
+
+    const recent = txns.slice(-8).reverse();
+    if (!recent.length) {
       document.getElementById('txn-container').innerHTML =
-        '<div style="padding:24px;text-align:center;color:var(--text3);font-size:13px">Chưa có giao dịch nào</div>';
-      document.getElementById('txn-loading').style.display = 'none';
+        '<div style="padding:20px;text-align:center;color:var(--text3);font-size:13px">Chưa có giao dịch nào</div>';
       return;
     }
-
-    const rows = txns.map(t => {
-      const isOut = accountIdSet.has(t.from_account);
+    const rows = recent.map(t => {
+      const isOut = t.from_account === myAccountId;
       const sign = isOut ? '−' : '+';
       const cls = isOut ? 'amount-negative' : 'amount-positive';
       const partner = esc(isOut ? t.to_account : t.from_account);
-      const dir = isOut ? '↑ Gửi' : '↓ Nhận';
-      const dirColor = isOut ? 'var(--red)' : 'var(--green)';
-      const statusBadge = t.status === 'completed'
-        ? '<span class="badge badge-green">Hoàn thành</span>'
-        : `<span class="badge badge-yellow">${esc(t.status)}</span>`;
-      return `<tr>
-        <td style="color:var(--text3);font-size:12px">${esc(fmtDate(t.created_at||0))}</td>
-        <td><span style="color:${dirColor};font-size:12px;font-weight:600">${dir}</span></td>
-        <td class="mono" style="font-size:12px">${esc(isOut ? t.from_account : t.to_account)}</td>
-        <td class="mono" style="font-size:12px;color:var(--text2)">${partner}</td>
-        <td class="${cls}">${sign}${fmtVND(t.amount)}</td>
-        <td>${statusBadge}</td>
-        <td style="font-size:11px;color:var(--text3)" class="mono">${esc((t.trace_id||'').slice(0,12) || '—')}</td>
-      </tr>`;
-    }).join('');
-
-    document.getElementById('txn-container').innerHTML = `
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Thời gian</th><th>Loại</th><th>Từ</th><th>Đến</th>
-            <th>Số tiền</th><th>Trạng thái</th><th>Trace ID</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:600">${isOut ? '↑ Gửi tới' : '↓ Nhận từ'} <span class="mono">${partner}</span></div>
+          <div style="font-size:11px;color:var(--text3)">${esc(fmtDate(t.created_at||0))}</div>
+        </div>
+        <div class="${cls}" style="font-size:13px">${sign}${fmtVND(t.amount)}</div>
       </div>`;
+    }).join('');
+    document.getElementById('txn-container').innerHTML = rows;
   } catch(e) {
     document.getElementById('txn-container').innerHTML =
-      '<div class="alert alert-error" style="margin:12px">Lỗi kết nối dịch vụ</div>';
+      '<div class="alert alert-error">Lỗi kết nối dịch vụ</div>';
   }
-  document.getElementById('txn-loading').style.display = 'none';
 }
 
-loadAccounts();
-setInterval(() => { if (myAccounts.length) loadTransactions(); }, 30000);
+loadBalance().then(loadTransactions);
+setInterval(() => { if (myAccountId) { loadBalance(); loadTransactions(); } }, 30000);
 </script>
 {% endblock %}

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}ZTLab Bank{% endblock %}</title>
+  <style>
+    {% include "_components.html" %}
+
+    body {
+      background: radial-gradient(circle at 50% 0%, #1e293b 0%, #0b1220 55%, #060a13 100%);
+      color: var(--text); font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      min-height: 100vh; font-size: 14px; -webkit-font-smoothing: antialiased;
+      display: flex; align-items: center; justify-content: center; padding: 32px 16px;
+    }
+
+    /* Phone bezel */
+    .phone {
+      width: 390px; max-width: 100%; height: 810px; max-height: 92vh;
+      background: #111827; border-radius: 46px; padding: 12px;
+      box-shadow: 0 30px 70px rgba(0,0,0,.55), 0 0 0 2px rgba(255,255,255,.04) inset;
+      position: relative; flex-shrink: 0;
+    }
+    .phone-notch {
+      position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+      width: 130px; height: 26px; background: #111827;
+      border-radius: 0 0 18px 18px; z-index: 20;
+    }
+    .phone-screen {
+      background: var(--bg); width: 100%; height: 100%;
+      border-radius: 34px; overflow: hidden; position: relative;
+      display: flex; flex-direction: column;
+    }
+
+    /* Status bar */
+    .status-bar {
+      flex-shrink: 0; height: 40px; padding: 0 26px 0 22px;
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: 12px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums;
+      background: var(--surface);
+    }
+    .status-bar-right { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text2); font-weight: 600; }
+    .status-lock { color: var(--green); }
+
+    /* Screen header */
+    .screen-header {
+      flex-shrink: 0; padding: 4px 20px 14px; background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    }
+    .screen-header-title { font-size: 19px; font-weight: 800; letter-spacing: -.2px; }
+    .screen-back { color: var(--text2); text-decoration: none; font-size: 20px; line-height: 1; padding: 4px; }
+
+    /* Scrollable content */
+    .screen-content {
+      flex: 1; overflow-y: auto; padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+      -webkit-overflow-scrolling: touch;
+    }
+    .screen-content::-webkit-scrollbar { width: 0; }
+
+    /* Bottom tab bar */
+    .tab-bar {
+      flex-shrink: 0; display: flex; background: var(--surface);
+      border-top: 1px solid var(--border); padding: 8px 4px 4px;
+    }
+    .tab-item {
+      flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+      text-decoration: none; color: var(--text3); font-size: 10px; font-weight: 600;
+      padding: 4px 2px 8px; border-radius: 10px; transition: color .15s;
+    }
+    .tab-icon { font-size: 19px; line-height: 1; }
+    .tab-item.active { color: var(--accent2); }
+    .home-indicator { flex-shrink: 0; display: flex; justify-content: center; padding: 6px 0 2px; background: var(--surface); }
+    .home-indicator span { width: 120px; height: 4px; border-radius: 3px; background: var(--text); opacity: .25; }
+
+    /* App-shell-scoped component tweaks: cards/grids sit inside a 390px
+       screen, so drop desktop padding/gap sizes the sidebar layout uses */
+    .screen-content .card { padding: 16px; }
+    .screen-content .grid-2, .screen-content .grid-3, .screen-content .grid-4 { grid-template-columns: 1fr; }
+
+    @media (max-width: 480px) {
+      body { padding: 0; }
+      .phone { width: 100%; height: 100vh; max-height: 100vh; border-radius: 0; padding: 0; box-shadow: none; }
+      .phone-notch { display: none; }
+      .phone-screen { border-radius: 0; }
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="phone">
+    <div class="phone-notch"></div>
+    <div class="phone-screen">
+      <div class="status-bar">
+        <span id="phone-clock">--:--</span>
+        <span class="status-bar-right"><span class="status-lock" title="Kết nối được bảo vệ — Zero Trust">🔒</span> Zero Trust · {{ 'AWS' if cloud is not defined else cloud|upper }}</span>
+      </div>
+      <div class="screen-header">
+        <div class="screen-header-title">{% block page_title %}ZTLab Bank{% endblock %}</div>
+        {% block header_action %}{% endblock %}
+      </div>
+      <div class="screen-content">
+        {% block content %}{% endblock %}
+      </div>
+      <nav class="tab-bar">
+        <a href="/dashboard" class="tab-item {% if page=='dashboard' %}active{% endif %}">
+          <span class="tab-icon">⌂</span> Trang chủ
+        </a>
+        <a href="/transfer" class="tab-item {% if page=='transfer' %}active{% endif %}">
+          <span class="tab-icon">↗</span> Chuyển tiền
+        </a>
+        <a href="/history" class="tab-item {% if page=='history' %}active{% endif %}">
+          <span class="tab-icon">☰</span> Lịch sử
+        </a>
+        <a href="/profile" class="tab-item {% if page=='profile' %}active{% endif %}">
+          <span class="tab-icon">◐</span> Hồ sơ
+        </a>
+      </nav>
+      <div class="home-indicator"><span></span></div>
+    </div>
+  </div>
+
+  <script>
+    (function() {
+      function tick() {
+        const el = document.getElementById('phone-clock');
+        if (el) el.textContent = new Date().toLocaleTimeString('vi-VN', {hour:'2-digit', minute:'2-digit'});
+      }
+      tick(); setInterval(tick, 15000);
+    })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

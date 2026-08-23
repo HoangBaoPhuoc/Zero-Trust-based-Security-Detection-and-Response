@@ -20,7 +20,22 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum by (source_ip) (count_over_time({job="envoy-access", response_code="403"}[5m])) > 10'
+              # Verified 2026-08-23 (post-Istio migration): a malformed/invalid
+              # bearer token never reaches OPA's ext_authz check at all — Istio's
+              # CUSTOM AuthorizationPolicy's RBAC→ext_authz bridge simply isn't
+              # triggered for this case (confirmed via zero OPA decision-log
+              # entries for repeated /payments calls with a garbage token, both
+              # with a structurally-invalid string and a well-formed-but-
+              # unsigned fake JWT). api-gateway's OWN JWT decode
+              # (services/api-gateway/main.py) is what actually rejects these —
+              # logging {event:"jwt_verification_failed", reason, source_ip} —
+              # confirmed via direct log capture. This was ALREADY the real
+              # mechanism before the Istio migration too (see FLOW_DETAIL.md
+              # §4's own note that a 2026-06-28 doc revision describing an
+              # Envoy/OPA-layer block for this exact scenario was wrong) — the
+              # job="envoy-access" query below never matched real traffic for
+              # this scenario in either architecture.
+              expr: 'sum by (source_ip) (count_over_time({namespace="financial",app="api-gateway"} | json | event="jwt_verification_failed" [5m])) > 10'
               instant: true
               queryType: instant
               refId: A
@@ -28,7 +43,7 @@ groups:
         execErrState: Alerting
         annotations:
           summary: "Brute force login — hơn 10 lần 403 từ cùng source_ip trong 5 phút"
-          description: "ATT&CK T1110.001 — Kẻ tấn công gửi nhiều request với JWT không hợp lệ. Envoy/OPA trả về 403 (JWT bị từ chối bởi OPA ext_authz)."
+          description: "ATT&CK T1110.001 — Kẻ tấn công gửi nhiều request với JWT không hợp lệ. api-gateway's own JWT decode từ chối (401), ghi log event=jwt_verification_failed — request không tới được OPA ext_authz (xác nhận qua test thật)."
           soar_action: |
             ✅ SOAR đã tự động:
             1. Block IP nguồn tấn công (Redis blocklist, 24h TTL)

@@ -5,6 +5,11 @@
   "sslRequired": "external",
   "accessTokenLifespan": 300,
   "ssoSessionMaxLifespan": 36000,
+  "otpPolicyType": "totp",
+  "otpPolicyAlgorithm": "HmacSHA1",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "otpPolicyLookAheadWindow": 1,
   "clients": [
     {
       "clientId": "api-gateway",
@@ -44,6 +49,28 @@
       "attributes": {
         "pkce.code.challenge.method": "S256"
       }
+    },
+    {
+      "clientId": "aws-console-sso",
+      "protocol": "saml",
+      "attributes": {
+        "saml.assertion.signature": "true",
+        "saml_name_id_format": "email",
+        "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#"
+      },
+      "redirectUris": ["https://signin.aws.amazon.com/saml"],
+      "protocolMappers": [
+        {
+          "name": "role-list",
+          "protocol": "saml",
+          "protocolMapper": "saml-role-list-mapper",
+          "config": {
+            "single": "false",
+            "attribute.nameformat": "Basic",
+            "attribute.name": "https://aws.amazon.com/SAML/Attributes/Role"
+          }
+        }
+      ]
     },
     {
       "clientId": "siem-backend",
@@ -142,6 +169,7 @@
       "realmRoles": [
         "security-analyst"
       ],
+      "requiredActions": ["CONFIGURE_TOTP"],
       "firstName": "Analyst",
       "lastName": "01"
     },
@@ -162,7 +190,41 @@
         "financial-write",
         "security-analyst",
         "security-admin"
-      ]
+      ],
+      "requiredActions": ["CONFIGURE_TOTP"]
     }
-  ]
+  ],
+  "components": {
+    "org.keycloak.storage.UserStorageProvider": [
+      {
+        "name": "ldap-directory",
+        "providerId": "ldap",
+        "config": {
+          "enabled": ["true"],
+          "priority": ["0"],
+          "editMode": ["READ_ONLY"],
+          "syncRegistrations": ["false"],
+          "vendor": ["other"],
+          "usernameLDAPAttribute": ["uid"],
+          "rdnLDAPAttribute": ["uid"],
+          "uuidLDAPAttribute": ["entryUUID"],
+          "userObjectClasses": ["inetOrgPerson, organizationalPerson"],
+          "connectionUrl": ["ldap://openldap.identity-directory.svc.cluster.local:389"],
+          "usersDn": ["ou=people,dc=ztlab,dc=local"],
+          "authType": ["simple"],
+          "bindDn": ["cn=admin,dc=ztlab,dc=local"],
+          "bindCredential": ["ztlab-ldap-admin-2026"],
+          "searchScope": ["1"],
+          "trustEmail": ["true"],
+          "useTruststoreSpi": ["never"],
+          "connectionPooling": ["true"],
+          "pagination": ["true"],
+          "batchSizeForSync": ["1000"],
+          "fullSyncPeriod": ["-1"],
+          "changedSyncPeriod": ["-1"],
+          "importEnabled": ["true"]
+        }
+      }
+    ]
+  }
 }

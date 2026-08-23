@@ -1,0 +1,66 @@
+# Gatekeeper ConstraintTemplate — K8s admission control, bổ sung cho KB6
+# (security-scanner-job.yaml chỉ PHÁT HIỆN privilege escalation sau khi container
+# đã chạy; Gatekeeper NGĂN container vi phạm được TẠO ra từ đầu — 2 lớp bổ nhau).
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: ztlabrequirenonroot
+spec:
+  crd:
+    spec:
+      names:
+        kind: ZTLabRequireNonRoot
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package ztlab.requirenonroot
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.runAsNonRoot
+          msg := sprintf("container '%v' thiếu securityContext.runAsNonRoot=true — vi phạm least-privilege (Zero Trust tenet: mọi resource phải minh bạch về posture)", [container.name])
+        }
+
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.privileged == true
+          msg := sprintf("container '%v' chạy privileged=true — không được phép trong namespace Zero Trust", [container.name])
+        }
+---
+apiVersion: templates.gatekeeper.sh/v1
+kind: ConstraintTemplate
+metadata:
+  name: ztlabrequireimagepolicy
+spec:
+  crd:
+    spec:
+      names:
+        kind: ZTLabRequireImagePolicy
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package ztlab.requireimagepolicy
+
+        # Lưu ý: kiểm tra "not imagePullPolicy" (thiếu trường) không dùng được
+        # cho tag ":latest" — K8s API server tự default imagePullPolicy=Always
+        # cho image ":latest" TRƯỚC KHI admission webhook của Gatekeeper thấy
+        # object (đã verify thật: `kubectl run --dry-run=server` trả về pod đã
+        # có sẵn imagePullPolicy=Always). Kiểm tra thẳng tag ":latest"/không có
+        # tag mới là tín hiệu đúng cho "image không pin, không đảm bảo integrity".
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          image_is_mutable_tag(container.image)
+          msg := sprintf("container '%v' dùng image '%v' — tag ':latest' hoặc không ghim tag/digest, không đảm bảo đúng image nào đang chạy (image integrity, một phần device/workload posture)", [container.name, container.image])
+        }
+
+        # Old-style Rego (không dùng "if" shorthand) — tránh lỗi parse đã gặp
+        # thật: thiếu "import future.keywords.if" làm ConstraintTemplate bị
+        # Gatekeeper từ chối load (silent — vẫn chạy bản constraint CŨ, khiến
+        # "kubectl apply" báo thành công nhưng deny không thật sự có tác dụng).
+        image_is_mutable_tag(image) {
+          endswith(image, ":latest")
+        }
+
+        image_is_mutable_tag(image) {
+          not contains(image, ":")
+        }
