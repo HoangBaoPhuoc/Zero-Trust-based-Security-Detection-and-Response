@@ -86,3 +86,61 @@ Digest (2026-09-09): identity `5d1db5b3ba8e…`, community `8ba0c7eda86a…`, wo
 **Còn nợ Phase 1/2 (làm ở phase sau):** initContainer wait cho crapi-community/workshop; test browser OIDC đầy đủ; bff audit → Loki (job `bff-audit`) chưa thấy stream (LOKI_URL có set — kiểm lại Phase 3).
 
 
+
+### PHASE 3 — OPA enforcement (2026-09-09) — ✅ ĐẠT
+
+**Kiến trúc:** OPA riêng ns `crapi` (3 replica + PDB, tách hẳn OPA finance). Istio
+`extensionProvider opa-ext-authz-crapi` → `opa-service.crapi:9191`. CUSTOM
+AuthorizationPolicy trên `bff`, `crapi-community`, `crapi-workshop` (AWS, path
+`zta/crapi/authz/allow`), `crapi-identity` (OpenStack, path `zta/crapi/crosscloud/allow`).
+
+**Phát hiện kiến trúc:** hop `bff → crapi-identity` là cross-cloud TRỰC TIẾP → đi
+qua OPA **OpenStack** (`crosscloud_crapi.rego`) chỉ kiểm `service_acl` + posture,
+KHÔNG kiểm token Keycloak/RBAC (Keycloak ở AWS, OS OPA không resolve được). →
+**bff tự enforce RBAC + step-up + device-trust** (`_rbac_ok()`, gương của
+`zta_crapi.rego`) — defense-in-depth như finance app (api-gateway app + OPA).
+Hop `bff → community/workshop` (cùng cluster AWS) OPA vẫn kiểm đầy đủ RBAC.
+
+**OPA REST eval (deterministic):**
+| input | result |
+|---|---|
+| `community → workshop GET /workshop/api/shop/products` (lateral movement) | **false** ✓ |
+| `bff → workshop GET /workshop/api/shop/products` (+ Keycloak token) | **true** ✓ |
+
+**BFF end-to-end (session Redis, gọi qua `http://localhost:8080`):**
+| # | Test | KQ | Kỳ vọng |
+|---|---|---|---|
+| 1 | crapi-user GET `/workshop/api/shop/products` | 200 | 200 ✓ |
+| 2 | crapi-user DELETE `/identity/api/v2/admin/videos/1` | 403 | 403 (RBAC) ✓ |
+| 3 | crapi-admin DELETE `/identity/api/v2/admin/videos/999` | 404 | authz pass, video ko tồn tại ✓ |
+| 4 | soc-analyst POST `/community/api/v2/community/posts` | 403 | 403 (ko ghi) ✓ |
+| 5 | POST `/workshop/api/shop/orders` acr=1 | 401 | 401 step_up ✓ |
+| 6 | POST orders acr=high (session giả) | 403 | OPA từ chối token acr=1 thật — **đúng** (defense in depth; test thật cần OTP) |
+| 7 | POST community/posts, device_trust=suspicious | 403 | 403 ✓ |
+| 8 | không session | 401 | 401 ✓ |
+| 9 | BOLA: user đọc vehicle location user khác | **200** | vuln crAPI còn nguyên ✓ |
+
+**Decision log → Loki** (job `opa-decisions`): `result:true/false`, `source_principal`,
+`counter_rego_builtin_http_send_network_requests:2` (OPA gọi Keycloak JWKS+discovery).
+
+**Sửa phát sinh Phase 3:**
+- **mailhog: AWS → OpenStack.** AWS SG `ztlab-sg-private` không cho inbound NodePort
+  từ dải OpenStack (`192.168.101.0/24`) → `identity(OS) → mailhog(AWS):31025` treo
+  → signup treo (identity block trên SMTP send sau khi tạo user thành công).
+  → mailhog về OpenStack, `MH_STORAGE=memory` (bỏ dep Mongo), SMTP nội cluster.
+  Thêm rule SG vào `terraform/aws/security_groups.tf` (root-cause) — cần AWS creds +
+  `terraform apply`; khi có, chuyển mailhog về AWS được (thêm 1 hop cross-cloud SMTP).
+- **identity `traffic.sidecar.istio.io/excludeOutboundPorts: "1025"`** — SMTP là
+  server-first protocol, istio-proxy sniffing làm hỏng handshake ("220 ESMTP" rồi
+  connection close). Loại 1025 khỏi interception → plain TCP → OK.
+- **bff session → Redis** (`bff:session:<sid>`, TTL, fallback in-proc) — cần cho
+  scale + test; cookie chỉ mang `{sid}` ký.
+
+**Cross-cloud hops thực tế (verified):**
+| Hop | Giao thức | Bảo vệ |
+|---|---|---|
+| bff → identity | HTTP | Istio mТLS ISTIO_MUTUAL (SVID) + WireGuard |
+| community → identity `/verify` | HTTP | như trên |
+| workshop → identity `/verify` | HTTP | như trên |
+| community/workshop → postgresdb :30432 | TCP 5432 | WireGuard (Postgres ko sidecar) |
+| identity → mailhog | SMTP 1025 | nội cluster OpenStack (ko còn cross-cloud) |
