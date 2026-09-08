@@ -87,26 +87,35 @@ log_info "Registering node aliases..."
 register_node_alias "$AWS_CONTEXT" "$AWS_PARENT" "aws-k3s"
 register_node_alias "$OS_CONTEXT" "$OS_PARENT" "os-k3s"
 
-log_info "Registering AWS workload SVID entries..."
+# finance app (giữ tới Phase 5 của KE-HOACH-CRAPI.md — sẽ xoá cùng lúc dọn
+# k8s/financial/). crAPI target (ns crapi) đăng ký song song bên dưới.
+log_info "Registering AWS workload SVID entries (financial)..."
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/api-gateway" "$AWS_PARENT" financial api-gateway
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/payment-service" "$AWS_PARENT" financial payment-service
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/fraud-detection" "$AWS_PARENT" financial fraud-detection
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/notification-service" "$AWS_PARENT" financial notification-service
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/web-portal" "$AWS_PARENT" financial web-portal
 
-log_info "Registering OpenStack workload SVID entries..."
+log_info "Registering OpenStack workload SVID entries (financial)..."
 register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/core-banking" "$OS_PARENT" financial core-banking
 register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/account-service" "$OS_PARENT" financial account-service
 register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/transaction-service" "$OS_PARENT" financial transaction-service
 
-# Deploy-time gate: 5 AWS workload entries + 3 OpenStack workload entries
-# expected. If this ever comes back low, spire-server's datastore is empty
-# or partially wiped — fail now instead of leaving it for the next pod
-# restart to discover.
+# crAPI target app (ns crapi) — KE-HOACH-CRAPI.md §2. SA-based selector.
+log_info "Registering crAPI workload SVID entries..."
+register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/bff" "$AWS_PARENT" crapi bff
+register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-web" "$AWS_PARENT" crapi crapi-web
+register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-community" "$AWS_PARENT" crapi crapi-community
+register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-workshop" "$AWS_PARENT" crapi crapi-workshop
+register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-identity" "$OS_PARENT" crapi crapi-identity
+
+# Deploy-time gate. finance: AWS 5 + OS 3. crAPI: AWS 4 (bff+web+community+
+# workshop) + OS 1 (identity). Tổng: AWS 9, OS 4. bff registered dù chưa có
+# pod (Phase 2) — entry idempotent, an toàn.
 aws_count=$(count_entries_matching "$AWS_CONTEXT" "spiffe://ztlab.local/aws/")
 os_count=$(count_entries_matching "$OS_CONTEXT" "spiffe://ztlab.local/openstack/")
-log_info "Verified entries present: AWS=$aws_count (expect 5), OpenStack=$os_count (expect 3)"
-if [ "$aws_count" -lt 5 ] || [ "$os_count" -lt 3 ]; then
+log_info "Verified entries present: AWS=$aws_count (expect 9), OpenStack=$os_count (expect 4)"
+if [ "$aws_count" -lt 9 ] || [ "$os_count" -lt 4 ]; then
   log_error "SPIRE registration entries missing after registration attempt — spire-server datastore may be empty/corrupted. Check 'kubectl -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry show -socketPath /tmp/spire-server/private/api.sock' on both clusters."
   exit 1
 fi

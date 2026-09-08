@@ -1,0 +1,37 @@
+# Cross-cloud wiring — áp trên cluster OpenStack.
+# mailhog-aws → AWS k3s-worker-1 :31025 (SMTP OTP từ crapi-identity, WireGuard).
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailhog-aws
+  namespace: crapi
+spec:
+  ports:
+    - name: smtp
+      port: 31025
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: mailhog-aws
+  namespace: crapi
+subsets:
+  - addresses:
+      - ip: 10.10.1.11
+    ports:
+      - name: smtp
+        port: 31025
+        protocol: TCP
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mailhog-aws-plaintext
+  namespace: crapi
+spec:
+  host: mailhog-aws.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

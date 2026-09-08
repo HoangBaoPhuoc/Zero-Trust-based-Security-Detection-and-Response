@@ -63,7 +63,7 @@ data:
             regex: ${NODE_NAME}
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: financial|identity|plg-stack
+            regex: financial|crapi|identity|plg-stack
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
@@ -126,7 +126,7 @@ data:
             regex: ${NODE_NAME}
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: financial
+            regex: financial|crapi
           - source_labels: [__meta_kubernetes_pod_container_name]
             action: keep
             # All 8 financial services are Istio-migrated (Phase 6) — the
@@ -180,7 +180,7 @@ data:
             regex: ${NODE_NAME}
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: financial
+            regex: financial|crapi
           - source_labels: [__meta_kubernetes_pod_container_name]
             action: keep
             regex: opa

@@ -6,7 +6,7 @@
 # This script intentionally orchestrates the existing focused scripts instead of
 # replacing them:
 #   - scripts/k8s-tunnel.sh for ctx-aws and ctx-openstack
-#   - scripts/sync-financial-images.sh for local image import on all K3s nodes
+#   - scripts/sync-app-images.sh for local image import on all K3s nodes
 #   - scripts/deploy-security-stack.sh for SPIRE, OPA, Envoy, and Keycloak
 #
 # Usage:
@@ -217,7 +217,7 @@ sync_images() {
     return
   fi
 
-  "$REPO_ROOT/scripts/sync-financial-images.sh"
+  "$REPO_ROOT/scripts/sync-app-images.sh"
   ok "Images synced to AWS and OpenStack K3s nodes"
 }
 

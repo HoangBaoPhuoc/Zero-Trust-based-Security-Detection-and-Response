@@ -1,0 +1,78 @@
+# crapi-identity (Java/Spring Boot) — cluster OpenStack. "Nơi cấp phát danh
+# tính" (Nghị định 53: identity + dữ liệu định danh trên hạ tầng chủ quyền).
+#
+# NodePort 30090: bff / crapi-community / crapi-workshop (AWS) gọi cross-cloud
+# qua selectorless Service `crapi-identity-openstack` (mТLS ISTIO_MUTUAL vì 2
+# đầu đều có sidecar — mẫu core-banking-openstack của finance app).
+#
+# Secret crapi-jwt-key (jwks.json — RSA key upstream công khai của crAPI) mount
+# ở /.keys như deployment gốc; entrypoint ảnh tự nạp JWKS từ file này.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crapi-identity, namespace: crapi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crapi-identity
+  namespace: crapi
+  labels:
+    app: crapi-identity
+    cloud: openstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crapi-identity }
+  template:
+    metadata:
+      labels:
+        app: crapi-identity
+        cloud: openstack
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/crapi-identity"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: crapi-identity
+      volumes:
+        - name: jwt-key-secret
+          secret:
+            secretName: crapi-jwt-key
+      containers:
+        - name: crapi-identity
+          image: crapi/crapi-identity:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: crapi-identity-configmap
+          volumeMounts:
+            - name: jwt-key-secret
+              mountPath: /.keys
+              readOnly: true
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { cpu: 1000m, memory: 1024Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crapi-identity
+  namespace: crapi
+  labels: { app: crapi-identity }
+spec:
+  type: NodePort
+  selector: { app: crapi-identity }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30090

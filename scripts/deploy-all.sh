@@ -284,7 +284,7 @@ step 13 "Deploy ứng dụng"
 if run_step 13; then
   [[ -f "$HOME/kolla-venv/bin/activate" ]] && source "$HOME/kolla-venv/bin/activate"
 
-  IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh
+  IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh
   export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
   bash scripts/deploy-app.sh
 

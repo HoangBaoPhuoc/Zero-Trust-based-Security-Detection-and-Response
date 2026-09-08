@@ -198,7 +198,7 @@ kubectl --context ctx-openstack get nodes
 ```bash
 source ~/kolla-venv/bin/activate   # nếu dùng venv riêng cho openstack CLI
 
-IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh   # build + copy image vào mọi node
+IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh   # build + copy image vào mọi node
 docker images | grep '^ztlab/'                          # kiểm tra image đã build
 
 export KEYCLOAK_ADMIN_PASSWORD=ztlab-admin-2026
@@ -314,7 +314,7 @@ kubectl --context ctx-aws rollout status  deployment/<service> -n financial --ti
 
 > **Nếu service đó CŨNG có ConfigMap patch mount (đường A) từ trước** — image mới sẽ bị đè lại bởi ConfigMap cũ. Chạy lại `bash scripts/patch-services.sh <service>` sau khi rebuild để đồng bộ ConfigMap với `main.py` mới nhất trong repo, hoặc gỡ volumeMount nếu không cần patch nhanh nữa.
 >
-> Để deploy lại toàn bộ service tài chính cùng lúc (không chỉ 1 cái), dùng `IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh` thay vì lặp tay từng service.
+> Để deploy lại toàn bộ service tài chính cùng lúc (không chỉ 1 cái), dùng `IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh` thay vì lặp tay từng service.
 
 ### 2.4 Chạy demo / kịch bản tấn công
 
