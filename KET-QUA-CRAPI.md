@@ -32,3 +32,16 @@
 **→ TARGET-CRAPI.md + KE-HOACH-CRAPI.md đã cập nhật cho DB-2. Tiếp Phase 1.**
 
 ---
+
+## PHASE 1 — crAPI + PLG + mТLS
+
+### 1.1 Ảnh — chuyển từ air-gap import → digest-pin + node tự pull
+
+**Phát hiện:** `docker save` gộp nhiều ảnh multi-arch (Docker 29 + containerd image store) → `ctr images import` trên node lỗi `content digest sha256:de74616... not found` (blob thiếu trong OCI archive).
+
+**Kiểm chứng:** node K3s **có internet** — `crictl pull crapi/crapi-web:latest` OK trên cả `aws_k3s_master` và `os_k3s_master` (giống istio/gatekeeper images vốn pull thẳng từ docker.io khi deploy).
+
+**Quyết định:** manifest `k8s/crapi/*` ghim ảnh bằng **digest** (`crapi/crapi-identity@sha256:5d1db5b…` v.v.), `imagePullPolicy: IfNotPresent` → node tự pull, tái tạo được (digest cố định), bỏ phụ thuộc `docker save/ctr import`. `scripts/sync-app-images.sh --pull-only` giữ làm đường offline tùy chọn (chưa sửa lỗi save-per-image — không chặn). Air-gap thực sự vốn đã không có (istio/gatekeeper cũng pull từ internet).
+
+Digest (2026-09-09): identity `5d1db5b3ba8e…`, community `8ba0c7eda86a…`, workshop `d4d2d94d35a3…`, web `b27d246c646b…`, mailhog `015c23f79d40…`, postgres:14 `156f0b253fd6…`, mongo:4.4 `4be76f674fc4…`.
+

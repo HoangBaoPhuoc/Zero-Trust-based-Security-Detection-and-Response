@@ -45,7 +45,7 @@ spec:
       serviceAccountName: crapi-web
       containers:
         - name: crapi-web
-          image: crapi/crapi-web:latest
+          image: crapi/crapi-web@sha256:b27d246c646bd33898e7d1d2095b6e7576c0993a7b81a73aa7386929493d7151
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
@@ -95,7 +95,7 @@ spec:
       serviceAccountName: crapi-community
       containers:
         - name: crapi-community
-          image: crapi/crapi-community:latest
+          image: crapi/crapi-community@sha256:8ba0c7eda86ae065a673f1fa554d0109a24f25c5a8d65097ae024e5ee715c54e
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8087
@@ -145,7 +145,7 @@ spec:
       serviceAccountName: crapi-workshop
       containers:
         - name: crapi-workshop
-          image: crapi/crapi-workshop:latest
+          image: crapi/crapi-workshop@sha256:d4d2d94d35a31e211b04d5a771881f5ae13e358e8fa0804463ae3bace05dd815
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000

@@ -45,7 +45,7 @@ spec:
             secretName: crapi-jwt-key
       containers:
         - name: crapi-identity
-          image: crapi/crapi-identity:latest
+          image: crapi/crapi-identity@sha256:5d1db5b3ba8e02bc68711ec6fc4e35ed7cd8b87e63785ece9e7ff5b5e36c5260
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
