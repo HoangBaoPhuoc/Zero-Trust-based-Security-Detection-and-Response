@@ -121,7 +121,9 @@
         "saml_name_id_format": "email",
         "saml_signature_canonicalization_method": "http://www.w3.org/2001/10/xml-exc-c14n#"
       },
-      "redirectUris": ["https://signin.aws.amazon.com/saml"],
+      "redirectUris": [
+        "https://signin.aws.amazon.com/saml"
+      ],
       "protocolMappers": [
         {
           "name": "role-list",
@@ -142,6 +144,74 @@
       "serviceAccountsEnabled": true,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": false
+    },
+    {
+      "clientId": "crapi-bff",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://crapi.ztlab.local/*",
+        "http://crapi.ztlab.local:8080/*",
+        "http://localhost:8080/*",
+        "http://localhost:18081/*",
+        "http://127.0.0.1:8080/*",
+        "http://127.0.0.1:18081/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "aud-crapi-bff",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "crapi-bff",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "crapi-bff-stepup",
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://crapi.ztlab.local/*",
+        "http://crapi.ztlab.local:8080/*",
+        "http://localhost:8080/*",
+        "http://localhost:18081/*",
+        "http://127.0.0.1:8080/*",
+        "http://127.0.0.1:18081/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "aud-crapi-bff",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "crapi-bff",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "roles": {
@@ -157,6 +227,22 @@
       },
       {
         "name": "security-admin"
+      },
+      {
+        "name": "crapi-user",
+        "description": "crAPI: người dùng thường (đọc + hành động cơ bản)"
+      },
+      {
+        "name": "crapi-mechanic",
+        "description": "crAPI: thợ máy (mechanic endpoints)"
+      },
+      {
+        "name": "crapi-admin",
+        "description": "crAPI: quản trị (admin/management endpoints)"
+      },
+      {
+        "name": "soc-analyst",
+        "description": "SOC analyst: chỉ đọc, xem log/alert"
       }
     ]
   },
@@ -174,6 +260,7 @@
         }
       ],
       "realmRoles": [
+        "crapi-user",
         "financial-read",
         "financial-write"
       ],
@@ -193,6 +280,8 @@
         }
       ],
       "realmRoles": [
+        "crapi-mechanic",
+        "crapi-user",
         "financial-read"
       ],
       "firstName": "Merchant",
@@ -211,6 +300,7 @@
         }
       ],
       "realmRoles": [
+        "crapi-user",
         "financial-read",
         "financial-write"
       ],
@@ -230,9 +320,12 @@
         }
       ],
       "realmRoles": [
-        "security-analyst"
+        "security-analyst",
+        "soc-analyst"
       ],
-      "requiredActions": ["CONFIGURE_TOTP"],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ],
       "firstName": "Analyst",
       "lastName": "01"
     },
@@ -249,12 +342,18 @@
         }
       ],
       "realmRoles": [
+        "crapi-admin",
+        "crapi-mechanic",
+        "crapi-user",
         "financial-read",
         "financial-write",
+        "security-admin",
         "security-analyst",
-        "security-admin"
+        "soc-analyst"
       ],
-      "requiredActions": ["CONFIGURE_TOTP"]
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ]
     }
   ],
   "components": {
@@ -263,29 +362,75 @@
         "name": "ldap-directory",
         "providerId": "ldap",
         "config": {
-          "enabled": ["true"],
-          "priority": ["0"],
-          "editMode": ["READ_ONLY"],
-          "syncRegistrations": ["false"],
-          "vendor": ["other"],
-          "usernameLDAPAttribute": ["uid"],
-          "rdnLDAPAttribute": ["uid"],
-          "uuidLDAPAttribute": ["entryUUID"],
-          "userObjectClasses": ["inetOrgPerson, organizationalPerson"],
-          "connectionUrl": ["ldap://openldap.identity-directory.svc.cluster.local:389"],
-          "usersDn": ["ou=people,dc=ztlab,dc=local"],
-          "authType": ["simple"],
-          "bindDn": ["cn=admin,dc=ztlab,dc=local"],
-          "bindCredential": ["ztlab-ldap-admin-2026"],
-          "searchScope": ["1"],
-          "trustEmail": ["true"],
-          "useTruststoreSpi": ["never"],
-          "connectionPooling": ["true"],
-          "pagination": ["true"],
-          "batchSizeForSync": ["1000"],
-          "fullSyncPeriod": ["-1"],
-          "changedSyncPeriod": ["-1"],
-          "importEnabled": ["true"]
+          "enabled": [
+            "true"
+          ],
+          "priority": [
+            "0"
+          ],
+          "editMode": [
+            "READ_ONLY"
+          ],
+          "syncRegistrations": [
+            "false"
+          ],
+          "vendor": [
+            "other"
+          ],
+          "usernameLDAPAttribute": [
+            "uid"
+          ],
+          "rdnLDAPAttribute": [
+            "uid"
+          ],
+          "uuidLDAPAttribute": [
+            "entryUUID"
+          ],
+          "userObjectClasses": [
+            "inetOrgPerson, organizationalPerson"
+          ],
+          "connectionUrl": [
+            "ldap://openldap.identity-directory.svc.cluster.local:389"
+          ],
+          "usersDn": [
+            "ou=people,dc=ztlab,dc=local"
+          ],
+          "authType": [
+            "simple"
+          ],
+          "bindDn": [
+            "cn=admin,dc=ztlab,dc=local"
+          ],
+          "bindCredential": [
+            "ztlab-ldap-admin-2026"
+          ],
+          "searchScope": [
+            "1"
+          ],
+          "trustEmail": [
+            "true"
+          ],
+          "useTruststoreSpi": [
+            "never"
+          ],
+          "connectionPooling": [
+            "true"
+          ],
+          "pagination": [
+            "true"
+          ],
+          "batchSizeForSync": [
+            "1000"
+          ],
+          "fullSyncPeriod": [
+            "-1"
+          ],
+          "changedSyncPeriod": [
+            "-1"
+          ],
+          "importEnabled": [
+            "true"
+          ]
         }
       }
     ]

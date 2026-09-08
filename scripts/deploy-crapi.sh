@@ -91,6 +91,66 @@ deploy_crapi_workloads() {
   ok "crAPI workloads"
 }
 
+configure_crapi_keycloak() {
+  step "Keycloak — role crapi-* + client crapi-bff/-stepup (Admin API, idempotent)"
+  # realm-config.json khai báo sẵn cho FRESH import; --import-realm KHÔNG
+  # retrofit lên realm đã import → đăng ký live luôn (mẫu deploy_audience_mapper).
+  local admin_pass
+  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
+  [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
+  kaws delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  kaws run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kubectl --context "$AWS_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
+import urllib.request, json, urllib.parse
+KC='http://keycloak.identity.svc.cluster.local:8080'; REALM='ztlab'
+def call(method, path, body=None):
+    data=json.dumps(body).encode() if body is not None else None
+    h=dict(H)
+    if data is not None: h['Content-Type']='application/json'
+    req=urllib.request.Request(KC+path, data=data, headers=h, method=method)
+    try:
+        r=urllib.request.urlopen(req); raw=r.read(); return json.loads(raw) if raw else None
+    except urllib.error.HTTPError as e:
+        if e.code in (404,409): return None
+        raise RuntimeError('%s %s -> %s: %s'%(method,path,e.code,e.read().decode()))
+tok=urllib.parse.urlencode({'grant_type':'password','client_id':'admin-cli','username':'admin','password':'$admin_pass'}).encode()
+H={'Authorization':'Bearer '+json.load(urllib.request.urlopen(urllib.request.Request(KC+'/realms/master/protocol/openid-connect/token',data=tok)))['access_token']}
+
+roles={r['name'] for r in (call('GET','/admin/realms/%s/roles'%REALM) or [])}
+for name,desc in [('crapi-user','crAPI user'),('crapi-mechanic','crAPI mechanic'),('crapi-admin','crAPI admin'),('soc-analyst','SOC analyst')]:
+    if name not in roles:
+        call('POST','/admin/realms/%s/roles'%REALM,{'name':name,'description':desc}); print('role +',name)
+
+REDIR=['http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
+for cid in ('crapi-bff','crapi-bff-stepup'):
+    ex=call('GET','/admin/realms/%s/clients?clientId=%s'%(REALM,cid)) or []
+    if ex: print('client',cid,'exists'); continue
+    call('POST','/admin/realms/%s/clients'%REALM,{
+        'clientId':cid,'protocol':'openid-connect','publicClient':True,'standardFlowEnabled':True,
+        'directAccessGrantsEnabled':False,'redirectUris':REDIR,'webOrigins':['+'],
+        'attributes':{'pkce.code.challenge.method':'S256'},
+        'protocolMappers':[{'name':'aud-crapi-bff','protocol':'openid-connect','protocolMapper':'oidc-audience-mapper',
+            'consentRequired':False,'config':{'included.client.audience':'crapi-bff','id.token.claim':'false','access.token.claim':'true'}}]})
+    print('client +',cid)
+
+ROLE_ADD={'testuser01':['crapi-user'],'testuser02':['crapi-user'],'merchant01':['crapi-user','crapi-mechanic'],
+          'analyst01':['soc-analyst'],'demoadmin':['crapi-user','crapi-mechanic','crapi-admin','soc-analyst'],
+          'stepup-demo':['crapi-user']}
+allroles={r['name']:r for r in call('GET','/admin/realms/%s/roles'%REALM)}
+for uname,rs in ROLE_ADD.items():
+    us=call('GET','/admin/realms/%s/users?username=%s&exact=true'%(REALM,uname)) or []
+    if not us: continue
+    uid=us[0]['id']
+    reps=[{'id':allroles[x]['id'],'name':x} for x in rs if x in allroles]
+    call('POST','/admin/realms/%s/users/%s/role-mappings/realm'%(REALM,uid),reps)
+    print('user',uname,'+',rs)
+print('crapi keycloak config OK')
+" || warn "cấu hình Keycloak crapi lỗi (non-fatal — login bff sẽ hỏng cho tới khi sửa)"
+  kaws delete pod kc-crapi-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  ok "Keycloak crapi roles/clients ensured"
+}
+
 deploy_bff() {
   [[ -d "$REPO_ROOT/services/bff" && -f "$CRAPI_DIR/bff.yaml" ]] || { log "bff chưa có (Phase 2) — bỏ qua"; return; }
   step "BFF (edge PEP + Keycloak)"
@@ -142,6 +202,7 @@ main() {
   apply_namespace_and_config
   deploy_databases
   deploy_crapi_workloads
+  configure_crapi_keycloak
   deploy_bff
   register_spire
   deploy_mesh_policies
