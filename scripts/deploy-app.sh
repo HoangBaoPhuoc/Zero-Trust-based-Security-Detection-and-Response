@@ -321,7 +321,7 @@ req = urllib.request.Request('http://keycloak.identity.svc.cluster.local:8080/re
 token = json.load(urllib.request.urlopen(req))['access_token']
 headers = {'Authorization': 'Bearer ' + token}
 
-for client_id in ('api-gateway', 'web-portal'):
+for client_id in ('crapi-bff',):
     req = urllib.request.Request('http://keycloak.identity.svc.cluster.local:8080/admin/realms/ztlab/clients?clientId=' + client_id, headers=headers)
     clients = json.load(urllib.request.urlopen(req))
     if not clients:
@@ -331,20 +331,20 @@ for client_id in ('api-gateway', 'web-portal'):
 
     req = urllib.request.Request('http://keycloak.identity.svc.cluster.local:8080/admin/realms/ztlab/clients/' + internal_id + '/protocol-mappers/models', headers=headers)
     mappers = json.load(urllib.request.urlopen(req))
-    if any(m.get('name') == 'aud-api-gateway' for m in mappers):
-        print(client_id, '-> aud-api-gateway mapper already present, skipping')
+    if any(m.get('name') == 'aud-crapi-bff' for m in mappers):
+        print(client_id, '-> aud-crapi-bff mapper already present, skipping')
         continue
 
     payload = {
-        'name': 'aud-api-gateway', 'protocol': 'openid-connect',
+        'name': 'aud-crapi-bff', 'protocol': 'openid-connect',
         'protocolMapper': 'oidc-audience-mapper', 'consentRequired': False,
-        'config': {'included.client.audience': 'api-gateway', 'id.token.claim': 'false', 'access.token.claim': 'true'},
+        'config': {'included.client.audience': 'crapi-bff', 'id.token.claim': 'false', 'access.token.claim': 'true'},
     }
     req = urllib.request.Request(
         'http://keycloak.identity.svc.cluster.local:8080/admin/realms/ztlab/clients/' + internal_id + '/protocol-mappers/models',
         data=json.dumps(payload).encode(), headers={**headers, 'Content-Type': 'application/json'}, method='POST')
     urllib.request.urlopen(req)
-    print(client_id, '-> aud-api-gateway mapper created')
+    print(client_id, '-> aud-crapi-bff mapper created')
 " || warn "Keycloak Audience mapper setup failed (non-fatal — but T-1.4 audience check degrades to a no-op without it, see KET-QUA-KIEM-TRA.md)"
   kubectl --context "$AWS_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
