@@ -160,8 +160,36 @@ deploy_bff() {
   ok "bff"
 }
 
+deploy_crapi_opa() {
+  [[ -f "$CRAPI_DIR/opa.yaml" ]] || { log "opa.yaml chưa có (Phase 3) — bỏ qua"; return; }
+  step "OPA PDP cho crapi (2 cluster, path khác nhau)"
+  python3 "$REPO_ROOT/scripts/gen-rego-acl.py" --crapi
+  python3 "$REPO_ROOT/scripts/gen-networkpolicy.py" --crapi 2>/dev/null || true
+  # opa-config per-cluster
+  kaws -n crapi create configmap opa-config --from-literal=opa-config.yaml="$(printf 'plugins:\n  envoy_ext_authz_grpc:\n    addr: :9191\n    path: zta/crapi/authz/allow\ndecision_logs:\n  console: true\n')" --dry-run=client -o yaml | kaws apply -f -
+  kos  -n crapi create configmap opa-config --from-literal=opa-config.yaml="$(printf 'plugins:\n  envoy_ext_authz_grpc:\n    addr: :9191\n    path: zta/crapi/crosscloud/allow\ndecision_logs:\n  console: true\n')" --dry-run=client -o yaml | kos apply -f -
+  for k in kaws kos; do
+    $k -n crapi create configmap opa-policies-crapi --from-file="$REPO_ROOT/opa/crapi-policies" --dry-run=client -o yaml | $k apply -f -
+    $k apply -f "$CRAPI_DIR/opa.yaml"
+  done
+  wait_rollout "$AWS_CONTEXT" crapi deployment/opa-server 180s
+  wait_rollout "$OS_CONTEXT"  crapi deployment/opa-server 180s
+  ok "crapi OPA ready (2 cluster)"
+}
+
+reinstall_istio_for_crapi_provider() {
+  # extensionProvider opa-ext-authz-crapi mới thêm vào istio-operator.yaml —
+  # cần re-install istio (idempotent) để meshConfig có nó.
+  local istioctl="istioctl"
+  command -v istioctl >/dev/null 2>&1 || istioctl="$REPO_ROOT/.istio-1.22.3/bin/istioctl"
+  [[ -x "$istioctl" || -n "$(command -v istioctl)" ]] || { warn "istioctl không có — bỏ qua re-install (provider crapi sẽ thiếu)"; return; }
+  step "Re-install Istio (meshConfig: +extensionProvider opa-ext-authz-crapi)"
+  "$istioctl" install --context "$AWS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y >/dev/null 2>&1 && ok "istio AWS" || warn "istio AWS re-install lỗi"
+  "$istioctl" install --context "$OS_CONTEXT"  -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y >/dev/null 2>&1 && ok "istio OS" || warn "istio OS re-install lỗi"
+}
+
 deploy_mesh_policies() {
-  step "Istio mesh policies (PeerAuth + DestinationRule [+ AuthorizationPolicy Phase 3])"
+  step "Istio mesh policies (PeerAuth + DestinationRule + AuthorizationPolicy→OPA)"
   kaws apply -f "$CRAPI_DIR/istio-policies.yaml"
   kos  apply -f "$CRAPI_DIR/istio-policies.yaml"
   ok "istio-policies"
@@ -205,6 +233,8 @@ main() {
   configure_crapi_keycloak
   deploy_bff
   register_spire
+  deploy_crapi_opa
+  reinstall_istio_for_crapi_provider
   deploy_mesh_policies
   apply_network_policies
   run_seed

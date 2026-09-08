@@ -1,11 +1,8 @@
 # Istio mesh policy cho ns crapi — mẫu k8s/financial/istio-policies.yaml.
 #
-# PHASE 1: chỉ PeerAuthentication (STRICT + PERMISSIVE cho điểm vào) +
-# DestinationRule custom-SAN (bắt buộc: SPIRE cấp SPIFFE scheme riêng
-# spiffe://ztlab.local/<cloud>/<svc>, không phải scheme mặc định Istio →
-# thiếu DR này thì client-side validation reject cert lúc handshake).
-#
-# CUSTOM AuthorizationPolicy → opa-ext-authz thêm ở PHASE 3.
+# PeerAuthentication (STRICT + PERMISSIVE cho điểm vào) + DestinationRule
+# custom-SAN (bắt buộc: SPIRE cấp SPIFFE scheme riêng spiffe://ztlab.local/
+# <cloud>/<svc>) + CUSTOM AuthorizationPolicy → opa-ext-authz-crapi (PHASE 3).
 ---
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
@@ -65,3 +62,56 @@ spec:
     tls:
       mode: ISTIO_MUTUAL
       subjectAltNames: ["spiffe://ztlab.local/aws/crapi-workshop"]
+---
+# ══ PHASE 3: CUSTOM AuthorizationPolicy → OPA ext_authz ══
+# fail-closed (Istio deny nếu ext_authz không tới được, trừ khi failOpen).
+# Provider `opa-ext-authz-crapi` → opa-service.crapi:9191 (istio-operator.yaml).
+# Selector không match trên cluster không chạy workload đó → cùng file apply
+# được cho cả 2 cluster.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: bff-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: bff }
+  action: CUSTOM
+  provider: { name: opa-ext-authz-crapi }
+  rules: [ {} ]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: crapi-community-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-community }
+  action: CUSTOM
+  provider: { name: opa-ext-authz-crapi }
+  rules: [ {} ]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: crapi-workshop-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-workshop }
+  action: CUSTOM
+  provider: { name: opa-ext-authz-crapi }
+  rules: [ {} ]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: crapi-identity-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-identity }
+  action: CUSTOM
+  provider: { name: opa-ext-authz-crapi }
+  rules: [ {} ]

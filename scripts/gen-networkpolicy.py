@@ -20,13 +20,20 @@ Usage: python3 scripts/gen-networkpolicy.py
 Nghiệm thu: `git diff k8s/financial/network-policies/{aws,os}-pod-segmentation.yaml`
 rỗng nếu service-graph.yaml không đổi.
 """
+import sys
 from pathlib import Path
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GRAPH_FILE = REPO_ROOT / "policy" / "service-graph.yaml"
-NETPOL_DIR = REPO_ROOT / "k8s" / "financial" / "network-policies"
+if "--crapi" in sys.argv:
+    GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
+    NETPOL_DIR = REPO_ROOT / "k8s" / "crapi" / "network-policies"
+    NS = "crapi"
+else:
+    GRAPH_FILE = REPO_ROOT / "policy" / "service-graph.yaml"
+    NETPOL_DIR = REPO_ROOT / "k8s" / "financial" / "network-policies"
+    NS = "financial"
 
 HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
 # Sinh lại: python3 scripts/gen-networkpolicy.py
@@ -62,7 +69,7 @@ def render_policy(name: str, dest_label: str, sources: list[tuple[str, list[int]
 kind: NetworkPolicy
 metadata:
   name: {name}
-  namespace: financial
+  namespace: {NS}
 spec:
   podSelector:
     matchLabels:
@@ -107,6 +114,7 @@ def gen_for_cluster(graph: dict, cluster: str, prefix: str, allow_list_file: str
 
 
 def main() -> None:
+    NETPOL_DIR.mkdir(parents=True, exist_ok=True)
     graph = yaml.safe_load(GRAPH_FILE.read_text())
 
     aws_content = gen_for_cluster(graph, "aws", "aws", "aws-allow-list.yaml")
