@@ -63,6 +63,21 @@ spec:
       mode: ISTIO_MUTUAL
       subjectAltNames: ["spiffe://ztlab.local/aws/crapi-workshop"]
 ---
+# Tên trực tiếp crapi-identity.crapi.svc.cluster.local (dùng nội cluster OpenStack:
+# seed job, và bất kỳ caller nào không qua selectorless -openstack). Bắt buộc —
+# SPIRE cấp scheme riêng, thiếu DR này client-side validation reject → 503.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-identity-custom-san
+  namespace: crapi
+spec:
+  host: crapi-identity.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/openstack/crapi-identity"]
+---
 # ══ PHASE 3: CUSTOM AuthorizationPolicy → OPA ext_authz ══
 # fail-closed (Istio deny nếu ext_authz không tới được, trừ khi failOpen).
 # Provider `opa-ext-authz-crapi` → opa-service.crapi:9191 (istio-operator.yaml).
@@ -77,7 +92,7 @@ spec:
   selector:
     matchLabels: { app: bff }
   action: CUSTOM
-  provider: { name: opa-ext-authz-crapi }
+  provider: { name: opa-ext-authz }
   rules: [ {} ]
 ---
 apiVersion: security.istio.io/v1
@@ -89,7 +104,7 @@ spec:
   selector:
     matchLabels: { app: crapi-community }
   action: CUSTOM
-  provider: { name: opa-ext-authz-crapi }
+  provider: { name: opa-ext-authz }
   rules: [ {} ]
 ---
 apiVersion: security.istio.io/v1
@@ -101,7 +116,7 @@ spec:
   selector:
     matchLabels: { app: crapi-workshop }
   action: CUSTOM
-  provider: { name: opa-ext-authz-crapi }
+  provider: { name: opa-ext-authz }
   rules: [ {} ]
 ---
 apiVersion: security.istio.io/v1
@@ -113,7 +128,7 @@ spec:
   selector:
     matchLabels: { app: crapi-identity }
   action: CUSTOM
-  provider: { name: opa-ext-authz-crapi }
+  provider: { name: opa-ext-authz }
   rules: [ {} ]
 ---
 # mailhog (OpenStack, inject=false) — identity có sidecar STRICT → phải tắt

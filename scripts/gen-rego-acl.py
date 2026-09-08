@@ -23,16 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # --crapi: sinh cho ứng dụng mục tiêu crAPI (package + file riêng, KHÔNG đụng
 # service_acl.rego của finance app cho tới Phase 5 của KE-HOACH-CRAPI.md).
-if "--crapi" in sys.argv:
-    GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
-    OUT_FILE = REPO_ROOT / "opa" / "crapi-policies" / "service_acl.rego"
-    PACKAGE = "zta.crapi.generated"
-    SRC_LABEL = "policy/service-graph-crapi.yaml (KE-HOACH-CRAPI.md)"
-else:
-    GRAPH_FILE = REPO_ROOT / "policy" / "service-graph.yaml"
-    OUT_FILE = REPO_ROOT / "opa" / "policies" / "service_acl.rego"
-    PACKAGE = "zta.generated"
-    SRC_LABEL = "policy/service-graph.yaml (T-1.1, KET-QUA-KIEM-TRA.md)"
+GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
+OUT_FILE = REPO_ROOT / "opa" / "crapi-policies" / "service_acl.rego"
+PACKAGE = "zta.crapi.generated"
 
 
 def spiffe_id(trust_domain: str, workload: str) -> str:
@@ -70,21 +63,11 @@ def main() -> None:
         blocks.append(f'  "{source_id}": {{\n' + "\n".join(dest_blocks) + "\n  },")
 
     body = "\n".join(blocks)
-    if "--crapi" in sys.argv:
-        header = f"""# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
-# Sinh lại: python3 scripts/gen-rego-acl.py --crapi
-#
-# Ma trận phân quyền service-to-service (L7) cho ứng dụng mục tiêu crAPI —
-# import bởi opa/crapi-policies/{{zta_crapi,crosscloud_crapi}}.rego qua
-# `data.zta.crapi.generated`. Xem KE-HOACH-CRAPI.md Phase 3 + KET-QUA-CRAPI.md GATE 0."""
-    else:
-        header = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
+    header = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
 # Sinh lại: python3 scripts/gen-rego-acl.py
 #
-# Ma trận phân quyền service-to-service (L7) — nguồn sự thật duy nhất, dùng
-# chung bởi zta_policy.rego (cluster AWS) và cross_cloud.rego (cluster
-# OpenStack) qua `import data.zta.generated`. Xem policy/service-graph.yaml
-# để biết dữ liệu gốc + traffic thật đã đo (T-1.1, KET-QUA-KIEM-TRA.md)."""
+# Ma trận phân quyền service-to-service (L7) cho crAPI — import bởi
+# opa/crapi-policies/{zta_crapi,crosscloud_crapi}.rego qua data.zta.crapi.generated."""
     content = f"""package {PACKAGE}
 
 {header}

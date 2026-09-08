@@ -88,6 +88,8 @@ deploy_crapi_workloads() {
   for d in crapi-web crapi-community crapi-workshop; do
     wait_rollout "$AWS_CONTEXT" crapi "deployment/$d" 300s
   done
+  kaws apply -f "$CRAPI_DIR/posture-agent-cronjob.yaml"
+  kos  apply -f "$CRAPI_DIR/posture-agent-cronjob.yaml"
   ok "crAPI workloads"
 }
 
@@ -212,11 +214,13 @@ apply_network_policies() {
 }
 
 run_seed() {
-  [[ -f "$CRAPI_DIR/seed-job.yaml" ]] || { log "seed-job chưa có (Phase 5) — bỏ qua"; return; }
-  step "Seed dữ liệu crAPI (Job — thao tác app, không phải hạ tầng)"
-  kaws delete job crapi-seed -n crapi --ignore-not-found >/dev/null 2>&1 || true
-  kaws apply -f "$CRAPI_DIR/seed-job.yaml"
-  kaws wait --for=condition=complete job/crapi-seed -n crapi --timeout=300s || warn "seed job chưa complete"
+  [[ -f "$CRAPI_DIR/seed-job.yaml" ]] || { log "seed-job chưa có — bỏ qua"; return; }
+  step "Seed dữ liệu crAPI (Job trên OpenStack — thao tác app, KHÔNG phải hạ tầng)"
+  kos delete job crapi-seed -n crapi --ignore-not-found >/dev/null 2>&1 || true
+  kos apply -f "$CRAPI_DIR/seed-job.yaml"
+  kos wait --for=condition=complete job/crapi-seed -n crapi --timeout=300s \
+    && kos logs job/crapi-seed -c seed -n crapi 2>/dev/null | tail -8 \
+    || warn "seed job chưa complete (xem: kubectl --context $OS_CONTEXT -n crapi logs job/crapi-seed -c seed)"
 }
 
 verify() {

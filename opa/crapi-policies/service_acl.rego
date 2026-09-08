@@ -1,11 +1,10 @@
 package zta.crapi.generated
 
 # GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
-# Sinh lại: python3 scripts/gen-rego-acl.py --crapi
+# Sinh lại: python3 scripts/gen-rego-acl.py
 #
-# Ma trận phân quyền service-to-service (L7) cho ứng dụng mục tiêu crAPI —
-# import bởi opa/crapi-policies/{zta_crapi,crosscloud_crapi}.rego qua
-# `data.zta.crapi.generated`. Xem KE-HOACH-CRAPI.md Phase 3 + KET-QUA-CRAPI.md GATE 0.
+# Ma trận phân quyền service-to-service (L7) cho crAPI — import bởi
+# opa/crapi-policies/{zta_crapi,crosscloud_crapi}.rego qua data.zta.crapi.generated.
 
 service_acl := {
   "spiffe://ztlab.local/aws/bff": {

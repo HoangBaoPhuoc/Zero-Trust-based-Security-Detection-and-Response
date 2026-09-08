@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 APP_NAME = "soar-engine"
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/2")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis.crapi.svc.cluster.local:6379/2")
 REDIS_BLOCKED_IPS_KEY = "ztlab:blocked_ips"
 REDIS_BLOCKED_IPS_TTL = int(os.getenv("SOAR_BLOCK_IP_TTL_SECONDS", "86400"))  # 24h default
 
@@ -34,7 +34,7 @@ KEYCLOAK_ADMIN_PASSWORD = os.getenv("KEYCLOAK_ADMIN_PASSWORD", "")
 SOAR_DRY_RUN = os.getenv("SOAR_DRY_RUN", "true").lower() == "true"
 SOAR_AUTO_EXECUTE = os.getenv("SOAR_AUTO_EXECUTE", "true").lower() == "true"
 SOAR_MIN_SEVERITY = os.getenv("SOAR_MIN_SEVERITY", "high").lower()
-SOAR_NAMESPACE = os.getenv("SOAR_NAMESPACE", "financial")
+SOAR_NAMESPACE = os.getenv("SOAR_NAMESPACE", "crapi")
 SOAR_ALLOWED_CONTEXTS = {item.strip() for item in os.getenv("SOAR_ALLOWED_CONTEXTS", "ctx-aws,ctx-openstack").split(",") if item.strip()}
 SOAR_API_TOKEN = os.getenv("SOAR_API_TOKEN", "").strip()
 CASE_STORE_PATH = os.getenv("SOAR_CASE_STORE_PATH", "/data/cases.jsonl")
@@ -763,7 +763,7 @@ async def _investigate_loki(attack_type: str, workload: str | None, source_ip: s
     parts = []
     if workload:
         parts.append(f'app="{workload}"')
-    base_filter = "{" + ", ".join(parts) + "}" if parts else '{job="kubernetes-pods", namespace="financial"}'
+    base_filter = "{" + ", ".join(parts) + "}" if parts else '{job="kubernetes-pods", namespace="crapi"}'
 
     search_terms = {
         "brute_force":          "401|403|login.fail|authentication.fail",
@@ -812,7 +812,7 @@ _LOKI_EXACT_QUERIES: dict[str, str] = {
     # KB3: OPA decision log cho /payments/internal/execute — chỉ lateral movement mới dùng path này
     "lateral_movement":  '{job="opa-decisions", opa_result="false", request_path="/payments/internal/execute"}',
     # KB2: payment-service AUDIT log event payment_blocked_fraud
-    "fraud_gate_bypass": '{namespace="financial", app="payment-service"} | json | event="payment_blocked_fraud"',
+    "fraud_gate_bypass": '{namespace="crapi", app="payment-service"} | json | event="payment_blocked_fraud"',
 }
 
 _LOKI_SEARCH_TERMS: dict[str, str] = {
@@ -917,12 +917,12 @@ async def _fetch_loki_lines(
         term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
         if source_ip:
             term = f"{source_ip}|{term}"
-        query = f'{{namespace="financial"}} |~ "(?i)({term})"'
+        query = f'{{namespace="crapi"}} |~ "(?i)({term})"'
     else:
         parts = []
         if workload:
             parts.append(f'app="{workload}"')
-        base = "{" + ", ".join(parts) + "}" if parts else '{namespace="financial"}'
+        base = "{" + ", ".join(parts) + "}" if parts else '{namespace="crapi"}'
         term = _LOKI_SEARCH_TERMS.get(attack_type, "denied|error|attack|fail")
         if source_ip:
             term = f"{source_ip}|{term}"
@@ -1114,7 +1114,7 @@ async def _heuristic_analyze() -> None:
         async with httpx.AsyncClient(timeout=15) as h:
             resp = await h.get(
                 f"{LOKI_URL}/loki/api/v1/query_range",
-                params={"query": '{namespace="financial"}', "start": start_ns, "end": end_ns, "limit": 1000},
+                params={"query": '{namespace="crapi"}', "start": start_ns, "end": end_ns, "limit": 1000},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -1442,7 +1442,7 @@ async def list_playbooks(authorization: str | None = Header(default=None)) -> di
             "isolate_workload": "Patch Service selector → no traffic; pod still running for forensics",
             "restrict_egress": "Scale Deployment to 0 → stops outbound data transfer",
             "quarantine_workload": "Scale Deployment to 0 → full workload shutdown",
-            "block_source_ip": "Create NetworkPolicy blocking source IP/32 from all financial pods",
+            "block_source_ip": "Create NetworkPolicy blocking source IP/32 from all crapi pods",
             "revoke_user_sessions": "Revoke all active Keycloak sessions for compromised user",
             "monitor_only": "Log and monitor only — no automated K8s action",
         },

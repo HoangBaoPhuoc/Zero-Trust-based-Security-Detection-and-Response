@@ -32,7 +32,7 @@ spec:
                 - name: CLOUD_PROVIDER
                   value: "aws"
                 - name: OPA_URL
-                  value: "http://opa-service.financial.svc.cluster.local:8181/health"
+                  value: "http://opa-service.crapi.svc.cluster.local:8181/health"
               command: ["/bin/bash", "-c"]
               args:
                 - |

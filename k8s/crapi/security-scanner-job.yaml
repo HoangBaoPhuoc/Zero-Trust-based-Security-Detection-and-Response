@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: security-scanner
-  namespace: financial
+  namespace: crapi
   labels:
     app: security-scanner
 spec:

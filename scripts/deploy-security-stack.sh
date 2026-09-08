@@ -89,8 +89,8 @@ check_kctl_context() {
 
 financial_manifests_ready() {
   local manifests=(
-    "$REPO_ROOT/k8s/financial/aws-services.yaml"
-    "$REPO_ROOT/k8s/financial/os-services.yaml"
+    "$REPO_ROOT/k8s/crapi/aws-workloads.yaml"
+    "$REPO_ROOT/k8s/crapi/os-workloads.yaml"
   )
   for f in "${manifests[@]}"; do
     if [ ! -f "$f" ] || ! grep -qE '^apiVersion:' "$f"; then
@@ -314,29 +314,13 @@ deploy_step_3_spire_os() {
 }
 
 deploy_step_4_opa() {
-  log_step "4. Deploy OPA (Open Policy Agent)"
-
-  log_info "Creating OPA config/policy configmaps on AWS..."
-  kubectl --context $AWS_CONTEXT -n financial create configmap opa-config \
-    --from-file=opa-config.yaml="$REPO_ROOT/opa/config/opa-config.yaml" \
-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
-  kubectl --context $AWS_CONTEXT -n financial create configmap opa-policies \
-    --from-file="$REPO_ROOT/opa/policies" \
-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
-
-  log_info "Deploying OPA on AWS..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
-
-  # OS opa-config ConfigMap is defined inline in os-security.yaml (its
-  # ext_authz path differs from AWS's: zta/crosscloud/allow vs zta/authz/allow).
-  # The rego policies themselves must come from this single --from-file step —
-  # os-security.yaml intentionally does NOT define its own opa-policies
-  # ConfigMap anymore (see comment there) so this is the sole source for OS.
-  kubectl --context $OS_CONTEXT -n financial create configmap opa-policies \
-    --from-file="$REPO_ROOT/opa/policies" \
-    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
-
-  log_info "OPA deployed on AWS; OS OPA (opa-config) will be configured by os-security.yaml"
+  log_step "4. Deploy OPA — SKIPPED ở đây"
+  # OPA của ứng dụng mục tiêu crAPI được deploy bởi scripts/deploy-crapi.sh
+  # (deploy_crapi_opa): OPA riêng ns crapi, 2 cluster, path zta/crapi/authz/allow
+  # (AWS) / zta/crapi/crosscloud/allow (OpenStack), policy từ opa/crapi-policies/.
+  # opa/policies/ + opa/deployment.yaml + k8s/financial/os-security.yaml là của
+  # finance app (đã gỡ — KE-HOACH-CRAPI.md Phase 5).
+  log_info "OPA sẽ được deploy trong deploy-crapi.sh"
 }
 
 # deploy_step_5_envoy() removed (Phase 6 cleanup): all 8 financial services
@@ -408,15 +392,15 @@ verify_deployment() {
 
   log_info ""
   log_info "OPA pods on AWS:"
-  kubectl --context $AWS_CONTEXT get pods -n financial
+  kubectl --context $AWS_CONTEXT get pods -n crapi
 
   log_info ""
   log_info "OPA pods on OpenStack (expected empty here; deployed later by os-security.yaml):"
-  kubectl --context $OS_CONTEXT get pods -n financial
+  kubectl --context $OS_CONTEXT get pods -n crapi
 
   log_info ""
   log_info "Envoy ConfigMaps on AWS:"
-  kubectl --context $AWS_CONTEXT get cm -n financial
+  kubectl --context $AWS_CONTEXT get cm -n crapi
 
   log_info ""
 
@@ -426,8 +410,6 @@ verify_deployment() {
   check_daemonset_ready "$AWS_CONTEXT" "spire" "spire-agent" "true"
   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$OS_CONTEXT" "spire" "spire-agent" "true"
-  check_rollout "$AWS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
-  # OS opa-server is deployed later by os-security.yaml (deploy-app.sh Step 5), not here.
 
   if [ "$VERIFY_FAILED" -ne 0 ]; then
     log_error "Security stack verification failed. Check pods/events/logs before continuing."

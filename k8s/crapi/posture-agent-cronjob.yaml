@@ -9,7 +9,7 @@
 # Compliance bar is intentionally loose, not "must be non-root": a live check
 # on 2026-08-23 found every financial-namespace service running as uid=0 with
 # a readable /etc/shadow (no securityContext set anywhere) — the exact
-# "violation" signature k8s/financial/security-scanner-job.yaml uses to
+# "violation" signature k8s/crapi/security-scanner-job.yaml uses to
 # simulate a misconfigured pod for the KB6 demo. Enforcing that same bar here
 # would immediately 403 every real /transactions/execute call. Instead this
 # only flags what's actually dangerous: privileged containers, capabilities
@@ -23,13 +23,13 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: posture-agent
-  namespace: financial
+  namespace: crapi
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: posture-agent
-  namespace: financial
+  namespace: crapi
 rules:
   - apiGroups: [""]
     resources: ["pods"]
@@ -39,11 +39,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: posture-agent
-  namespace: financial
+  namespace: crapi
 subjects:
   - kind: ServiceAccount
     name: posture-agent
-    namespace: financial
+    namespace: crapi
 roleRef:
   kind: Role
   name: posture-agent
@@ -53,7 +53,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: posture-agent
-  namespace: financial
+  namespace: crapi
 spec:
   schedule: "*/2 * * * *"
   concurrencyPolicy: Forbid
@@ -83,7 +83,7 @@ spec:
                 - |
                   set -uo pipefail
 
-                  PODS_JSON=$(kubectl get pods -n financial -o json)
+                  PODS_JSON=$(kubectl get pods -n crapi -o json)
 
                   # Docker's default capability set (CHOWN/DAC_OVERRIDE/FOWNER/FSETID/
                   # KILL/SETGID/SETUID/SETPCAP/NET_BIND_SERVICE/NET_RAW/SYS_CHROOT/

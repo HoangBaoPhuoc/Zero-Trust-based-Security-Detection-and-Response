@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field
 from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
 
 APP = "security-scorer"
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis.financial.svc.cluster.local:6379/1")
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis.crapi.svc.cluster.local:6379/1")
 WINDOW_SECONDS = int(os.getenv("SCORER_WINDOW_SECONDS", "900"))   # 15 phút
 SCORE_INTERVAL = int(os.getenv("SCORER_INTERVAL_SECONDS", "30"))  # tính lại mỗi 30s
 REDIS_KEY = "scorer:events"

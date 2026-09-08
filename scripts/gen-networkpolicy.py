@@ -26,14 +26,9 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-if "--crapi" in sys.argv:
-    GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
-    NETPOL_DIR = REPO_ROOT / "k8s" / "crapi" / "network-policies"
-    NS = "crapi"
-else:
-    GRAPH_FILE = REPO_ROOT / "policy" / "service-graph.yaml"
-    NETPOL_DIR = REPO_ROOT / "k8s" / "financial" / "network-policies"
-    NS = "financial"
+GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
+NETPOL_DIR = REPO_ROOT / "k8s" / "crapi" / "network-policies"
+NS = "crapi"
 
 HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
 # Sinh lại: python3 scripts/gen-networkpolicy.py
