@@ -1,0 +1,93 @@
+# NGUỒN SỰ THẬT DUY NHẤT cho phân đoạn service-to-service của crAPI (L7 + L4).
+#
+# Sinh ra (scripts/gen-rego-acl.py --crapi, gen-networkpolicy.py --crapi):
+#   - opa/crapi-policies/service_acl.rego        (package zta.crapi.generated)
+#   - k8s/crapi/network-policies/{aws,os}-pod-segmentation.yaml
+#
+# Dữ liệu từ đọc source crAPI (KET-QUA-CRAPI.md GATE 0) + verify traffic thật
+# Phase 1/2 (istio access log). KHÔNG suy đoán.
+#
+# Khác finance app: KHÔNG có fraud-gate (bỏ theo yêu cầu người dùng). Trục
+# "dynamic policy" còn: device-trust + device-posture + step-up + RBAC.
+
+trust_domain: ztlab.local
+
+workloads:
+  aws/bff:              { cluster: aws, namespace: crapi, service_account: bff }
+  aws/crapi-web:        { cluster: aws, namespace: crapi, service_account: crapi-web }
+  aws/crapi-community:  { cluster: aws, namespace: crapi, service_account: crapi-community }
+  aws/crapi-workshop:   { cluster: aws, namespace: crapi, service_account: crapi-workshop }
+  aws/mongodb:          { cluster: aws, namespace: crapi, app_label: mongodb, spiffe: false }
+  aws/redis:            { cluster: aws, namespace: crapi, app_label: redis, spiffe: false }
+  aws/mailhog:          { cluster: aws, namespace: crapi, app_label: mailhog, spiffe: false }
+  aws/opa:              { cluster: aws, namespace: crapi, app_label: opa, spiffe: false }
+  openstack/crapi-identity: { cluster: openstack, namespace: crapi, service_account: crapi-identity }
+  openstack/postgresdb:     { cluster: openstack, namespace: crapi, app_label: postgresdb, spiffe: false }
+  openstack/opa:            { cluster: openstack, namespace: crapi, app_label: opa, spiffe: false }
+
+edges:
+  # ── Bắc–Nam: bff (điểm vào) → crAPI ──────────────────────────────────────
+  - from: aws/bff
+    to: openstack/crapi-identity
+    cross_cluster: true
+    rules:
+      - { method: GET,    paths: ["/identity/api", "/identity/health_check"] }
+      - { method: POST,   paths: ["/identity/api"] }
+      - { method: PUT,    paths: ["/identity/api"] }
+      - { method: DELETE, paths: ["/identity/api"] }
+
+  - from: aws/bff
+    to: aws/crapi-community
+    rules:
+      - { method: GET,  paths: ["/community/api"] }
+      - { method: POST, paths: ["/community/api"] }
+    l4_ports: [8087, 15006]
+
+  - from: aws/bff
+    to: aws/crapi-workshop
+    rules:
+      - { method: GET,  paths: ["/workshop/api"] }
+      - { method: POST, paths: ["/workshop/api"] }
+      - { method: PUT,  paths: ["/workshop/api"] }
+    l4_ports: [8000, 15006]
+
+  - from: aws/bff
+    to: aws/crapi-web
+    rules:
+      - { method: GET, paths: ["/", "/static", "/images", "/index.html", "/favicon"] }
+    l4_ports: [80, 15006]
+
+  # ── Đông–Tây: community/workshop verify JWT ở identity (mỗi request) ──────
+  - from: aws/crapi-community
+    to: openstack/crapi-identity
+    cross_cluster: true
+    rules:
+      - { method: POST, paths: ["/identity/api/auth/verify"] }
+      - { method: GET,  paths: ["/identity/health_check"] }
+
+  - from: aws/crapi-workshop
+    to: openstack/crapi-identity
+    cross_cluster: true
+    rules:
+      - { method: POST, paths: ["/identity/api/auth/verify"] }
+      - { method: GET,  paths: ["/identity/health_check"] }
+
+  # ── Hạ tầng (L4 thuần, không qua OPA service_acl) ────────────────────────
+  - { from: aws/bff,             to: aws/redis,             l4_only: true, l4_ports: [6379] }
+  - { from: aws/crapi-community, to: aws/mongodb,           l4_only: true, l4_ports: [27017] }
+  - { from: aws/crapi-workshop,  to: aws/mongodb,           l4_only: true, l4_ports: [27017] }
+  # Postgres DUY NHẤT ở OpenStack — community/workshop (AWS) tới qua NodePort
+  # 30432 (cross_cluster: generator bỏ podSelector L4, khai báo ipBlock ở
+  # os-allow-list.yaml). identity → postgres cùng cluster.
+  - { from: aws/crapi-community, to: openstack/postgresdb, l4_only: true, cross_cluster: true, l4_ports: [30432] }
+  - { from: aws/crapi-workshop,  to: openstack/postgresdb, l4_only: true, cross_cluster: true, l4_ports: [30432] }
+  - { from: openstack/crapi-identity, to: openstack/postgresdb, l4_only: true, l4_ports: [5432] }
+  # identity → mailhog (AWS) SMTP, cross-cloud
+  - { from: openstack/crapi-identity, to: aws/mailhog, l4_only: true, cross_cluster: true, l4_ports: [31025] }
+
+  # ── OPA ext_authz — mọi workload nghiệp vụ trong cluster đó ─────────────
+  - { from: aws/bff,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+  - { from: aws/crapi-web,       to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+  - { from: aws/crapi-community, to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+  - { from: aws/crapi-workshop,  to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+  - { from: openstack/crapi-identity, to: openstack/opa, l4_only: true, l4_ports: [9191, 8181] }

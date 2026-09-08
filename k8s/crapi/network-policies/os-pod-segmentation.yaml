@@ -1,0 +1,50 @@
+# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
+# Sinh lại: python3 scripts/gen-networkpolicy.py
+#
+# T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload
+# đích, khớp đúng traffic thật đã đo (T-1.1). Egress không đổi (xem
+# os-allow-list.yaml). LƯU Ý: NetworkPolicy này hiện KHÔNG được kube-router
+# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — xem
+# KET-QUA-KIEM-TRA.md §T-3.1 trước khi coi đây là lớp bảo vệ đang hoạt động.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-pod-opa
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: opa
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-identity
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-pod-postgresdb
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresdb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-identity
+      ports:
+        - port: 5432
+          protocol: TCP
