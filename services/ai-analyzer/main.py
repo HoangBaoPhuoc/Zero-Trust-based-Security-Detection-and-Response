@@ -265,21 +265,20 @@ def _extract_source_ip(text: str) -> str | None:
 
 def _infer_affected_service(text: str, reasons: list[str]) -> str | None:
     known_services = [
-        "api-gateway", "payment-service", "fraud-detection",
-        "notification-service", "core-banking", "account-service", "transaction-service",
+        "bff", "crapi-web", "crapi-community", "crapi-workshop", "crapi-identity",
     ]
     lowered = text.lower()
     for service in known_services:
         if service in lowered:
             return service
     service_map = {
-        "fraud_gate_bypass": "payment-service",
-        "lateral_movement": "core-banking",
-        "cryptomining": "transaction-service",
-        "large_response": "core-banking",
-        "data_staging": "core-banking",
-        "port_scan": "api-gateway",
-        "exploit_probe": "api-gateway",
+        "lateral_movement": "crapi-workshop",
+        "bola": "crapi-identity",
+        "bfla": "crapi-identity",
+        "injection": "crapi-workshop",
+        "large_response": "crapi-workshop",
+        "port_scan": "bff",
+        "exploit_probe": "bff",
     }
     for reason in reasons:
         if reason in service_map:

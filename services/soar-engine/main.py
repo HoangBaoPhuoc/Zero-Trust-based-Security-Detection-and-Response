@@ -50,21 +50,21 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 TARGETS_BY_ATTACK = {
-    "fraud_gate_bypass":    {"context": "ctx-aws",        "workload": "payment-service"},
-    "lateral_movement":     {"context": "ctx-aws",        "workload": "payment-service"},
-    "large_response":       {"context": "ctx-openstack",  "workload": "core-banking"},
-    "cryptomining":         {"context": "ctx-aws",        "workload": "api-gateway"},
-    "port_scan":            {"context": "ctx-aws",        "workload": "api-gateway"},
-    "exploit_probe":        {"context": "ctx-aws",        "workload": "api-gateway"},
-    "brute_force":          {"context": "ctx-aws",        "workload": "api-gateway"},
-    "credential_stuffing":  {"context": "ctx-aws",        "workload": "api-gateway"},
-    "access_denied":        {"context": "ctx-aws",        "workload": "api-gateway"},
-    "jwt_replay":           {"context": "ctx-aws",        "workload": "api-gateway"},
-    "account_manipulation": {"context": "ctx-openstack",  "workload": "account-service"},
-    "data_staging":         {"context": "ctx-openstack",  "workload": "account-service"},
-    "container_escape":     {"context": "ctx-aws",        "workload": "api-gateway"},
-    "impair_defenses":      {"context": "ctx-aws",        "workload": "api-gateway"},
-    "privilege_escalation": {"context": "ctx-aws",        "workload": "api-gateway"},
+    "fraud_gate_bypass":    {"context": "ctx-aws",        "workload": "crapi-workshop"},
+    "lateral_movement":     {"context": "ctx-aws",        "workload": "crapi-workshop"},
+    "large_response":       {"context": "ctx-aws",        "workload": "crapi-workshop"},
+    "cryptomining":         {"context": "ctx-aws",        "workload": "bff"},
+    "port_scan":            {"context": "ctx-aws",        "workload": "bff"},
+    "exploit_probe":        {"context": "ctx-aws",        "workload": "bff"},
+    "brute_force":          {"context": "ctx-aws",        "workload": "bff"},
+    "credential_stuffing":  {"context": "ctx-aws",        "workload": "bff"},
+    "access_denied":        {"context": "ctx-aws",        "workload": "bff"},
+    "jwt_replay":           {"context": "ctx-aws",        "workload": "bff"},
+    "account_manipulation": {"context": "ctx-openstack",  "workload": "crapi-identity"},
+    "data_staging":         {"context": "ctx-aws",        "workload": "crapi-workshop"},
+    "container_escape":     {"context": "ctx-aws",        "workload": "bff"},
+    "impair_defenses":      {"context": "ctx-aws",        "workload": "bff"},
+    "privilege_escalation": {"context": "ctx-aws",        "workload": "bff"},
 }
 
 PLAYBOOK_BY_ATTACK = {
