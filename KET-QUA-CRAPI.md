@@ -45,3 +45,44 @@
 
 Digest (2026-09-09): identity `5d1db5b3ba8e…`, community `8ba0c7eda86a…`, workshop `d4d2d94d35a3…`, web `b27d246c646b…`, mailhog `015c23f79d40…`, postgres:14 `156f0b253fd6…`, mongo:4.4 `4be76f674fc4…`.
 
+### 1.2 Deploy + nghiệm thu Phase 1 + 2 (2026-09-09) — ✅ ĐẠT
+
+**Khoá JWT identity:** entrypoint ảnh đọc `/app/keys/jwks.json` (KHÔNG phải `/.keys` như k8s base crAPI ghi — base sai, thực tế fallback `default_jwks.json`). `deploy/vendor/crapi-keys/jwks.json` == `default_jwks.json` nhúng trong ảnh (cùng `kid MKMZkDenUfuDF2byYowDj7tW5Ox6XG4Y1THTEGScRg8`). → mount `/app/keys`, bff mint bằng cùng key.
+
+**crAPI role claim:** `ERole` → `user` / `mechanic` / `admin` (không phải `ROLE_*`). bff ROLE_MAP đúng.
+
+**Trạng thái pod:** cả 2 cluster Running 2/2 — OS: `crapi-identity`, `postgresdb`. AWS: `bff`, `crapi-web`, `crapi-community`, `crapi-workshop`, `mongodb`, `mailhog`, `redis`. `crapi-community` crash-loop 1 lần lúc khởi động (chờ identity qua `/identity/health_check`, identity restart do đăng ký SPIRE sau) rồi tự phục hồi — cần thêm initContainer wait ở Phase 5 cho fresh deploy sạch.
+
+**mТLS + SPIRE (verified qua istio access log của crapi-identity):**
+```
+"svid":"spiffe://ztlab.local/aws/bff"        — bff → identity cross-cloud
+"svid":"spiffe://ztlab.local/aws/crapi-community"
+"svid":"spiffe://ztlab.local/aws/crapi-workshop"
+```
+Định dạng access log JSON khớp finance app (path/method/response_code/svid/trace_id) → LogQL Grafana tái dùng được.
+
+**Cross-cloud:** `crapi-workshop → crapi-identity-openstack:30090/identity/health_check` = **200** (WireGuard + Istio ISTIO_MUTUAL, DR subjectAltNames `spiffe://ztlab.local/openstack/crapi-identity`). Postgres cross-cloud (community/workshop → `postgresdb-openstack:30432`, plain TCP/WireGuard) — community/workshop kết nối DB OK.
+> ⚠️ Bài học test: `kubectl exec -c istio-proxy -- curl` BỎ QUA mesh (traffic của uid 1337 không bị iptables intercept) → luôn thấy "connection reset" giả. Phải test từ **app container**.
+
+**Token-exchange (bff mint → crAPI chấp nhận):**
+| Gọi | Kết quả |
+|---|---|
+| identity `/identity/api/v2/user/dashboard` (bff token) | 200 + user data |
+| identity `/identity/api/auth/verify` (bff token) | 200 "valid JWT token" → community/workshop sẽ chấp nhận |
+| workshop `/workshop/api/shop/products` | 200 (Wheel, Seat — có seed data) |
+| community `/community/api/v2/community/posts/recent` | 200 (posts thật) |
+
+**crAPI login native:** `POST /identity/api/auth/login {test@example.com / Test!123}` = 200 + JWT `{sub, iat, exp, role:"user"}` — cùng format bff mint.
+
+**BOLA còn nguyên (đúng chủ đích — ranh giới ZTA vs app-layer authz):**
+`test@example.com` đọc được vehicle location của `adam007@example.com` (`GET /identity/api/v2/vehicle/{adam-uuid}/location` → 200, trả lat/long + họ tên + email). ZTA network/identity KHÔNG chặn — sẽ dùng làm minh chứng luận văn.
+
+**BFF OIDC/PKCE:** `crapi.ztlab.local/health` qua Traefik = 200; `/auth/start` = 302 → `/kc/realms/ztlab/protocol/openid-connect/auth?client_id=crapi-bff&code_challenge=…S256`. Luồng browser đầy đủ (login Keycloak → callback → mint) cần test bằng browser thật (Phase 6).
+
+**Keycloak (Admin API, `configure_crapi_keycloak`):** role `crapi-user/mechanic/admin`, `soc-analyst`; client `crapi-bff` + `crapi-bff-stepup` (aud mapper `crapi-bff`); gán role user demo. realm-config.json cũng cập nhật cho fresh import.
+
+**PLG:** promtail regex `+crapi` — apply + restart DS → Loki có namespace `crapi` (`bff`, `mongodb`, … streams) + istio access log job `envoy-access`.
+
+**Còn nợ Phase 1/2 (làm ở phase sau):** initContainer wait cho crapi-community/workshop; test browser OIDC đầy đủ; bff audit → Loki (job `bff-audit`) chưa thấy stream (LOKI_URL có set — kiểm lại Phase 3).
+
+
