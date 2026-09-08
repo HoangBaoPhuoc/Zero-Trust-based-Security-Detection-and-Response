@@ -1,0 +1,73 @@
+# NetworkPolicy L4 baseline — ns crapi, cluster OpenStack. Mẫu
+# k8s/financial/network-policies/os-allow-list.yaml.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-crapi-allow-baseline
+  namespace: crapi
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # Cross-cloud: AWS k3s nodes + pod CIDR (kube-proxy SNAT cho NodePort
+    # cross-node) → crapi-identity :8080 (NodePort 30090 DNAT về 8080) +
+    # postgresdb :5432 (NodePort 30432). 15006 = Istio mТLS inbound.
+    - from:
+        - ipBlock: { cidr: 10.10.1.0/24 }
+        - ipBlock: { cidr: 10.10.0.0/24 }
+        - ipBlock: { cidr: 10.200.0.0/24 }
+        - ipBlock: { cidr: 10.42.0.0/16 }
+        - ipBlock: { cidr: 192.168.101.0/24 }
+      ports:
+        - { port: 8080, protocol: TCP }
+        - { port: 5432, protocol: TCP }
+        - { port: 15006, protocol: TCP }
+        - { port: 8181, protocol: TCP }
+    # Prometheus (monitoring)
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: monitoring }
+      ports:
+        - { port: 8080, protocol: TCP }
+        - { port: 15006, protocol: TCP }
+    # security-healthcheck (spire ns) → opa :8181
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: spire }
+      ports:
+        - { port: 8181, protocol: TCP }
+    # nội bộ ns crapi
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: crapi }
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    # nội bộ: identity → postgresdb :5432, → mailhog :1025 (SMTP), → opa :9191/:8181
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: crapi }
+      ports:
+        - { port: 5432, protocol: TCP }
+        - { port: 1025, protocol: TCP }
+        - { port: 8025, protocol: TCP }
+        - { port: 8181, protocol: TCP }
+        - { port: 9191, protocol: TCP }
+        - { port: 15006, protocol: TCP }
+    # istio-proxy → istiod :15012
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-system }
+      ports:
+        - { port: 15012, protocol: TCP }
+    # Loki relay cross-cluster (deployer bridge, như finance)
+    - to:
+        - ipBlock: { cidr: 10.10.10.1/32 }
+        - ipBlock: { cidr: 172.10.10.1/32 }
+      ports:
+        - { port: 13099, protocol: TCP }
