@@ -1,6 +1,9 @@
 # KẾ HOẠCH — Thay ứng dụng mục tiêu: finance app → OWASP crAPI
 
-> **File này dành cho agent (Claude CLI) thực thi.** Cùng quy ước `KE-HOACH-SUA-HE-THONG.md`.
+> **File này dành cho agent (Claude CLI) thực thi.**
+
+> **TRẠNG THÁI 2026-09-09:** Phase 1–5 XONG + verified (branch `feat/crapi-target`). Phase 7 làm LIGHT. Phase 6 (fresh destroy+deploy-all) CẦN NGƯỜI DÙNG chạy terraform. Xem `KET-QUA-CRAPI.md`.
+ Cùng quy ước `KE-HOACH-SUA-HE-THONG.md`.
 > Đích đã duyệt: xem **`TARGET-CRAPI.md`**. File này là các bước để đạt đích đó.
 >
 > **Nguồn sự thật hiện trạng:** đọc trực tiếp source (2026-09-09). **Nguồn crAPI:** github.com/OWASP/crAPI@develop.

@@ -1,6 +1,9 @@
 # TARGET — Trạng thái đích sau khi thay finance app → OWASP crAPI
 
-> **File này để người dùng DUYỆT.** Sau khi duyệt, agent tự thực thi `KE-HOACH-CRAPI.md` Phase 1→7,
+> **File này để người dùng DUYỆT.**
+
+> **TRẠNG THÁI 2026-09-09:** Phase 1–5 XONG + verified (branch `feat/crapi-target`). Phase 7 làm LIGHT. Phase 6 (fresh destroy+deploy-all) CẦN NGƯỜI DÙNG chạy terraform. Xem `KET-QUA-CRAPI.md`.
+ Sau khi duyệt, agent tự thực thi `KE-HOACH-CRAPI.md` Phase 1→7,
 > tự sửa/tự fix, không cần action thêm (trừ `terraform destroy/apply` ở Phase 6 và enroll OTP 1 lần).
 >
 > Nguyên tắc: **giữ tối đa cơ chế bảo mật của finance app**. Chỉ đổi (1) ứng dụng mục tiêu,
