@@ -12,108 +12,6 @@
   "otpPolicyLookAheadWindow": 1,
   "clients": [
     {
-      "clientId": "api-gateway",
-      "protocol": "openid-connect",
-      "publicClient": false,
-      "authorizationServicesEnabled": true,
-      "serviceAccountsEnabled": true,
-      "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": true,
-      "redirectUris": [
-        "http://api.ztlab.local/*",
-        "https://api-gateway.ztlab.local/*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
-      "protocolMappers": [
-        {
-          "name": "aud-api-gateway",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
-          "consentRequired": false,
-          "config": {
-            "included.client.audience": "api-gateway",
-            "id.token.claim": "false",
-            "access.token.claim": "true"
-          }
-        }
-      ]
-    },
-    {
-      "clientId": "web-portal",
-      "protocol": "openid-connect",
-      "publicClient": true,
-      "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": false,
-      "redirectUris": [
-        "http://portal.ztlab.local/*",
-        "http://portal.ztlab.local:8080/*",
-        "http://localhost:8080/*",
-        "http://localhost:5000/*",
-        "http://localhost:18081/*",
-        "http://127.0.0.1:8080/*",
-        "http://127.0.0.1:5000/*",
-        "http://127.0.0.1:18081/*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
-      "attributes": {
-        "pkce.code.challenge.method": "S256"
-      },
-      "protocolMappers": [
-        {
-          "name": "aud-api-gateway",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
-          "consentRequired": false,
-          "config": {
-            "included.client.audience": "api-gateway",
-            "id.token.claim": "false",
-            "access.token.claim": "true"
-          }
-        }
-      ]
-    },
-    {
-      "clientId": "web-portal-stepup",
-      "protocol": "openid-connect",
-      "publicClient": true,
-      "standardFlowEnabled": true,
-      "directAccessGrantsEnabled": false,
-      "redirectUris": [
-        "http://portal.ztlab.local/*",
-        "http://portal.ztlab.local:8080/*",
-        "http://localhost:8080/*",
-        "http://localhost:5000/*",
-        "http://localhost:18081/*",
-        "http://127.0.0.1:8080/*",
-        "http://127.0.0.1:5000/*",
-        "http://127.0.0.1:18081/*"
-      ],
-      "webOrigins": [
-        "+"
-      ],
-      "attributes": {
-        "pkce.code.challenge.method": "S256",
-        "acr.loa.map": "{\"1\": 1, \"high\": 2}"
-      },
-      "protocolMappers": [
-        {
-          "name": "aud-api-gateway",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
-          "consentRequired": false,
-          "config": {
-            "included.client.audience": "api-gateway",
-            "id.token.claim": "false",
-            "access.token.claim": "true"
-          }
-        }
-      ]
-    },
-    {
       "clientId": "aws-console-sso",
       "protocol": "saml",
       "attributes": {
@@ -217,18 +115,6 @@
   "roles": {
     "realm": [
       {
-        "name": "financial-read"
-      },
-      {
-        "name": "financial-write"
-      },
-      {
-        "name": "security-analyst"
-      },
-      {
-        "name": "security-admin"
-      },
-      {
         "name": "crapi-user",
         "description": "crAPI: người dùng thường (đọc + hành động cơ bản)"
       },
@@ -260,9 +146,7 @@
         }
       ],
       "realmRoles": [
-        "crapi-user",
-        "financial-read",
-        "financial-write"
+        "crapi-user"
       ],
       "firstName": "Test",
       "lastName": "User01"
@@ -281,8 +165,7 @@
       ],
       "realmRoles": [
         "crapi-mechanic",
-        "crapi-user",
-        "financial-read"
+        "crapi-user"
       ],
       "firstName": "Merchant",
       "lastName": "01"
@@ -300,9 +183,7 @@
         }
       ],
       "realmRoles": [
-        "crapi-user",
-        "financial-read",
-        "financial-write"
+        "crapi-user"
       ],
       "firstName": "Test",
       "lastName": "User02"
@@ -320,7 +201,6 @@
         }
       ],
       "realmRoles": [
-        "security-analyst",
         "soc-analyst"
       ],
       "requiredActions": [
@@ -345,11 +225,28 @@
         "crapi-admin",
         "crapi-mechanic",
         "crapi-user",
-        "financial-read",
-        "financial-write",
-        "security-admin",
-        "security-analyst",
         "soc-analyst"
+      ],
+      "requiredActions": [
+        "CONFIGURE_TOTP"
+      ]
+    },
+    {
+      "username": "stepup-demo",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "stepup-demo@ztlab.local",
+      "firstName": "Stepup",
+      "lastName": "Demo",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "StepupDemo123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "crapi-user"
       ],
       "requiredActions": [
         "CONFIGURE_TOTP"
