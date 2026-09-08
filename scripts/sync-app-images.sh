@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and sync financial service images to all K3s nodes (AWS + OpenStack)
+# Build ztlab/* images + pull crAPI images, sync to all K3s nodes to all K3s nodes (AWS + OpenStack)
 # so redeploy/recreate does not depend on external registry availability.
 
 set -euo pipefail
@@ -36,16 +36,12 @@ if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
   K3S_TARGETS="$AWS_K3S_TARGETS:$OPENSTACK_K3S_TARGETS"
 fi
 
+# Ảnh ztlab/* tự build (còn lại sau khi gỡ finance app — KE-HOACH-CRAPI.md
+# Phase 5): bff (edge PEP crAPI) + lớp detection (soar-engine, ai-analyzer,
+# security-scorer). crAPI backends = PULL (PULL_IMAGES bên dưới).
 BATCHES=()
-BATCHES+=("api-gateway payment-service fraud-detection")
-BATCHES+=("notification-service core-banking account-service")
-BATCHES+=("transaction-service soar-engine")
-BATCHES+=("web-portal security-scorer")
-BATCHES+=("ai-analyzer")
-# bff (crAPI edge PEP) — chỉ build nếu thư mục tồn tại (thêm ở Phase 2).
-if [[ -d "$REPO_ROOT/services/bff" ]]; then
-  BATCHES+=("bff")
-fi
+BATCHES+=("bff soar-engine")
+BATCHES+=("ai-analyzer security-scorer")
 
 # Ảnh bên thứ 3 cho crAPI — PULL từ Docker Hub, ghim digest để tái tạo được
 # (KE-HOACH-CRAPI.md trục D). Import y hệt luồng save→copy→ctr import.
@@ -221,27 +217,19 @@ ensure_tunnels_up() {
 }
 
 restart_financial_deployments() {
-  log "Restarting financial deployments on ctx-aws"
-  kubectl --context ctx-aws -n financial rollout restart deployment || true
-
-  if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
-    log "Restarting financial deployments on ctx-openstack"
-    kubectl --context ctx-openstack -n financial rollout restart deployment || true
-  else
-    log "Skipping ctx-openstack restart (--skip-push-openstack)"
-  fi
+  # Chỉ restart nếu deploy đã có (chạy độc lập sau khi sửa ảnh); trong luồng
+  # deploy-app.sh đầy đủ, deploy_crapi/deploy_observability_response tự apply sau.
+  for ns in crapi; do
+    kubectl --context ctx-aws -n "$ns" rollout restart deployment 2>/dev/null || true
+    [[ "$SKIP_PUSH_OPENSTACK" != "true" ]] && kubectl --context ctx-openstack -n "$ns" rollout restart deployment 2>/dev/null || true
+  done
+  kubectl --context ctx-aws -n plg-stack rollout restart deployment/soar-engine deployment/ai-analyzer deployment/security-scorer 2>/dev/null || true
 }
 
 verify_quick() {
-  log "Quick check (financial pods)"
-  kubectl --context ctx-aws get pods -n financial
-
-  if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
-    echo "---"
-    kubectl --context ctx-openstack get pods -n financial
-  else
-    log "Skipping ctx-openstack pod check (--skip-push-openstack)"
-  fi
+  log "Quick check (crapi pods)"
+  kubectl --context ctx-aws get pods -n crapi 2>/dev/null || true
+  [[ "$SKIP_PUSH_OPENSTACK" != "true" ]] && { echo "---"; kubectl --context ctx-openstack get pods -n crapi 2>/dev/null || true; }
 }
 
 main() {
