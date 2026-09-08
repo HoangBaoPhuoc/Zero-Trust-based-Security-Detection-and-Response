@@ -186,8 +186,8 @@ check_k8s() {
   run_warn_check "kubectl context reachable: $OS_CONTEXT" kubectl --context "$OS_CONTEXT" get nodes -o wide
   run_warn_check "AWS pods overview" kubectl --context "$AWS_CONTEXT" get pods -A
   run_warn_check "OpenStack pods overview" kubectl --context "$OS_CONTEXT" get pods -A
-  run_warn_check "AWS financial workloads" kubectl --context "$AWS_CONTEXT" -n financial get deploy,svc,pods
-  run_warn_check "OpenStack financial workloads" kubectl --context "$OS_CONTEXT" -n financial get deploy,svc,pods
+  run_warn_check "AWS crapi workloads" kubectl --context "$AWS_CONTEXT" -n crapi get deploy,svc,pods
+  run_warn_check "OpenStack crapi workloads" kubectl --context "$OS_CONTEXT" -n crapi get deploy,svc,pods
 }
 
 check_local_stack() {
