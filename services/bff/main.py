@@ -120,9 +120,40 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis.crapi.svc.cluster.local:6379/0
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 
 _signer = URLSafeTimedSerializer(SESSION_SECRET)
+# Session store: Redis (bff có thể scale + phiên sống qua restart). Fallback
+# in-process nếu Redis lỗi. Cookie chỉ mang {sid} đã ký.
 _sessions: dict[str, dict[str, Any]] = {}
+_SESSION_PREFIX = "bff:session:"
 redis_client: aioredis.Redis | None = None
 _http: httpx.AsyncClient | None = None
+
+
+async def _session_store_set(sid: str, data: dict) -> None:
+    try:
+        await redis_client.setex(_SESSION_PREFIX + sid, SESSION_MAX_AGE,
+                                 json.dumps({"data": data, "created_at": time.time()}))
+        return
+    except Exception:
+        pass
+    _sessions[sid] = {"data": data, "created_at": time.time()}
+
+
+async def _session_store_get(sid: str) -> dict | None:
+    try:
+        raw = await redis_client.get(_SESSION_PREFIX + sid)
+        if raw:
+            return json.loads(raw)
+    except Exception:
+        pass
+    return _sessions.get(sid)
+
+
+async def _session_store_del(sid: str) -> None:
+    try:
+        await redis_client.delete(_SESSION_PREFIX + sid)
+    except Exception:
+        pass
+    _sessions.pop(sid, None)
 
 _SUSPICIOUS_UA_RE = re.compile(
     r"curl|wget|python-requests|python-urllib|sqlmap|nmap|masscan|headless|phantomjs|scrapy|bot(?!ify)", re.I)
@@ -169,29 +200,32 @@ def _load(token: str | None, max_age: int) -> dict | None:
         return None
 
 
-def _get_session(request: Request) -> dict | None:
+async def _get_session(request: Request) -> dict | None:
     env = _load(request.cookies.get(SESSION_COOKIE), SESSION_MAX_AGE)
     sid = env.get("sid") if env else None
-    rec = _sessions.get(sid) if sid else None
+    if not sid:
+        return None
+    rec = await _session_store_get(sid)
     if not rec:
         return None
-    if time.time() - rec["created_at"] > SESSION_MAX_AGE:
-        _sessions.pop(sid, None)
+    if time.time() - rec.get("created_at", 0) > SESSION_MAX_AGE:
+        await _session_store_del(sid)
         return None
     return rec["data"]
 
 
-def _set_session(response: Response, data: dict) -> None:
+async def _set_session(response: Response, data: dict) -> str:
     sid = secrets.token_urlsafe(32)
-    _sessions[sid] = {"data": data, "created_at": time.time()}
+    await _session_store_set(sid, data)
     response.set_cookie(SESSION_COOKIE, _sign({"sid": sid}), max_age=SESSION_MAX_AGE,
                         httponly=True, samesite="lax", secure=HTTPS_ENABLED)
+    return sid
 
 
-def _clear_session(response: Response, request: Request) -> None:
+async def _clear_session(response: Response, request: Request) -> None:
     env = _load(request.cookies.get(SESSION_COOKIE), SESSION_MAX_AGE)
     if env and env.get("sid"):
-        _sessions.pop(env["sid"], None)
+        await _session_store_del(env["sid"])
     response.delete_cookie(SESSION_COOKIE)
 
 
@@ -275,6 +309,33 @@ def _kc_token_url(realm: str = "") -> str:
 
 def _is_sensitive(method: str, path: str) -> bool:
     return any(method == m and path.startswith(p) for m, p in SENSITIVE_ACTIONS)
+
+
+_ADMIN_PREFIXES = ("/identity/api/v2/admin", "/workshop/api/management")
+_MECHANIC_PREFIXES = ("/workshop/api/mechanic/service_requests",
+                      "/workshop/api/mechanic/mechanic_report")
+_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+
+def _rbac_ok(roles: list[str], method: str, path: str) -> bool:
+    """RBAC lớp bff — GƯƠNG của opa/crapi-policies/zta_crapi.rego role_permits_action.
+    Cần vì hop bff→crapi-identity (cross-cloud) đi qua OPA OpenStack
+    (crosscloud_crapi.rego) chỉ kiểm service_acl, KHÔNG kiểm token người dùng.
+    Hop bff→community/workshop (cùng cluster AWS) OPA vẫn kiểm — đây là
+    defense-in-depth (giống api-gateway app + OPA của finance app)."""
+    rs = set(roles)
+    if not rs & {"crapi-user", "crapi-mechanic", "crapi-admin", "soc-analyst"}:
+        return False
+    if method in ("GET", "HEAD", "OPTIONS"):
+        return True
+    if method not in _WRITE_METHODS:
+        return False
+    if any(path.startswith(p) for p in _ADMIN_PREFIXES):
+        return "crapi-admin" in rs
+    if any(path.startswith(p) for p in _MECHANIC_PREFIXES):
+        return bool(rs & {"crapi-mechanic", "crapi-admin"})
+    # write thường: crapi-user/mechanic/admin (KHÔNG soc-analyst)
+    return bool(rs & {"crapi-user", "crapi-mechanic", "crapi-admin"})
 
 
 # ── health ─────────────────────────────────────────────────────────────────
@@ -363,7 +424,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
     resp.delete_cookie(PKCE_COOKIE)
     resp.set_cookie(DEVICE_ID_COOKIE, device["device_id"], max_age=DEVICE_ID_MAX_AGE,
                     httponly=True, samesite="lax", secure=HTTPS_ENABLED)
-    _set_session(resp, data)
+    await _set_session(resp, data)
     await _audit("user_login", username=username, email=email, roles=realm_roles, acr=acr,
                  device_trust=device["device_trust"], stepup=(client_id == KEYCLOAK_STEPUP_CLIENT_ID))
     return resp
@@ -371,7 +432,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
 
 @app.get("/auth/logout")
 async def logout(request: Request):
-    session = _get_session(request)
+    session = await _get_session(request)
     if session and session.get("refresh_token"):
         try:
             await _http.post(f"{KEYCLOAK_URL}/realms/{KEYCLOAK_REALM}/protocol/openid-connect/logout",
@@ -379,7 +440,7 @@ async def logout(request: Request):
         except Exception:
             pass
     resp = RedirectResponse("/", status_code=302)
-    _clear_session(resp, request)
+    await _clear_session(resp, request)
     return resp
 
 
@@ -457,9 +518,21 @@ async def api_proxy(svc: str, path: str, request: Request):
     if svc not in _BACKENDS:
         return await _proxy(request, CRAPI_WEB_URL, request.url.path)  # rơi về static
     full_path = f"/{svc}/{path}"
-    session = _get_session(request)
+    session = await _get_session(request)
     if not session:
         return JSONResponse({"error": "unauthenticated", "login_url": "/auth/start"}, status_code=401)
+
+    # device trust: suspicious → chặn ghi (gương device_trust_compliant của OPA;
+    # OPA OpenStack không kiểm cái này cho hop identity)
+    if session.get("device_trust") == "suspicious" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        await _audit("device_trust_denied", username=session.get("username"), path=full_path)
+        return JSONResponse({"error": "forbidden", "reason": "suspicious_device"}, status_code=403)
+
+    # RBAC (gương của OPA — cần cho hop cross-cloud bff→identity)
+    if not _rbac_ok(session.get("roles", []), request.method, full_path):
+        await _audit("rbac_denied", username=session.get("username"),
+                     path=full_path, method=request.method, roles=session.get("roles"))
+        return JSONResponse({"error": "forbidden", "reason": "insufficient_role"}, status_code=403)
 
     # step-up: hành động nhạy cảm cần acr=high (OPA cũng chặn ở Phase 3)
     if _is_sensitive(request.method, full_path) and session.get("acr") != "high":

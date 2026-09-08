@@ -77,13 +77,13 @@ deploy_databases() {
 }
 
 deploy_crapi_workloads() {
-  step "crAPI workloads — identity (OpenStack) + web/community/workshop + mailhog (AWS)"
-  kaws apply -f "$CRAPI_DIR/mailhog.yaml"
+  step "crAPI workloads — identity + mailhog (OpenStack) + web/community/workshop (AWS)"
+  kos  apply -f "$CRAPI_DIR/mailhog.yaml"
   kos  apply -f "$CRAPI_DIR/os-workloads.yaml"
   kaws apply -f "$CRAPI_DIR/aws-workloads.yaml"
   kaws apply -f "$CRAPI_DIR/cross-cloud-aws.yaml"
   kos  apply -f "$CRAPI_DIR/cross-cloud-os.yaml"
-  wait_rollout "$AWS_CONTEXT" crapi deployment/mailhog 180s
+  wait_rollout "$OS_CONTEXT"  crapi deployment/mailhog 180s
   wait_rollout "$OS_CONTEXT"  crapi deployment/crapi-identity 300s
   for d in crapi-web crapi-community crapi-workshop; do
     wait_rollout "$AWS_CONTEXT" crapi "deployment/$d" 300s
@@ -155,7 +155,8 @@ deploy_bff() {
   [[ -d "$REPO_ROOT/services/bff" && -f "$CRAPI_DIR/bff.yaml" ]] || { log "bff chưa có (Phase 2) — bỏ qua"; return; }
   step "BFF (edge PEP + Keycloak)"
   kaws apply -f "$CRAPI_DIR/bff.yaml"
-  kaws apply -f "$CRAPI_DIR/ingress.yaml"
+  kaws apply -f "$CRAPI_DIR/ingress-aws.yaml"
+  kos apply -f "$CRAPI_DIR/ingress-os.yaml"
   wait_rollout "$AWS_CONTEXT" crapi deployment/bff 240s
   ok "bff"
 }
