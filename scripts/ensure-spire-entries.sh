@@ -108,14 +108,15 @@ register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-web" "$AWS_P
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-community" "$AWS_PARENT" crapi crapi-community
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-workshop" "$AWS_PARENT" crapi crapi-workshop
 register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-identity" "$OS_PARENT" crapi crapi-identity
+register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-seed" "$OS_PARENT" crapi crapi-seed
 
 # Deploy-time gate. finance: AWS 5 + OS 3. crAPI: AWS 4 (bff+web+community+
 # workshop) + OS 1 (identity). Tổng: AWS 9, OS 4. bff registered dù chưa có
 # pod (Phase 2) — entry idempotent, an toàn.
 aws_count=$(count_entries_matching "$AWS_CONTEXT" "spiffe://ztlab.local/aws/")
 os_count=$(count_entries_matching "$OS_CONTEXT" "spiffe://ztlab.local/openstack/")
-log_info "Verified entries present: AWS=$aws_count (expect 9), OpenStack=$os_count (expect 4)"
-if [ "$aws_count" -lt 9 ] || [ "$os_count" -lt 4 ]; then
+log_info "Verified entries present: AWS=$aws_count (expect 9), OpenStack=$os_count (expect 5)"
+if [ "$aws_count" -lt 9 ] || [ "$os_count" -lt 5 ]; then
   log_error "SPIRE registration entries missing after registration attempt — spire-server datastore may be empty/corrupted. Check 'kubectl -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry show -socketPath /tmp/spire-server/private/api.sock' on both clusters."
   exit 1
 fi

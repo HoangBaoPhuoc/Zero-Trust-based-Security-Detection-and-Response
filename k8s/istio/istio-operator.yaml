@@ -52,20 +52,10 @@ spec:
         "svid": "%DOWNSTREAM_PEER_URI_SAN%"
       }
     extensionProviders:
+      # OPA ext_authz cho crAPI (ns crapi). Path zta/crapi/authz/allow (AWS) /
+      # zta/crapi/crosscloud/allow (OpenStack) — cấu hình ở configmap opa-config
+      # mỗi cluster (scripts/deploy-crapi.sh).
       - name: opa-ext-authz
-        envoyExtAuthzGrpc:
-          service: opa-service.financial.svc.cluster.local
-          port: "9191"
-          # T-4.2: OPA đọc "amount" từ body JSON /payments để quyết requires_step_up.
-          includeRequestBodyInCheck:
-            maxRequestBytes: 8192
-            allowPartialMessage: true
-            packAsBytes: false
-      # crAPI target app (KE-HOACH-CRAPI.md Phase 3) — OPA riêng ns crapi,
-      # path zta/crapi/authz/allow (AWS) / zta/crapi/crosscloud/allow (OpenStack).
-      # Phase 5 (xoá finance): đổi tên về `opa-ext-authz`, bỏ provider finance.
-      - name: opa-ext-authz-crapi
         envoyExtAuthzGrpc:
           service: opa-service.crapi.svc.cluster.local
           port: "9191"
-          # Không cần body (step-up crAPI theo LOẠI hành động, không theo số tiền).

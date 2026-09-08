@@ -1,4 +1,4 @@
-# SOAR Engine RBAC — allows soar-engine to patch K8s resources in financial namespace
+# SOAR Engine RBAC — allows soar-engine to patch K8s resources in crapi namespace
 # Required for: isolate_workload (patch Service selector), restrict_egress/quarantine (scale Deployment)
 # Enable by updating soar-engine deployment to use this ServiceAccount
 
@@ -11,8 +11,8 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: soar-financial-responder
-  namespace: financial
+  name: soar-crapi-responder
+  namespace: crapi
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/scale"]
@@ -31,13 +31,13 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: soar-financial-responder
-  namespace: financial
+  name: soar-crapi-responder
+  namespace: crapi
 subjects:
   - kind: ServiceAccount
     name: soar-engine
     namespace: plg-stack
 roleRef:
   kind: Role
-  name: soar-financial-responder
+  name: soar-crapi-responder
   apiGroup: rbac.authorization.k8s.io

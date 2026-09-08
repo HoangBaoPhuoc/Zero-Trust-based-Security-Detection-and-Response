@@ -130,7 +130,7 @@ regenerate_policy_files() {
   # No-op (git-clean) when service-graph.yaml already matches committed output.
   python3 "$REPO_ROOT/scripts/gen-rego-acl.py"
   python3 "$REPO_ROOT/scripts/gen-networkpolicy.py"
-  ok "Policy files regenerated from policy/service-graph.yaml"
+  ok "Policy files regenerated (finance + crapi)"
 }
 
 apply_namespaces() {
@@ -144,8 +144,8 @@ apply_namespaces() {
 
 apply_network_policies() {
   step "Step 1b: Network policies (early — must exist before any pod with restricted egress starts)"
-  kaws apply -f "$REPO_ROOT/k8s/financial/network-policies/aws-allow-list.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/network-policies/os-allow-list.yaml"
+  kaws apply -f "$REPO_ROOT/k8s/crapi/network-policies/aws-allow-list.yaml"
+  kos apply -f "$REPO_ROOT/k8s/crapi/network-policies/os-allow-list.yaml"
   ok "Network policies applied on both clusters"
 }
 
@@ -205,9 +205,9 @@ deploy_istio() {
   # anymore — kept as a no-op comment in case a future service is added
   # un-migrated: give it sidecar.istio.io/inject: "false" or it will be
   # auto-injected and likely break (no SPIRE workload-socket volume mount).
-  kaws label namespace financial istio-injection=enabled --overwrite
-  kos label namespace financial istio-injection=enabled --overwrite
-  ok "Istio installed on both clouds (trustDomain=ztlab.local), financial namespaces labeled for injection"
+  kaws label namespace crapi istio-injection=enabled --overwrite
+  kos label namespace crapi istio-injection=enabled --overwrite
+  ok "Istio installed on both clouds (trustDomain=ztlab.local), crapi namespaces labeled for injection"
 }
 
 sync_images() {
@@ -362,7 +362,7 @@ deploy_stepup_flow() {
   admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
 
   # Same idempotency caveat as deploy_audience_mapper/deploy_openldap_and_federation:
-  # client "web-portal-stepup" comes from realm-config.json on fresh --import-realm,
+  # client "crapi-bff-stepup" comes from realm-config.json on fresh --import-realm,
   # but the authentication flow it needs to bind to does NOT — it was hand-built via
   # Admin API in a prior session and lost on the next from-scratch deploy (see
   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
@@ -439,22 +439,22 @@ else:
 
     print('browser-stepup flow created')
 
-# 6. Bind 'browser-stepup' as the browser flow of client 'web-portal-stepup' ONLY.
+# 6. Bind 'browser-stepup' as the browser flow of client 'crapi-bff-stepup' ONLY.
 #    Do NOT bind it on 'web-portal' — that forces OTP on every normal login (regression
 #    seen once already, see KET-QUA-KIEM-TRA.md).
 browser_stepup_id = next(f['id'] for f in call('GET', f'/admin/realms/{REALM}/authentication/flows') if f['alias'] == 'browser-stepup')
-clients = call('GET', f'/admin/realms/{REALM}/clients?clientId=web-portal-stepup')
+clients = call('GET', f'/admin/realms/{REALM}/clients?clientId=crapi-bff-stepup')
 if not clients:
-    print('web-portal-stepup client not found, skipping flow binding')
+    print('crapi-bff-stepup client not found, skipping flow binding')
 else:
     client_id = clients[0]['id']
     overrides = clients[0].get('authenticationFlowBindingOverrides', {})
     if overrides.get('browser') == browser_stepup_id:
-        print('web-portal-stepup already bound to browser-stepup, skipping')
+        print('crapi-bff-stepup already bound to browser-stepup, skipping')
     else:
         overrides['browser'] = browser_stepup_id
         call('PUT', f'/admin/realms/{REALM}/clients/{client_id}', {'authenticationFlowBindingOverrides': overrides})
-        print('web-portal-stepup bound to browser-stepup')
+        print('crapi-bff-stepup bound to browser-stepup')
 
 # 7. Ensure the demo user exists with CONFIGURE_TOTP pending. This only creates
 # the account/required-action — it deliberately does NOT fabricate an OTP
@@ -474,7 +474,7 @@ else:
 " || warn "Keycloak browser-stepup flow setup failed (non-fatal — but T-4.2 step-up OTP degrades to no-op without it, see VIEC-CON-TON-DONG.md item 1)"
   kubectl --context "$AWS_CONTEXT" delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
-  ok "Keycloak browser-stepup flow ensured, bound to web-portal-stepup client"
+  ok "Keycloak browser-stepup flow ensured, bound to crapi-bff-stepup client"
 }
 
 deploy_aws_saml_federation() {
@@ -519,112 +519,15 @@ deploy_aws_saml_federation() {
   rm -f "$meta_file"
 }
 
-deploy_financial_infra() {
-  step "Step 4: Financial infrastructure"
-
-  # Shared ConfigMap (financial-common-config) — both clusters need it
-  kaws apply -f "$REPO_ROOT/k8s/financial/services.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/services.yaml"
-
-  # Redis: AWS only (fraud-detection velocity cache + IP block list)
-  kaws apply -f "$REPO_ROOT/k8s/financial/redis.yaml"
-  wait_deployment "$AWS_CONTEXT" financial redis 120s
-
-  # Postgres: OpenStack only (account-service + transaction-service)
-  kos apply -f "$REPO_ROOT/k8s/financial/postgres-accounts.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/postgres-txn.yaml"
-  wait_deployment "$OS_CONTEXT" financial postgres-accounts 180s
-  wait_deployment "$OS_CONTEXT" financial postgres-txn 180s
-
-  # pgAdmin → OpenStack (cùng cluster với Postgres, svc.cluster.local resolve được)
-  # RedisInsight → AWS (cùng cluster với Redis)
-  kos apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/financial/db-admin-ui.yaml"
-
-  ok "Redis on AWS, Postgres on OpenStack, DB admin UIs — ready"
-}
-
-deploy_financial_services() {
-  step "Step 5: Financial workloads"
-
-  create_financial_runtime_secrets
-  create_core_banking_integrity_secret
-
-  # OpenStack: OPA + Envoy configmaps must exist before os-services.yaml pods start
-  kos apply -f "$REPO_ROOT/k8s/financial/os-security.yaml"
-
-  # Always re-verify/re-create SPIRE registration entries, even when
-  # --skip-security-stack is passed: SPIRE's datastore has no automatic
-  # backup and has been observed to silently lose all entries on a
-  # spire-server pod recreation, which otherwise doesn't surface until some
-  # later pod restart fails istio-proxy's SDS handshake with a confusing,
-  # seemingly-unrelated error. Cheap and idempotent when nothing is wrong.
-  AWS_CONTEXT="$AWS_CONTEXT" OS_CONTEXT="$OS_CONTEXT" "$REPO_ROOT/scripts/ensure-spire-entries.sh"
-
-  # patch-api-gateway and patch-web-portal must exist before pods are scheduled
-  kaws create configmap patch-api-gateway \
-    --from-file=main.py="$REPO_ROOT/services/api-gateway/main.py" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-  kaws create configmap patch-web-portal \
-    --from-file=main.py="$REPO_ROOT/services/web-portal/main.py" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-  kaws create configmap patch-payment-service \
-    --from-file=main.py="$REPO_ROOT/services/payment-service/main.py" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-  # shared/posture.py (device posture self-check) isn't baked into any
-  # service's image the way this patch mechanism was originally set up for
-  # just main.py — mount it the same way so future edits here also take
-  # effect on redeploy without an image rebuild.
-  kaws create configmap patch-shared \
-    --from-file=posture.py="$REPO_ROOT/shared/posture.py" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-  # Templates aren't baked into the image at build time in a way this patch
-  # mechanism previously covered — mount the whole templates/ dir the same
-  # way grafana-dashboards mounts a directory of files (one ConfigMap key
-  # per file, no subPath), so template-only changes also take effect on
-  # redeploy without an image rebuild.
-  kaws create configmap patch-web-portal-templates \
-    --from-file="$REPO_ROOT/services/web-portal/templates" \
-    -n financial --dry-run=client -o yaml | kaws apply -f -
-  # Real attack-surface numbers (tests/generate_attack_surface_graph.py output)
-  # for monitor.html's topology card — regenerate this file and re-run this
-  # step whenever network policies/OPA paths change, so the figure shown in
-  # the UI never drifts from what's actually enforced.
-  if [ -f "$REPO_ROOT/results/attack_surface_graph.md" ]; then
-    kaws create configmap attack-surface-graph \
-      --from-file=attack_surface_graph.md="$REPO_ROOT/results/attack_surface_graph.md" \
-      -n financial --dry-run=client -o yaml | kaws apply -f -
-  fi
-
-  # AWS: ingress-facing + fraud + notification + web portal
-  kaws apply -f "$REPO_ROOT/k8s/financial/aws-services.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/financial/web-portal.yaml"
-  for svc in api-gateway payment-service fraud-detection notification-service web-portal; do
-    wait_deployment "$AWS_CONTEXT" financial "$svc" 180s
-  done
-
-  # OpenStack: core banking backend (requires os-security.yaml applied above)
-  kos apply -f "$REPO_ROOT/k8s/financial/os-services.yaml"
-  for svc in core-banking account-service transaction-service; do
-    wait_deployment "$OS_CONTEXT" financial "$svc" 180s
-  done
-
-  # Device posture audit CronJob — same manifest on both clouds, RBAC scoped
-  # to its own namespace only.
-  kaws apply -f "$REPO_ROOT/k8s/financial/posture-agent-cronjob.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/posture-agent-cronjob.yaml"
-
-  # Istio mesh policies (PeerAuthentication STRICT + per-workload PERMISSIVE
-  # overrides for api-gateway/web-portal's public Traefik ingress,
-  # DestinationRule custom-SAN overrides, CUSTOM AuthorizationPolicy → OPA)
-  # — same file applied to both clusters; selectors simply don't match on
-  # whichever cluster a given workload doesn't run on. Applied after all
-  # financial Deployments exist on both clouds so every AuthorizationPolicy/
-  # DestinationRule selector has something to match.
-  kaws apply -f "$REPO_ROOT/k8s/financial/istio-policies.yaml"
-  kos apply -f "$REPO_ROOT/k8s/financial/istio-policies.yaml"
-
-  ok "AWS services, web portal, and OpenStack core banking ready"
+deploy_crapi() {
+  # Ứng dụng mục tiêu = OWASP crAPI (thay finance app — KE-HOACH-CRAPI.md).
+  # scripts/deploy-crapi.sh idempotent: DB (Postgres OpenStack / Mongo+Redis AWS),
+  # crapi-identity + mailhog (OpenStack), web/community/workshop + bff (AWS),
+  # Keycloak crapi client/role, SPIRE entries, OPA PDP riêng ns crapi + Istio
+  # extensionProvider, AuthorizationPolicy, NetworkPolicy, seed Job.
+  step "Step 4-5: Deploy crAPI target app + Zero-Trust wiring"
+  AWS_CONTEXT="$AWS_CONTEXT" OS_CONTEXT="$OS_CONTEXT" "$REPO_ROOT/scripts/deploy-crapi.sh"
+  ok "crAPI target app deployed"
 }
 
 keycloak_admin_password() {
@@ -976,8 +879,7 @@ main() {
   deploy_audience_mapper
   deploy_stepup_flow
   deploy_aws_saml_federation
-  deploy_financial_infra
-  deploy_financial_services
+  deploy_crapi
   deploy_observability_response
   apply_policies_and_ingress
   verify_final
