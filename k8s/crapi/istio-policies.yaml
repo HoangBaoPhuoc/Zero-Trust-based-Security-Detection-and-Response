@@ -1,0 +1,67 @@
+# Istio mesh policy cho ns crapi — mẫu k8s/financial/istio-policies.yaml.
+#
+# PHASE 1: chỉ PeerAuthentication (STRICT + PERMISSIVE cho điểm vào) +
+# DestinationRule custom-SAN (bắt buộc: SPIRE cấp SPIFFE scheme riêng
+# spiffe://ztlab.local/<cloud>/<svc>, không phải scheme mặc định Istio →
+# thiếu DR này thì client-side validation reject cert lúc handshake).
+#
+# CUSTOM AuthorizationPolicy → opa-ext-authz thêm ở PHASE 3.
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: crapi
+spec:
+  mtls:
+    mode: STRICT
+---
+# crapi-web: nhận traffic từ bff (in-mesh, Phase 2) và — trong Phase 1 —
+# từ kubectl port-forward khi test. PERMISSIVE để cả 2 chạy được.
+# Phase 2: giữ PERMISSIVE (bff vẫn gọi qua, và đây không phải điểm enforce authz).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: crapi-web-permissive
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-web }
+  mtls:
+    mode: PERMISSIVE
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-web-custom-san
+  namespace: crapi
+spec:
+  host: crapi-web.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/crapi-web"]
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-community-custom-san
+  namespace: crapi
+spec:
+  host: crapi-community.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/crapi-community"]
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-workshop-custom-san
+  namespace: crapi
+spec:
+  host: crapi-workshop.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/crapi-workshop"]

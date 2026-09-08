@@ -1,0 +1,174 @@
+# crAPI workloads — cluster AWS: crapi-web (static React + nginx proxy nội bộ),
+# crapi-community (Go), crapi-workshop (Django). Ảnh GỐC OWASP/crAPI (ghim
+# digest ở scripts/sync-app-images.sh), KHÔNG sửa source.
+#
+# SPIRE + Istio: mỗi Deployment mang annotation spiffe.io/spiffeid +
+# sidecar.istio.io/inject + userVolume mount SPIRE agent socket — COPY nguyên
+# cơ chế từ k8s/financial/aws-services.yaml (pilot-agent đọc socket này làm SDS
+# source thay Citadel; app-container không cần biết).
+#
+# initContainer wait-for của crAPI gốc đã bỏ — ảnh crash-recover khi dep chưa
+# lên (K8s backoff restart), chấp nhận được cho lab; tránh phải sync thêm ảnh
+# groundnuty/k8s-wait-for + RBAC get-services.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crapi-web, namespace: crapi }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crapi-community, namespace: crapi }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crapi-workshop, namespace: crapi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crapi-web
+  namespace: crapi
+  labels: { app: crapi-web }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crapi-web }
+  template:
+    metadata:
+      labels: { app: crapi-web }
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/crapi-web"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: crapi-web
+      containers:
+        - name: crapi-web
+          image: crapi/crapi-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              name: http
+          envFrom:
+            - configMapRef:
+                name: crapi-web-configmap
+          readinessProbe:
+            tcpSocket: { port: 80 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crapi-web
+  namespace: crapi
+spec:
+  selector: { app: crapi-web }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crapi-community
+  namespace: crapi
+  labels: { app: crapi-community }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crapi-community }
+  template:
+    metadata:
+      labels: { app: crapi-community }
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/crapi-community"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: crapi-community
+      containers:
+        - name: crapi-community
+          image: crapi/crapi-community:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8087
+              name: http
+          envFrom:
+            - configMapRef:
+                name: crapi-community-configmap
+          readinessProbe:
+            tcpSocket: { port: 8087 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crapi-community
+  namespace: crapi
+spec:
+  selector: { app: crapi-community }
+  ports:
+    - name: http
+      port: 8087
+      targetPort: 8087
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crapi-workshop
+  namespace: crapi
+  labels: { app: crapi-workshop }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crapi-workshop }
+  template:
+    metadata:
+      labels: { app: crapi-workshop }
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/crapi-workshop"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: crapi-workshop
+      containers:
+        - name: crapi-workshop
+          image: crapi/crapi-workshop:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - configMapRef:
+                name: crapi-workshop-configmap
+          readinessProbe:
+            tcpSocket: { port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 1000m, memory: 640Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crapi-workshop
+  namespace: crapi
+spec:
+  selector: { app: crapi-workshop }
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

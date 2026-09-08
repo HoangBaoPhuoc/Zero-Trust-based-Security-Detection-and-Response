@@ -1,0 +1,59 @@
+# mailhog — cluster AWS (cần MongoDB: MH_MONGO_URI=…@mongodb:27017).
+# SMTP NodePort 31025: crapi-identity (OpenStack) gửi mail OTP cross-cloud qua
+# selectorless Service `mailhog-aws` (WireGuard; Postgres/SMTP không mТLS Istio).
+# UI 8025: qua Traefik (mailhog.ztlab.local) cho người test xem hộp thư.
+# sidecar.istio.io/inject=false: SMTP + Mongo backend, giữ đơn giản như finance DB.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailhog
+  namespace: crapi
+  labels: { app: mailhog }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mailhog }
+  template:
+    metadata:
+      labels: { app: mailhog }
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: mailhog
+          image: crapi/mailhog:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 1025
+              name: smtp
+            - containerPort: 8025
+              name: web
+          envFrom:
+            - configMapRef:
+                name: mailhog-configmap
+          readinessProbe:
+            tcpSocket: { port: 1025 }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailhog
+  namespace: crapi
+  labels: { app: mailhog }
+spec:
+  type: NodePort
+  selector: { app: mailhog }
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+      nodePort: 31025
+    - name: web
+      port: 8025
+      targetPort: 8025
