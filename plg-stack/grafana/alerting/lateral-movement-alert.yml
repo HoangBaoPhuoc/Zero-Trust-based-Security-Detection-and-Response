@@ -19,12 +19,13 @@ groups:
             datasourceUid: Loki
             model:
               datasource: { type: loki, uid: Loki }
-              # OPA deny + path là API nghiệp vụ (/workshop/ hoặc /community/ hoặc
-              # /identity/api/v2) — loại trừ /verify (đường verify JWT hợp lệ).
+              # OPA deny + request_path (label promtail parse từ decision log) là
+              # API nghiệp vụ — loại trừ /verify (đường verify JWT service-to-service
+              # hợp lệ trong service_acl).
               expr: >
                 sum(count_over_time(
-                  {job="opa-decisions", opa_result="false"}
-                  |~ "request_path.*(/workshop/api/shop|/community/api/v2/community|/identity/api/v2)"
+                  {job="opa-decisions", opa_result="false",
+                   request_path=~"/(workshop|community)/api/.*|/identity/api/v2/.*"}
                   != "/identity/api/auth/verify" [10m]))
               instant: true
               queryType: instant

@@ -170,7 +170,7 @@ data:
                 decision_id: decision_id
                 opa_result: result
           - regex:
-              expression: '":path":"(?P<request_path>[^"]+)"'
+              expression: '"[:]?path":"(?P<request_path>[^"]+)"'
           - labels:
               opa_result:
               request_path:
