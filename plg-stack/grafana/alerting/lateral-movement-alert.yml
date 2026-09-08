@@ -1,36 +1,46 @@
 apiVersion: 1
 
+# crAPI (KE-HOACH-CRAPI.md Phase 7). Lateral movement = một crapi backend
+# (crapi-community/crapi-workshop) gọi backend khác theo đường KHÔNG có trong
+# service_acl → OPA deny. `request_path` label do promtail parse từ decision log.
 groups:
   - orgId: 1
     name: lateral-movement
     folder: ZTLab
     interval: 1m
     rules:
-      - uid: lateral-movement-svid
-        title: "Kịch bản 3 — Lateral Movement: Unauthorized Internal Path (T1021.007)"
+      - uid: lateral-movement-crapi
+        title: "crAPI — Lateral Movement (service→service ngoài service_acl)"
         for: 0s
         condition: A
         data:
           - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: Loki
             model:
-              datasource:
-                type: loki
-                uid: Loki
-              expr: 'sum(count_over_time({job="opa-decisions",opa_result="false",request_path="/payments/internal/execute"}[10m]))'
+              datasource: { type: loki, uid: Loki }
+              # OPA deny + path là API nghiệp vụ (/workshop/ hoặc /community/ hoặc
+              # /identity/api/v2) — loại trừ /verify (đường verify JWT hợp lệ).
+              expr: >
+                sum(count_over_time(
+                  {job="opa-decisions", opa_result="false"}
+                  |~ "request_path.*(/workshop/api/shop|/community/api/v2/community|/identity/api/v2)"
+                  != "/identity/api/auth/verify" [10m]))
               instant: true
               queryType: instant
               refId: A
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Lateral Movement — OPA chặn service gọi /payments/internal/execute (T1021.007)"
-          description: "ATT&CK T1021.007 — notification-service (SVID hợp lệ) cố truy cập /payments/internal/execute tại payment-service — path không nằm trong whitelist OPA cho internal service. OPA từ chối, Envoy trả 403. Log thật từ OPA decision log."
+          summary: "Workload crAPI cố gọi service khác ngoài ma trận service_acl (lateral movement)"
+          description: >
+            ATT&CK T1021 — một service crAPI bị chiếm quyền cố di chuyển ngang sang
+            service khác. OPA (SPIFFE-based service_acl) chặn: cặp gọi này không có
+            trong policy/service-graph-crapi.yaml.
+          soar_action: |
+            ✅ SOAR đề xuất: isolate_workload (patch Service selector cô lập pod)
         labels:
           severity: critical
           category: security
-          mitre: T1021.007
+          mitre: T1021
           attack_type: lateral_movement

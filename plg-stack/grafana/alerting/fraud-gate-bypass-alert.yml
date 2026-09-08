@@ -1,43 +1,40 @@
 apiVersion: 1
 
+# crAPI (KE-HOACH-CRAPI.md Phase 7). THAY kịch bản "fraud gate bypass" (đặc thù
+# ngân hàng, đã bỏ) bằng BFLA — Broken Function Level Authorization: user thường
+# (crapi-user) cố gọi endpoint admin/management. BFF `_rbac_ok` từ chối → log
+# audit event="rbac_denied" (job bff-audit), đồng thời OPA cũng deny.
 groups:
   - orgId: 1
-    name: fraud-gate
+    name: bfla
     folder: ZTLab
     interval: 1m
     rules:
-      - uid: fraud-gate-bypass
-        title: "Kịch bản 2 — Fraud Gate Bypass (T1078.004)"
+      - uid: bfla-crapi-admin-endpoint
+        title: "crAPI — BFLA: user thường gọi endpoint admin/management"
         for: 0s
         condition: A
         data:
           - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: Loki
             model:
-              datasource:
-                type: loki
-                uid: Loki
-              expr: 'sum(count_over_time({namespace="financial",app="payment-service"} | json | level="AUDIT" | event="payment_blocked_fraud" [10m]))'
+              datasource: { type: loki, uid: Loki }
+              expr: 'sum(count_over_time({job="bff-audit"} | json | event="rbac_denied" [10m]))'
               instant: true
               queryType: instant
               refId: A
         noDataState: OK
-        execErrState: OK
+        execErrState: Alerting
         annotations:
-          summary: "Fraud Gate: giao dịch bị chặn do fraud score cao"
-          description: "ATT&CK T1078.004 — payment-service phát hiện giao dịch gian lận (fraud score ≥ 75) và từ chối. Log thật từ payment-service AUDIT event payment_blocked_fraud."
+          summary: "BFF từ chối RBAC — user thiếu quyền gọi admin/management endpoint (BFLA)"
+          description: >
+            OWASP API5:2023 BFLA. crapi-user hoặc soc-analyst cố gọi
+            /identity/api/v2/admin/* hoặc /workshop/api/management/* hoặc ghi dữ liệu
+            khi chỉ có quyền đọc. BFF `_rbac_ok` (gương OPA zta_crapi.rego) từ chối.
           soar_action: |
-            ✅ SOAR đã tự động:
-            1. Block transaction ID liên quan trong Redis (TTL 1h)
-            2. Flag user account vào danh sách review
-            3. Tạo case với playbook fraud_response
-            🔧 Admin cần xem xét: Grafana → ZTLab → Fraud Gate dashboard
+            ✅ SOAR đề xuất: block_source_ip + revoke_user_sessions (review account)
         labels:
-          severity: critical
+          severity: high
           category: security
-          gap: gap2
-          mitre: T1078.004
-          attack_type: fraud_gate_bypass
+          attack_type: access_denied

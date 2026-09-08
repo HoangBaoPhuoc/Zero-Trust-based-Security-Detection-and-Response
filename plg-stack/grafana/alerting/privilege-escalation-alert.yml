@@ -20,7 +20,7 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum(count_over_time({namespace="financial",app="security-scanner"} | json | event="privilege_escalation" [5m]))'
+              expr: 'sum(count_over_time({namespace="crapi",app="security-scanner"} | json | event="privilege_escalation" [5m]))'
               instant: true
               queryType: instant
               refId: A
