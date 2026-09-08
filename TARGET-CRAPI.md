@@ -18,10 +18,11 @@
 | `crapi-community` (Go) | AWS | crapi | 8087 | istio + SPIRE | `…/aws/crapi-community` | postgres-shop + mongodb |
 | `crapi-workshop` (Django) | AWS | crapi | 8000 | istio + SPIRE | `…/aws/crapi-workshop` | postgres-shop + mongodb |
 | `crapi-web` (React/nginx, static) | AWS | crapi | 80 | istio + SPIRE | `…/aws/crapi-web` | — |
-| `mailhog` | AWS | crapi | 1025 SMTP (+NodePort 31025) / 8025 UI | istio (fallback none) | — | mongodb |
-| `postgres-identity` (`postgres:14`) | OpenStack | crapi | 5432 | none | — | — |
-| `postgres-shop` (`postgres:14`) | AWS | crapi | 5432 | none | — | — |
+| `mailhog` | AWS | crapi | 1025 SMTP (+NodePort 31025) / 8025 UI | none | — | mongodb |
+| `postgresdb` (`postgres:14`, **1 DB `crapi` dùng chung**) | **OpenStack** | crapi | 5432 (+NodePort 30432) | none | — | — |
 | `mongodb` (`mongo:4.4`) | AWS | crapi | 27017 | none | — | — |
+
+> **DB-2 (bắt buộc — phát hiện GATE 0):** `crapi-workshop`/`crapi-community` đọc thẳng bảng `user_login`/`user_details`/`vehicle_details` của identity trong Postgres dùng chung (`db_table` hardcode, `managed=False`) — **không tách Postgres được nếu không fork crAPI**. → 1 Postgres duy nhất, đặt ở OpenStack (toàn bộ dữ liệu trên hạ tầng chủ quyền — khớp Nghị định 53 tốt hơn DB-1). MongoDB ở AWS (chỉ community/workshop/mailhog dùng; identity không). Hop cross-cloud Postgres = plain TCP qua WireGuard (Postgres không có sidecar); hop HTTP identity vẫn mТLS ISTIO_MUTUAL đầy đủ.
 
 ### 1.2 Lớp Zero Trust / edge
 
@@ -38,8 +39,8 @@
 SPIRE server/agent + root CA (`ztlab.local`) · Keycloak + Postgres · Vault · Gatekeeper (admission) · Istio (`opa-ext-authz` provider, trustDomain `ztlab.local`, access log JSON) · PLG (Promtail→Loki→Grafana) + Loki relay cross-cloud · Prometheus · SOAR engine (HITL) · ai-analyzer · security-scorer · `posture-agent` CronJob · `security-scanner-job` · Traefik ingress.
 
 ### 1.4 Danh sách đầy đủ workload ns `crapi`
-**AWS (9):** `bff`, `crapi-web`, `crapi-community`, `crapi-workshop`, `postgres-shop`, `mongodb`, `redis`, `mailhog`, `opa`.
-**OpenStack (3):** `crapi-identity`, `postgres-identity`, `opa`.
+**AWS (8):** `bff`, `crapi-web`, `crapi-community`, `crapi-workshop`, `mongodb`, `redis`, `mailhog`, `opa`.
+**OpenStack (3):** `crapi-identity`, `postgresdb`, `opa`.
 **SPIFFE (5):** `aws/bff`, `aws/crapi-web`, `aws/crapi-community`, `aws/crapi-workshop`, `openstack/crapi-identity`.
 
 ---
@@ -54,21 +55,21 @@ SPIRE server/agent + root CA (`ztlab.local`) · Keycloak + Postgres · Vault · 
         │   │   ── mint crAPI JWT (khoá RSA crAPI) ; device-trust + device-posture ; audit→Loki│
         │   │   ── rate-limit / PKCE state ──▶ redis                                          │
         │   ├──▶ crapi-web        (static React, :80)                                        │
-        │   ├──▶ crapi-community  (:8087) ──┬──▶ postgres-shop(:5432), mongodb(:27017)       │
-        │   └──▶ crapi-workshop   (:8000) ──┘                                                │
-        │                    │ (verify JWT / user lookup)                                    │
+        │   ├──▶ crapi-community  (:8087) ──▶ mongodb(:27017)  [Postgres + verify JWT: cross-cloud ▼] │
+        │   └──▶ crapi-workshop   (:8000) ──▶ mongodb(:27017)  [Postgres + verify JWT: cross-cloud ▼] │
         │  opa (:9191 ext_authz zta/authz/allow, :8181)                                      │
         └────────────────────┼───────────────────────────────────────────────────────────────┘
-                             │  cross-cloud: NodePort 30090 + WireGuard
-                             │  mTLS ISTIO_MUTUAL (SPIRE SVID), OPA zta/crosscloud/allow
-        ┌────────────────────▼──────────────── OpenStack K3s · ns crapi ─────────────────────┐
-        │  crapi-identity (:8080) ──▶ postgres-identity (:5432)                              │
-        │  crapi-identity ──SMTP :1025──▶ mailhog (AWS, NodePort 31025 + WG, mTLS)           │
+       cross-cloud (WireGuard):│ identity NodePort 30090 (HTTP, +mTLS ISTIO_MUTUAL)
+                               │ postgresdb NodePort 30432 (TCP 5432, WireGuard only)
+        ┌──────────────────────▼──────────── OpenStack K3s · ns crapi ───────────────────────┐
+        │  crapi-identity (:8080)  ◀── bff, crapi-community, crapi-workshop (verify JWT/req)  │
+        │  crapi-identity + crapi-community + crapi-workshop ──▶ postgresdb (:5432, 1 DB crapi)│
+        │  crapi-identity ──SMTP :1025──▶ mailhog (AWS, NodePort 31025 + WG)                  │
         │  opa (:9191 ext_authz zta/crosscloud/allow, :8181)                                 │
         └───────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Hop cross-cloud (tất cả qua mТLS SPIRE):** `bff→crapi-identity`, `crapi-community→crapi-identity`, `crapi-workshop→crapi-identity` (HTTP verify JWT); `crapi-identity→mailhog` (SMTP 1025).
+**Hop cross-cloud:** HTTP (mТLS ISTIO_MUTUAL + WireGuard): `bff→identity`, `community→identity`, `workshop→identity`. TCP (WireGuard): `community→postgresdb`, `workshop→postgresdb`, `identity→mailhog` (SMTP).
 
 ---
 
@@ -113,11 +114,11 @@ SPIRE server/agent + root CA (`ztlab.local`) · Keycloak + Postgres · Vault · 
 | `aws/bff` | `aws/crapi-workshop` | GET/POST/PUT: `/workshop/api` | |
 | `aws/bff` | `aws/crapi-web` | GET: `/`, `/static` | |
 | `aws/bff` | `aws/redis` | L4 6379 | |
-| `aws/crapi-community` | `openstack/crapi-identity` | GET: `<pubkey/verify path>` | ✓ |
-| `aws/crapi-workshop` | `openstack/crapi-identity` | GET: `<pubkey/verify path>` | ✓ |
-| `aws/crapi-community` | `aws/postgres-shop` · `aws/mongodb` | L4 5432 · 27017 | |
-| `aws/crapi-workshop` | `aws/postgres-shop` · `aws/mongodb` | L4 5432 · 27017 | |
-| `openstack/crapi-identity` | `openstack/postgres-identity` | L4 5432 | |
+| `aws/crapi-community` | `openstack/crapi-identity` | POST: `/identity/api/auth/verify` | ✓ |
+| `aws/crapi-workshop` | `openstack/crapi-identity` | POST: `/identity/api/auth/verify` | ✓ |
+| `aws/crapi-community` | `openstack/postgresdb` · `aws/mongodb` | L4 5432 (cross) · 27017 | ✓/— |
+| `aws/crapi-workshop` | `openstack/postgresdb` · `aws/mongodb` | L4 5432 (cross) · 27017 | ✓/— |
+| `openstack/crapi-identity` | `openstack/postgresdb` | L4 5432 | |
 | `openstack/crapi-identity` | `aws/mailhog` | L4 1025 (SMTP) | ✓ |
 | (mỗi service) | (opa cùng cluster) | L4 9191, 8181 | |
 
@@ -202,13 +203,10 @@ KET-QUA-CRAPI.md           ← MỚI (log kết quả từng Phase — như KET-
 
 | Khi nào | Việc | Vì sao |
 |---|---|---|
-| Phase 2 | Xác nhận rename realm role `crapi-user/crapi-admin/soc-analyst` (hay giữ tên cũ) | Đụng `zta_policy.rego` + users demo + docs |
-| Phase 3 | Xác nhận danh sách `sensitive_crapi_action` cho step-up (hay bỏ step-up) | Ngữ nghĩa "nhạy cảm" của crAPI do người dùng định |
-| Phase 5 | Chọn branch base (`khanhha` / `fix/zta-remediation`) | — |
-| Phase 6 | Chạy `terraform destroy` + `deploy-all.sh` | Classifier chặn agent chạy terraform |
-| Phase 6 | Enroll OTP step-up qua browser 1 lần (nếu giữ step-up) | Không tự động hoá được (QR thật) |
+| Phase 6 | Chạy `scripts/destroy-all.sh` + `scripts/deploy-all.sh` (nếu classifier chặn agent) | Live-infra terraform |
+| Phase 6 | Enroll OTP step-up qua browser 1 lần | Không tự động hoá được (QR thật) |
 
-Các GATE 🛑 khác trong `KE-HOACH-CRAPI.md`: agent **tự đi tiếp** nếu nghiệm thu đạt và không mâu thuẫn với TARGET này; chỉ DỪNG hỏi khi phát hiện điều làm sai lệch đích hoặc một quyết định trong bảng §8 trên.
+**Cập nhật 2026-09-09:** người dùng uỷ quyền agent chạy xuyên suốt Phase 0→7 **không cần duyệt thêm**. Các quyết định nhỏ (rename role, `sensitive_crapi_action`, branch, DB-2) agent đã tự quyết — xem `KET-QUA-CRAPI.md` GATE 0. Sau khi target đạt: agent tự chạy `destroy-all.sh` rồi `systemctl suspend` (nếu quyền cho phép; nếu không, báo người dùng chạy tay). Mọi GATE 🛑 = agent tự đi tiếp sau khi ghi nghiệm thu vào `KET-QUA-CRAPI.md`.
 
 ---
 
