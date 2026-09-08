@@ -5,8 +5,11 @@
 # qua selectorless Service `crapi-identity-openstack` (mТLS ISTIO_MUTUAL vì 2
 # đầu đều có sidecar — mẫu core-banking-openstack của finance app).
 #
-# Secret crapi-jwt-key (jwks.json — RSA key upstream công khai của crAPI) mount
-# ở /.keys như deployment gốc; entrypoint ảnh tự nạp JWKS từ file này.
+# Secret crapi-jwt-key (jwks.json — RSA key upstream của crAPI, IDENTICAL với
+# default_jwks.json nhúng trong ảnh — cùng kid MKMZkDenUfuDF2byYowDj7tW5Ox6XG4Y1THTEGScRg8).
+# entrypoint.sh của ảnh: `if [ -f /app/keys/jwks.json ]; then JWKS=base64(...)`.
+# Mount ở /app/keys (KHÔNG phải /.keys — k8s base gốc của crAPI mount sai chỗ,
+# thực tế fallback về default_jwks.json). bff dùng cùng key này để mint token.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -52,7 +55,7 @@ spec:
                 name: crapi-identity-configmap
           volumeMounts:
             - name: jwt-key-secret
-              mountPath: /.keys
+              mountPath: /app/keys
               readOnly: true
           readinessProbe:
             tcpSocket: { port: 8080 }

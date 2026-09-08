@@ -123,8 +123,9 @@ pull_images() {
   log "Pulling 3rd-party images (crAPI + postgres + mongo), pinned by digest"
   local pulled=()
   for spec in "${PULL_IMAGES[@]}"; do
-    local tagref="${spec%@*}"          # crapi/crapi-web:latest
-    local digestref="${spec%:*}@${spec#*@}"   # crapi/crapi-web@sha256:...
+    local tagref="${spec%@*}"          # crapi/crapi-web:latest  |  postgres:14
+    local repo="${tagref%:*}"          # crapi/crapi-web         |  postgres
+    local digestref="${repo}@${spec#*@}"   # crapi/crapi-web@sha256:...
     log "docker pull ${digestref}"
     docker pull --platform linux/amd64 "$digestref"
     # Re-tag về :latest để manifest K8s (imagePullPolicy: IfNotPresent) khớp.
