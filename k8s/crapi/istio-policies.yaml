@@ -115,3 +115,17 @@ spec:
   action: CUSTOM
   provider: { name: opa-ext-authz-crapi }
   rules: [ {} ]
+---
+# mailhog (OpenStack, inject=false) — identity có sidecar STRICT → phải tắt
+# mТLS origination cho host này (như opa-service-plaintext). Cũng cho phép
+# istio-proxy của identity gọi SMTP 1025 dạng TCP thuần.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mailhog-plaintext
+  namespace: crapi
+spec:
+  host: mailhog.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

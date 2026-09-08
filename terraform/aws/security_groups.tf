@@ -106,6 +106,18 @@ resource "aws_security_group" "sg_private" {
     description = "Intra-zone and cross-cloud pods"
   }
 
+  # crAPI (KE-HOACH-CRAPI.md): identity/postgres nằm ở OpenStack → traffic
+  # OpenStack -> AWS NodePort (mailhog SMTP 31025, và bất kỳ hop OS->AWS nào
+  # khác). Finance app chỉ có AWS->OS nên dải này chưa từng được mở.
+  # Nguồn: OS k3s subnet + WireGuard subnet (tuỳ os_gateway có SNAT hay không).
+  ingress {
+    from_port   = 30000
+    to_port     = 32767
+    protocol    = "tcp"
+    cidr_blocks = ["192.168.101.0/24", "10.200.0.0/24"]
+    description = "crAPI OpenStack -> AWS NodePort (cross-cloud)"
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

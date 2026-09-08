@@ -37,6 +37,9 @@ spec:
         sidecar.istio.io/inject: "true"
         sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
         sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+        # mailhog (inject=false, OpenStack) SMTP 1025 — bỏ qua istio-proxy
+        # (server-first protocol, sidecar làm hỏng handshake).
+        traffic.sidecar.istio.io/excludeOutboundPorts: "1025"
     spec:
       serviceAccountName: crapi-identity
       volumes:

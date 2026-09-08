@@ -1,0 +1,16 @@
+# Traefik IngressRoute (cluster OpenStack) — mailhog UI (xem hộp thư OTP).
+# Host mailhog.ztlab.local
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: crapi-mailhog
+  namespace: crapi
+spec:
+  entryPoints: [web]
+  routes:
+    - match: Host(`mailhog.ztlab.local`)
+      kind: Rule
+      services:
+        - name: mailhog
+          port: 8025
