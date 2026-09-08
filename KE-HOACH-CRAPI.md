@@ -5,12 +5,11 @@
 >
 > **Nguồn sự thật hiện trạng:** đọc trực tiếp source (2026-09-09). **Nguồn crAPI:** github.com/OWASP/crAPI@develop.
 >
-> **Mô hình thực thi (chốt 2026-09-09):** sau khi người dùng duyệt `TARGET-CRAPI.md`, agent **tự thực thi toàn bộ
-> Phase 1→7, tự sửa/tự fix, KHÔNG cần người dùng action thêm**. Ngoại lệ bắt buộc phải nhờ người dùng:
-> (1) `terraform destroy` / `terraform apply` (bị classifier chặn — Phase 6);
-> (2) enroll OTP step-up qua browser thật (1 lần, như `VIEC-CON-TON-DONG.md` mục 1).
-> Mọi thứ khác (sửa source, `kubectl apply`, build/sync ảnh, rollout, verify) agent tự làm và tự ghi kết quả
-> vào `KET-QUA-CRAPI.md`.
+> **Mô hình thực thi (chốt 2026-09-09, người dùng đã duyệt):** agent **tự thực thi Phase 0→7, tự sửa/tự fix,
+> KHÔNG cần duyệt thêm**. Sau khi target đạt (nghiệm thu Phase 6/7): agent **tự chạy `scripts/destroy-all.sh`
+> rồi `systemctl suspend`** máy. Ngoại lệ có thể phải nhờ người dùng: (1) `terraform` nếu classifier chặn;
+> (2) `systemctl suspend`/`destroy` nếu thiếu quyền sudo; (3) enroll OTP step-up qua browser (1 lần).
+> Mọi thứ khác agent tự làm, ghi kết quả vào `KET-QUA-CRAPI.md`.
 
 ---
 
@@ -19,7 +18,8 @@
 | Trục | Chọn |
 |---|---|
 | **A — Phạm vi** | Core: `crapi-identity`, `crapi-community`, `crapi-workshop`, `crapi-web`, `mailhog`, Postgres×2, MongoDB. KHÔNG lấy `crapi-chatbot`/`chromadb`/`gateway-service`. |
-| **B — Hybrid** | **AWS:** `bff`(mới), `crapi-web`, `crapi-community`, `crapi-workshop`, `postgres-shop`, `mongodb`, `redis`, `mailhog`, `opa`. **OpenStack:** `crapi-identity`, `postgres-identity`, `opa`. Biên = "ai cần xác thực" (AWS) vs "nơi cấp danh tính + dữ liệu định danh" (OpenStack) — khớp Nghị định 53. |
+| **B — Hybrid** | **AWS:** `bff`(mới), `crapi-web`, `crapi-community`, `crapi-workshop`, `mongodb`, `redis`, `mailhog`, `opa`. **OpenStack:** `crapi-identity`, `postgresdb`(1 DB `crapi` dùng chung — xem GATE 0), `opa`. Biên = "ai cần xác thực" (AWS) vs "nơi cấp danh tính + toàn bộ dữ liệu" (OpenStack) — khớp Nghị định 53. |
+| **DB** | **DB-2 (bắt buộc, phát hiện GATE 0):** community/workshop đọc thẳng bảng `user_login` của identity → không tách Postgres được. 1 Postgres trên OpenStack. Mongo trên AWS. Hop Postgres cross-cloud = TCP qua WireGuard (không sidecar). |
 | **C — Danh tính user** | C2b: `bff` (FastAPI) là điểm vào duy nhất. User login **Keycloak OIDC/PKCE** ở bff. bff **mint token crAPI-native** (RS256, khoá RSA của crAPI) `sub=email` cho hop Đông–Tây (`Authorization`), forward token Keycloak ở `X-Access-Token` cho OPA (realm role + step-up `acr`). crAPI **giữ ảnh gốc**. |
 | **D — Ảnh** | Pull `crapi/*` + `postgres:14` + `mongo:4.4` từ Docker Hub (ghim `@sha256:`) → air-gap import. `sync-financial-images.sh` → `sync-app-images.sh` (crAPI = pull, `bff` = build). |
 | **Namespace** | `crapi` (cả 2 cluster), thay hẳn `financial`. |
@@ -54,7 +54,7 @@ Terraform, Ansible (baseline/k3s/wireguard/promtail), SPIRE server/agent + root 
 8. Health endpoint mỗi service → dùng `tcpSocket` cho chắc.
 9. `crapi-web` tách được static để bff proxy phần API không.
 
-**🛑 GATE 0 — trình bày "giả định vs thực tế" + `service-graph.yaml` nháp + danh sách file. (Agent tự tiếp nếu không có mâu thuẫn chặn; chỉ DỪNG nếu phát hiện điều làm sai lệch `TARGET-CRAPI.md`.)**
+**✅ GATE 0 XONG (2026-09-09) — xem `KET-QUA-CRAPI.md`.** Phát hiện chính: DB không tách được (community/workshop đọc bảng `user_login` của identity) → **DB-2** (1 Postgres trên OpenStack). TARGET + KE-HOACH đã cập nhật. Agent tiếp Phase 1 không dừng.
 
 ---
 
@@ -72,12 +72,12 @@ Pull+ghim digest: `crapi/crapi-identity`, `crapi/crapi-community`, `crapi/crapi-
 
 ### 1.2 Manifest `k8s/crapi/`
 - `namespace.yaml` — ns `crapi`.
-- `aws-workloads.yaml` — `crapi-web`, `crapi-community`, `crapi-workshop` (copy nguyên block SPIRE `userVolume`/sidecar từ `aws-services.yaml`). Override env crAPI: `IDENTITY_SERVICE=crapi-identity-openstack.crapi.svc.cluster.local:30090`, `DB_HOST=postgres-shop`, `MONGO_DB_HOST=mongodb`.
-- `os-workloads.yaml` — `crapi-identity` Deployment + Service **NodePort 30090**→8080 + SA + mount Secret `crapi-jwt-key` `/.keys`. Override: `DB_HOST=postgres-identity`, `MAILHOG_HOST=mailhog-aws.crapi.svc.cluster.local`, `MAILHOG_PORT=31025`.
-- `databases.yaml` — `postgres-shop`+`mongodb`+`redis` (AWS), `postgres-identity` (OpenStack). PVC. `inject:"false"`.
+- `aws-workloads.yaml` — `crapi-web`, `crapi-community`, `crapi-workshop` (copy nguyên block SPIRE `userVolume`/sidecar từ `aws-services.yaml`). Override env crAPI: `IDENTITY_SERVICE=crapi-identity-openstack.crapi.svc.cluster.local:30090`, `DB_HOST=postgresdb-openstack.crapi.svc.cluster.local`, `DB_PORT=30432`, `MONGO_DB_HOST=mongodb`. workshop: `IDENTITY_VERIFY`/`settings.IDENTITY_SERVICE` cùng giá trị. web: `COMMUNITY_SERVICE/WORKSHOP_SERVICE` nội cluster, `IDENTITY_SERVICE` → selectorless.
+- `os-workloads.yaml` — `crapi-identity` Deployment + Service **NodePort 30090**→8080 + SA + mount Secret `crapi-jwt-key` `/.keys` + env `JWKS`. Override: `DB_HOST=postgresdb` (local OS), `MAILHOG_HOST=mailhog-aws.crapi.svc.cluster.local`, `MAILHOG_PORT=31025`.
+- `databases.yaml` — `mongodb`+`redis` (AWS), `postgresdb` (OpenStack, Service **NodePort 30432**→5432, `-c max_connections=500`, PVC). `inject:"false"`. crapi-community/workshop override `DB_HOST=postgresdb-openstack.crapi.svc.cluster.local` (selectorless→NodePort 30432).
 - `mailhog.yaml` — AWS, NodePort 31025→1025 (SMTP) + ClusterIP 8025 (UI). `inject:"true"` (mТLS SMTP cross-cloud — giữ tenet 2; fallback `"false"` nếu handshake TCP fail).
 - `configmaps.yaml` — `crapi-*-configmap` từ `deploy/k8s/base/*/config.yaml`, sửa host theo split.
-- `cross-cloud.yaml` — selectorless Svc+Endpoints `crapi-identity-openstack` (AWS, `192.168.101.11:30090`) + `mailhog-aws` (OpenStack, `<aws-worker>:31025`) — mẫu `core-banking-openstack`.
+- `cross-cloud.yaml` — selectorless Svc+Endpoints: `crapi-identity-openstack` (AWS→`192.168.101.11:30090`, +DR ISTIO_MUTUAL) · `postgresdb-openstack` (AWS→`192.168.101.11:30432`, KHÔNG DR — plain TCP/WG) · `mailhog-aws` (OpenStack→`<aws-worker>:31025`, KHÔNG DR) — mẫu `core-banking-openstack`.
 - Move `k8s/financial/{redis,posture-agent-cronjob,security-scanner-job}.yaml` → `k8s/crapi/`, đổi ns. `redis`: bff dùng cho rate-limit + PKCE state (không phục vụ crAPI).
 
 ### 1.3 Secret khoá crAPI
@@ -138,8 +138,8 @@ Pull+ghim digest: `crapi/crapi-identity`, `crapi/crapi-community`, `crapi/crapi-
 ## 5. PHASE 3 — OPA (Zero Trust authz + posture + step-up)
 
 ### 3.1 `policy/service-graph.yaml` — viết lại (xem `TARGET-CRAPI.md` §4 bảng đầy đủ)
-Workloads: 5 SPIFFE + infra. Edges L7 (method+path từ `crapi-openapi-spec.json`): `bff→{crapi-identity(cross), crapi-community, crapi-workshop, crapi-web}`, `crapi-community→crapi-identity(cross)`, `crapi-workshop→crapi-identity(cross)`, + L4: `bff/crapi-*→redis/postgres-shop/mongodb/postgres-identity/opa`, `crapi-identity→mailhog(cross,1025)`.
-Chạy lại `gen-rego-acl.py` + `gen-networkpolicy.py`.
+Workloads: 5 SPIFFE + infra (`postgresdb`, `mongodb`, `mailhog`, `redis`, `opa`×2). Edges L7: `bff→{crapi-identity(cross), crapi-community, crapi-workshop, crapi-web}`, `crapi-community→crapi-identity(cross, POST /identity/api/auth/verify)`, `crapi-workshop→crapi-identity(cross, idem)`. L4: `bff→redis`, `crapi-community/workshop→{postgresdb(cross,5432), mongodb(27017)}`, `crapi-identity→{postgresdb(5432), mailhog(cross,1025)}`, `*→opa(9191,8181)`.
+Chạy lại `gen-rego-acl.py` + `gen-networkpolicy.py`. (Edge cross-cloud Postgres/SMTP: `l4_only`+`cross_cluster` — generator bỏ qua L4 podSelector, khai báo ở allow-list.)
 
 ### 3.2 `opa/policies/zta_policy.rego` (AWS, `zta/authz/allow`)
 - Giữ: verify JWT Keycloak JWKS + `expected_issuer` OIDC discovery + kiểm `exp`.
@@ -170,7 +170,10 @@ CUSTOM→`opa-ext-authz`: `bff`, `crapi-web`, `crapi-community`, `crapi-workshop
 
 ## 6. PHASE 4 — NetworkPolicy L4
 
-`k8s/crapi/network-policies/{aws,os}-allow-list.yaml` — rewrite ns `crapi`: ingress Traefik→bff, monitoring→metrics, spire→opa:8181, nội bộ theo `service_acl`; egress DNS, `crapi`→`crapi`, `crapi`→`identity`(Keycloak), `crapi`→`plg-stack`(Loki 3100), cross-cloud ipBlock `192.168.101.0/24`:30090 + `10.42.0.0/16`, istio-system:15012. `{aws,os}-pod-segmentation.yaml` generated. Cập nhật `apply_network_policies()`.
+`k8s/crapi/network-policies/{aws,os}-allow-list.yaml` — rewrite ns `crapi`:
+- **AWS** ingress: Traefik→bff:8080, monitoring→:metrics, spire→opa:8181, nội bộ theo `service_acl`, cross-cloud ipBlock `192.168.101.0/24` + `10.42.0.0/16` → mailhog:1025. egress: DNS, `crapi`→`crapi`, bff→`identity`(Keycloak 8080), `crapi`→`plg-stack`(Loki 3100), cross-cloud `192.168.101.0/24`:30090 (identity) + :30432 (postgres), istio-system:15012.
+- **OpenStack** ingress: cross-cloud ipBlock `10.10.1.0/24` + `10.42.0.0/16` → identity:30090 + postgresdb:30432, spire→opa:8181, monitoring→:metrics. egress: DNS, identity→postgresdb:5432, identity→mailhog AWS (`10.10.1.0/24`:31025), istio-system:15012, `crapi`→`plg-stack` relay.
+`{aws,os}-pod-segmentation.yaml` generated. Cập nhật `apply_network_policies()`.
 
 Kiểm chứng: `health-check.sh` FAIL=0; hop hợp lệ thông; `security-healthcheck` cronjob green.
 
