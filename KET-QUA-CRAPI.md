@@ -144,3 +144,65 @@ Hop `bff → community/workshop` (cùng cluster AWS) OPA vẫn kiểm đầy đ�
 | workshop → identity `/verify` | HTTP | như trên |
 | community/workshop → postgresdb :30432 | TCP 5432 | WireGuard (Postgres ko sidecar) |
 | identity → mailhog | SMTP 1025 | nội cluster OpenStack (ko còn cross-cloud) |
+
+### PHASE 4 — NetworkPolicy L4 (2026-09-09) — ✅ ĐẠT
+`k8s/crapi/network-policies/{aws,os}-allow-list.yaml` (baseline podSelector {}) +
+`{aws,os}-pod-segmentation.yaml` (generated). Applied 2 cluster, crapi verified
+vẫn chạy (bff→identity 200). Như finance: k3s netpol không enforce đầy đủ cho
+traffic có sidecar — L7 (service_acl) là lớp phân đoạn thật.
+
+### PHASE 5 — Tích hợp deploy + gỡ finance (2026-09-09) — ✅ ĐẠT (live)
+- `deploy-app.sh`: `deploy_financial_infra+services` → `deploy_crapi` (gọi
+  `deploy-crapi.sh`). `apply_network_policies`/`deploy_istio`/`regenerate_policy_files`/
+  `deploy_stepup_flow`/`deploy_audience_mapper` → crapi. `namespaces.yaml` financial→crapi.
+- `deploy-security-stack.sh`: `deploy_step_4_opa` no-op (OPA ở deploy-crapi).
+- `sync-app-images.sh`: BATCHES = bff + soar-engine + ai-analyzer + security-scorer
+  (finance services đã xoá). `k8s/ingress.yaml`: bỏ api-gateway route.
+- `realm-config.json`: crapi-only (client crapi-bff/-stepup, role crapi-*, +stepup-demo).
+- gen-rego-acl.py / gen-networkpolicy.py: crapi-only.
+- istio-operator: `extensionProvider opa-ext-authz` → `opa-service.crapi` (bỏ finance).
+- soar-engine `TARGETS_BY_ATTACK` + ai-analyzer `known_services`/`service_map` → crapi.
+- **GỠ (live + repo):** namespace `financial` (2 cluster), `services/{api-gateway,
+  payment-service,web-portal,core-banking,account-service,transaction-service,
+  fraud-detection,notification-service}/`, `shared/svid_sign.py`, `k8s/financial/`,
+  `opa/{policies,config,deployment.yaml}`, `policy/service-graph.yaml`,
+  8 SPIRE entry finance (live).
+- **GIỮ:** `posture-agent-cronjob` + `security-scanner-job` (move `k8s/crapi/`),
+  redis (databases-aws.yaml), device-posture/trust (bff), step-up, PLG, SOAR/ai/scorer engine.
+
+**Nghiệm thu Phase 5 (running system):**
+```
+legit GET workshop/community/identity  → 200
+RBAC user DELETE admin video            → 403 ; admin → 404 (authz pass)
+RBAC soc-analyst POST                   → 403
+step-up order acr=1                     → 401
+BOLA (vuln crAPI)                       → 200 (còn nguyên)
+lateral movement (OPA REST eval)        → result:false
+health-check.sh                         → FAIL=0
+SPIRE entries                           → AWS 4 / OS 2 (chỉ crapi)
+namespace financial                    → NotFound (đã xoá 2 cluster)
+```
+
+### PHASE 7 — Detection (LIGHT, 2026-09-09) — một phần
+Đã làm: alert rule `access-denied` (OPA deny spike), `lateral-movement` (deny +
+`request_path` API nghiệp vụ), `brute-force` (login/OTP crapi-identity),
+`bfla` (bff `rbac_denied`, thay fraud-gate-bypass), `large-response`+`privilege-escalation`
+(ns→crapi). `security-control-plane`+`soar-engine` alert: infra, không đổi.
+promtail `opa-decisions` regex `:path`→`[:]?path`. Verified qua Loki: access-denied
+query = 50/10m, lateral-movement = 32/10m sau khi sinh deny thật.
+
+**CÒN LẠI Phase 7 (việc tương lai — không chặn target):** script tấn công crAPI
+thật (`tests/crapi_*.sh` thay `grafana_kb*.sh`), dashboard Grafana theo attack
+surface crAPI, verify end-to-end Grafana alert → webhook → SOAR case → playbook,
+tinh chỉnh ngưỡng, `tests/test_service_graph_consistency.py` cho crapi.
+
+### PHASE 6 — Reproducibility — ⏳ CẦN NGƯỜI DÙNG
+Agent KHÔNG chạy được `terraform destroy`/`apply` (classifier chặn). Đường
+fresh-deploy đã review + sửa các điểm gãy (BATCHES, ingress, realm-config,
+namespaces, generators, provider). Cần người dùng chạy:
+```
+bash scripts/destroy-all.sh          # hoặc terraform destroy 2 chiều
+export $(grep -v '^#' .env | xargs)  # AWS creds (cho SG rule mới + SAML)
+bash scripts/deploy-all.sh           # fresh — kỳ vọng ra crapi + ZTA
+```
+Nghiệm thu: xem TARGET-CRAPI.md §7.
