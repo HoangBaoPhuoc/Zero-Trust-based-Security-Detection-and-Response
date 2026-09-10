@@ -35,5 +35,7 @@ echo
 echo "Tiếp theo (≤2 phút):"
 echo "  1. Grafana  http://localhost:3000  → Alerting → Alert rules → folder ZTLab (xem rule chuyển Firing)"
 echo "  2. Evidence http://localhost:8091/evidence  (bundle mới theo attack_type)"
-echo "  3. MailHog  http://localhost:8025  (mail HITL cho case severity cao)"
+echo "  3. MailHog  http://localhost:8025  (mail signup/reset crAPI)"
+echo
+echo "Đối chứng WAF/CRS (chạy riêng): tests/crapi_sqli_waf.sh  (CRS bắt) · tests/crapi_bola.sh  (CRS mù)"
 [[ $failc -eq 0 ]] || exit 1

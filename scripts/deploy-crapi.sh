@@ -168,12 +168,14 @@ print('crapi keycloak config OK')
 
 deploy_bff() {
   [[ -d "$REPO_ROOT/services/bff" && -f "$CRAPI_DIR/bff.yaml" ]] || { log "bff chưa có (Phase 2) — bỏ qua"; return; }
-  step "BFF (edge PEP + Keycloak)"
+  step "BFF (edge PEP + Keycloak) + WAF (ModSecurity/CRS DetectionOnly)"
   kaws apply -f "$CRAPI_DIR/bff.yaml"
+  [[ -f "$CRAPI_DIR/waf.yaml" ]] && kaws apply -f "$CRAPI_DIR/waf.yaml"
   kaws apply -f "$CRAPI_DIR/ingress-aws.yaml"
   kos apply -f "$CRAPI_DIR/ingress-os.yaml"
   wait_rollout "$AWS_CONTEXT" crapi deployment/bff 240s
-  ok "bff"
+  [[ -f "$CRAPI_DIR/waf.yaml" ]] && wait_rollout "$AWS_CONTEXT" crapi deployment/waf 240s
+  ok "bff + waf"
 }
 
 deploy_crapi_opa() {

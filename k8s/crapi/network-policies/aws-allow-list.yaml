@@ -15,7 +15,7 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   ingress:
-    # Traefik (kube-system) → bff :8080
+    # Traefik (kube-system) → waf :8080 (A2 edge) → bff :8080
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: kube-system }

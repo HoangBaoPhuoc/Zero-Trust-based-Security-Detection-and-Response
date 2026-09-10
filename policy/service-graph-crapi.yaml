@@ -13,6 +13,7 @@
 trust_domain: ztlab.local
 
 workloads:
+  aws/waf:              { cluster: aws, namespace: crapi, service_account: waf }
   aws/bff:              { cluster: aws, namespace: crapi, service_account: bff }
   aws/crapi-web:        { cluster: aws, namespace: crapi, service_account: crapi-web }
   aws/crapi-community:  { cluster: aws, namespace: crapi, service_account: crapi-community }
@@ -26,6 +27,21 @@ workloads:
   openstack/opa:            { cluster: openstack, namespace: crapi, app_label: opa, spiffe: false }
 
 edges:
+  # ── Biên: Traefik → WAF (ModSecurity/CRS DetectionOnly) → bff ─────────────
+  # WAF là proxy tin cậy đứng trước bff; mọi method/path đi qua. CRS chỉ ghi
+  # nhận (DetectionOnly), không đổi quyết định OPA ở hop này.
+  - from: aws/waf
+    to: aws/bff
+    rules:
+      - { method: GET,     paths: ["/"] }
+      - { method: POST,    paths: ["/"] }
+      - { method: PUT,     paths: ["/"] }
+      - { method: DELETE,  paths: ["/"] }
+      - { method: PATCH,   paths: ["/"] }
+      - { method: HEAD,    paths: ["/"] }
+      - { method: OPTIONS, paths: ["/"] }
+    l4_ports: [8080, 15006]
+
   # ── Bắc–Nam: bff (điểm vào) → crAPI ──────────────────────────────────────
   - from: aws/bff
     to: openstack/crapi-identity

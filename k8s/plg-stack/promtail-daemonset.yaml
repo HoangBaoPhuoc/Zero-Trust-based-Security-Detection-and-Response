@@ -211,6 +211,63 @@ data:
             regex: (.+)/(.+)
             replacement: /var/log/pods/*$1/$2/*.log
 
+      # A2 — ModSecurity/CRS JSON audit log from the `waf` container stdout.
+      # Engine is DetectionOnly, so a record here means CRS *flagged* the request
+      # but let it through. The full JSON transaction is shipped verbatim
+      # (queryable via `| json`); labels stay low-cardinality.
+      - job_name: waf-audit-k8s
+        kubernetes_sd_configs:
+          - role: pod
+            api_server: https://10.10.1.10:6443
+            tls_config:
+              insecure_skip_verify: true
+            authorization:
+              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        pipeline_stages:
+          - cri: {}
+          # ModSec audit lines are a JSON object with a top-level "transaction";
+          # nginx access lines are not — drop everything without "transaction".
+          - match:
+              selector: '{job="waf-audit"} !~ "\"transaction\""'
+              action: drop
+          # ModSec v3 JSON audit: fields live under `transaction` (not audit_data).
+          - json:
+              expressions:
+                transaction_id: transaction.unique_id
+                client_ip: transaction.client_ip
+                request_uri: transaction.request.uri
+                request_method: transaction.request.method
+                response_code: transaction.response.http_code
+                secrules_engine: transaction.producer.secrules_engine
+          - labels:
+              request_method:
+              secrules_engine:
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: keep
+            regex: ${NODE_NAME}
+          - source_labels: [__meta_kubernetes_namespace]
+            action: keep
+            regex: crapi
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            action: keep
+            regex: waf
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - target_label: job
+            replacement: waf-audit
+          - target_label: cloud
+            replacement: ${CLOUD_PROVIDER}
+          - target_label: env
+            replacement: ztlab
+          - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            target_label: __path__
+            separator: /
+            regex: (.+)/(.+)
+            replacement: /var/log/pods/*$1/$2/*.log
+
       - job_name: system-aws
         static_configs:
           - targets: ["localhost"]
