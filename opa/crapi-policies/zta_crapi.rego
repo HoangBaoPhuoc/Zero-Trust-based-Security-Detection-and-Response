@@ -39,9 +39,13 @@ bearer_token := t if {
   t := substring(raw, 7, -1)
 }
 
+# A1: Keycloak moved to OpenStack — OPA (AWS) reaches it via the cross-cloud
+# selectorless Service keycloak-openstack:30091 (→ os-k3s-master NodePort → WG).
+# Only the AWS PDP (zta/crapi/authz/allow) evaluates this; the OpenStack PDP
+# (crosscloud) never does, so the name not resolving there is harmless.
 jwks_response := http.send({
   "method": "GET",
-  "url": "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs",
+  "url": "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/protocol/openid-connect/certs",
   "force_cache": true,
   "force_cache_duration_seconds": 300,
   "raise_error": false,
@@ -49,7 +53,7 @@ jwks_response := http.send({
 
 discovery_response := http.send({
   "method": "GET",
-  "url": "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/.well-known/openid-configuration",
+  "url": "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/.well-known/openid-configuration",
   "force_cache": true,
   "force_cache_duration_seconds": 300,
   "raise_error": false,

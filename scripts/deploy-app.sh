@@ -83,6 +83,13 @@ kos() {
   kubectl --context "$OS_CONTEXT" "$@"
 }
 
+# A1: Keycloak (+ keycloak-db, openldap) chạy trên cụm OpenStack (Nghị định 53).
+# Mọi bước thao tác Keycloak Admin API / manifest identity dùng context này.
+KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
+kkc() {
+  kubectl --context "$KEYCLOAK_CONTEXT" "$@"
+}
+
 verify_context() {
   local ctx="$1"
   kubectl --context "$ctx" get nodes --request-timeout=10s >/dev/null 2>&1 \
@@ -246,23 +253,23 @@ deploy_openldap_and_federation() {
     return
   fi
 
-  kaws apply -f "$REPO_ROOT/k8s/identity/openldap.yaml"
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod -l app=openldap -n identity-directory --timeout=90s
-  kaws apply -f "$REPO_ROOT/k8s/identity/openldap-seed-job.yaml"
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=complete job/openldap-seed -n identity-directory --timeout=60s || true
+  kkc apply -f "$REPO_ROOT/k8s/identity/openldap.yaml"
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod -l app=openldap -n identity-directory --timeout=90s
+  kkc apply -f "$REPO_ROOT/k8s/identity/openldap-seed-job.yaml"
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=complete job/openldap-seed -n identity-directory --timeout=60s || true
 
   local admin_pass
-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
+  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
 
   # Component idempotency: realm-config.json also declares this LDAP provider
   # for a FRESH Keycloak import, but Keycloak's --import-realm only runs on
   # first boot of a realm — it will not retrofit this component onto an
   # already-imported realm. Register it live via Admin API too so it exists
   # even when Keycloak itself wasn't redeployed this run.
-  kaws delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kaws run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
+  kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
 import urllib.request, json, urllib.parse, urllib.error
 
 tok_data = urllib.parse.urlencode({'grant_type':'password','client_id':'admin-cli','username':'admin','password':'$admin_pass'}).encode()
@@ -296,7 +303,7 @@ else:
     urllib.request.urlopen(req)
     print('ldap-directory component created')
 " || warn "OpenLDAP Keycloak federation setup failed (non-fatal — demo/illustration component)"
-  kubectl --context "$AWS_CONTEXT" delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
   ok "OpenLDAP deployed, seeded, and registered as Keycloak User Federation (READ_ONLY, demo directory — not a real corporate LDAP)"
 }
@@ -309,7 +316,7 @@ deploy_audience_mapper() {
   fi
 
   local admin_pass
-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
+  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
 
   # Same idempotency caveat as deploy_openldap_and_federation: realm-config.json
   # now declares this mapper for a FRESH import, but --import-realm won't
@@ -317,10 +324,10 @@ deploy_audience_mapper() {
   # this exact mapper was added by hand via Admin API in a previous session,
   # then silently lost on the next from-scratch deploy-all.sh because it lived
   # nowhere else). Register it live too so every deploy ends up with it.
-  kaws delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kaws run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
+  kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
 import urllib.request, json, urllib.parse
 
 tok_data = urllib.parse.urlencode({'grant_type':'password','client_id':'admin-cli','username':'admin','password':'$admin_pass'}).encode()
@@ -353,7 +360,7 @@ for client_id in ('crapi-bff',):
     urllib.request.urlopen(req)
     print(client_id, '-> aud-crapi-bff mapper created')
 " || warn "Keycloak Audience mapper setup failed (non-fatal — but T-1.4 audience check degrades to a no-op without it, see KET-QUA-KIEM-TRA.md)"
-  kubectl --context "$AWS_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
   ok "Keycloak Audience mapper ensured on crapi-bff client"
 }
@@ -366,17 +373,17 @@ deploy_stepup_flow() {
   fi
 
   local admin_pass
-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
+  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
 
   # Same idempotency caveat as deploy_audience_mapper/deploy_openldap_and_federation:
   # client "crapi-bff-stepup" comes from realm-config.json on fresh --import-realm,
   # but the authentication flow it needs to bind to does NOT — it was hand-built via
   # Admin API in a prior session and lost on the next from-scratch deploy (see
   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
-  kaws delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kaws run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
+  kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
 import urllib.request, json, urllib.parse
 
 KC = 'http://keycloak.identity.svc.cluster.local:8080'
@@ -479,7 +486,7 @@ else:
           'credentials': [{'type': 'password', 'value': 'StepupDemo123!', 'temporary': False}]})
     print('stepup-demo user created (requiredActions=CONFIGURE_TOTP, needs one interactive login to enroll real OTP)')
 " || warn "Keycloak browser-stepup flow setup failed (non-fatal — but T-4.2 step-up OTP degrades to no-op without it, see VIEC-CON-TON-DONG.md item 1)"
-  kubectl --context "$AWS_CONTEXT" delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
   ok "Keycloak browser-stepup flow ensured, bound to crapi-bff-stepup client"
 }
@@ -503,14 +510,14 @@ deploy_aws_saml_federation() {
   # kubectl run --rm's own "pod ... deleted" status line can land on stdout
   # and corrupt a captured file — use a plain pod + exec + explicit delete
   # instead of --rm to keep the captured metadata byte-exact.
-  kaws delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kaws run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --command -- sh -c "sleep 30" >/dev/null
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
-  kaws delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --command -- sh -c "sleep 30" >/dev/null
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
+  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
+  kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
   if ! python3 -c "import xml.dom.minidom; xml.dom.minidom.parse('$meta_file')" 2>/dev/null; then
-    warn "Keycloak SAML metadata unreachable or invalid (is Keycloak Running? check: kubectl --context $AWS_CONTEXT get pods -n identity) — skipping AWS SAML federation, non-fatal"
+    warn "Keycloak SAML metadata unreachable or invalid (is Keycloak Running? check: kubectl --context $KEYCLOAK_CONTEXT get pods -n identity) — skipping AWS SAML federation, non-fatal"
     rm -f "$meta_file"
     return
   fi
@@ -544,7 +551,7 @@ keycloak_admin_password() {
   fi
 
   local encoded
-  encoded="$(kaws -n identity get secret keycloak-secret -o jsonpath='{.data.admin-password}' 2>/dev/null || true)"
+  encoded="$(kkc -n identity get secret keycloak-secret -o jsonpath='{.data.admin-password}' 2>/dev/null || true)"
   if [[ -n "$encoded" ]]; then
     printf '%s' "$encoded" | base64 -d
     return

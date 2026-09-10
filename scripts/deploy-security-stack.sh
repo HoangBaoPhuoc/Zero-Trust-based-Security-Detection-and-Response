@@ -92,8 +92,11 @@ random_secret() {
   openssl rand -base64 32 2>/dev/null || date +%s%N
 }
 
+# A1: Keycloak (+ keycloak-db, openldap) chạy trên cụm OpenStack — Nghị định 53.
+KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
+
 ensure_keycloak_secret() {
-  if kubectl --context $AWS_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
+  if kubectl --context $KEYCLOAK_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
     log_info "Keycloak secret already exists"
     return
   fi
@@ -102,10 +105,10 @@ ensure_keycloak_secret() {
   admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(random_secret)}"
   postgres_password="${KEYCLOAK_DB_PASSWORD:-$(random_secret)}"
 
-  kubectl --context $AWS_CONTEXT -n identity create secret generic keycloak-secret \
+  kubectl --context $KEYCLOAK_CONTEXT -n identity create secret generic keycloak-secret \
     --from-literal=admin-password="$admin_password" \
     --from-literal=postgres-password="$postgres_password"
-  log_info "Created keycloak-secret from environment/random values"
+  log_info "Created keycloak-secret from environment/random values (ctx=$KEYCLOAK_CONTEXT)"
 }
 
 deploy_step_1_namespaces() {
@@ -122,16 +125,16 @@ deploy_step_1_namespaces() {
 }
 
 deploy_step_2_keycloak() {
-  log_step "2. Deploy Keycloak (AWS only)"
+  log_step "2. Deploy Keycloak (OpenStack — A1, Nghị định 53)"
 
   log_info "Creating Keycloak secrets..."
   ensure_keycloak_secret
 
   log_info "Deploying Keycloak PostgreSQL..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
 
   log_info "Keycloak DB deployment initiated (waiting up to 60s - in lab it may timeout, that's OK)..."
-  kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
+  kubectl --context $KEYCLOAK_CONTEXT wait --for=condition=Ready pod \
     -l app=keycloak-db -n identity --timeout=60s 2>/dev/null || {
     log_info "DB pod still starting (node may be recovering - this is normal in lab environment)"
   }
@@ -144,23 +147,26 @@ deploy_step_2_keycloak() {
   # remembered to edit both. Generate the ConfigMap from the file directly so
   # there is exactly one place to edit.
   log_info "Deploying Keycloak realm config..."
-  kubectl --context $AWS_CONTEXT -n identity create configmap keycloak-realm-config \
+  kubectl --context $KEYCLOAK_CONTEXT -n identity create configmap keycloak-realm-config \
     --from-file=realm-config.json="$REPO_ROOT/k8s/keycloak/realm-config.json" \
-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
+    --dry-run=client -o yaml | kubectl --context $KEYCLOAK_CONTEXT apply -f -
 
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
+  # A1: Keycloak UI ingress theo Keycloak — chuyển sang cụm OpenStack.
+  [[ -f "$REPO_ROOT/k8s/identity/ingress-os.yaml" ]] && \
+    kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/ingress-os.yaml"
 
   log_info "Keycloak deployment initiated (can take 5-10 minutes on first startup with DB setup)"
   log_info "Note: Keycloak is not a blocking dependency for SPIRE/OPA, so we proceed with deployment"
   log_info "To wait for Keycloak readiness manually:"
-  log_info "  kubectl --context ctx-aws wait --for=condition=Ready pod -l app=keycloak -n identity --timeout=600s"
+  log_info "  kubectl --context $KEYCLOAK_CONTEXT wait --for=condition=Ready pod -l app=keycloak -n identity --timeout=600s"
   
   # Don't block on Keycloak startup in lab environment
   # kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
   #   -l app=keycloak -n identity --timeout=${TIMEOUT_KEYCLOAK}s || {
   #   log_error "Keycloak Pod failed to start within ${TIMEOUT_KEYCLOAK}s. Checking logs for details..."
-  #   kubectl --context $AWS_CONTEXT logs -l app=keycloak -n identity --tail=50
+  #   kubectl --context $KEYCLOAK_CONTEXT logs -l app=keycloak -n identity --tail=50
   #   exit 1
   # }
 
@@ -367,8 +373,8 @@ verify_deployment() {
   kubectl --context $AWS_CONTEXT get ns
 
   log_info ""
-  log_info "Keycloak pods on AWS:"
-  kubectl --context $AWS_CONTEXT get pods -n identity
+  log_info "Keycloak pods on OpenStack (A1):"
+  kubectl --context $KEYCLOAK_CONTEXT get pods -n identity
 
   log_info ""
   log_info "SPIRE pods on AWS:"
@@ -393,7 +399,7 @@ verify_deployment() {
   log_info ""
 
   log_step "6.1 Readiness checks"
-  check_rollout "$AWS_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
+  check_rollout "$KEYCLOAK_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
   check_rollout "$AWS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$AWS_CONTEXT" "spire" "spire-agent" "true"
   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"

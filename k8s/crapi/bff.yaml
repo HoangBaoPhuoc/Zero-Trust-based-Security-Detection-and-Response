@@ -51,8 +51,10 @@ spec:
           env:
             - name: CLOUD_PROVIDER
               value: "aws"
+            # A1: Keycloak trên OpenStack — BFF proxy /kc/* + token/authorize qua
+            # selectorless Service cross-cloud (k8s/crapi/cross-cloud-aws.yaml).
             - name: KEYCLOAK_URL
-              value: "http://keycloak.identity.svc.cluster.local:8080"
+              value: "http://keycloak-openstack.crapi.svc.cluster.local:30091"
             - name: KEYCLOAK_PUBLIC_URL
               value: "http://keycloak.ztlab.local:8180"
             - name: KC_EXTERNAL_HOST

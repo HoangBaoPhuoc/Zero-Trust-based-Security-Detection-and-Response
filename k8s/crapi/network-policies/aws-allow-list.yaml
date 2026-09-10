@@ -63,12 +63,8 @@ spec:
         - { port: 6379, protocol: TCP }
         - { port: 27017, protocol: TCP }
         - { port: 15006, protocol: TCP }
-    # bff → Keycloak (identity ns) :8080
-    - to:
-        - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: identity }
-      ports:
-        - { port: 8080, protocol: TCP }
+    # A1: Keycloak chuyển sang OpenStack — bff/opa → Keycloak nay đi cross-cloud
+    # (ipBlock 192.168.101.0/24:30091 bên dưới), không còn hop tới ns identity AWS.
     # bff audit + (tương lai) log → Loki (plg-stack) :3100
     - to:
         - namespaceSelector:
@@ -76,12 +72,13 @@ spec:
       ports:
         - { port: 3100, protocol: TCP }
     # Cross-cloud: AWS crapi → OpenStack NodePort qua WireGuard
-    #   30090 = crapi-identity, 30432 = postgresdb
+    #   30090 = crapi-identity, 30432 = postgresdb, 30091 = keycloak (A1)
     - to:
         - ipBlock: { cidr: 192.168.101.0/24 }
       ports:
         - { port: 30090, protocol: TCP }
         - { port: 30432, protocol: TCP }
+        - { port: 30091, protocol: TCP }
     # istio-proxy sidecar → istiod (CA + xDS) :15012
     - to:
         - namespaceSelector:
