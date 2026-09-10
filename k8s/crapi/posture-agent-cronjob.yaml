@@ -1,13 +1,10 @@
-# Device/workload posture detection layer — completes the Device Posture
-# pillar left half-finished by an earlier plan pass: opa/policies/zta_policy.rego
-# already had `posture_compliant` (defaults to true when the caller sends no
-# X-Device-Posture header, so it never broke existing traffic), and
-# tests/grafana_kb_t5_noncompliant_device.sh already proved the Rego logic
-# denies correctly in isolation — but nothing in the cluster ever actually
-# produced that header. This CronJob is the missing signal source.
+# Device/workload posture detection layer — nguồn tín hiệu cho pillar Device
+# Posture. `opa/crapi-policies/zta_crapi.rego` có `posture_compliant` (default
+# true khi không có header X-Device-Posture → không phá traffic hiện hữu).
+# CronJob này là nguồn sinh header đó (bff cũng tự tính posture của chính nó).
 #
-# Compliance bar is intentionally loose, not "must be non-root": a live check
-# on 2026-08-23 found every financial-namespace service running as uid=0 with
+# Compliance bar cố tình lỏng, không phải "must be non-root": kiểm tra thực tế
+# thấy mọi service (kể cả crAPI upstream) chạy uid=0 với
 # a readable /etc/shadow (no securityContext set anywhere) — the exact
 # "violation" signature k8s/crapi/security-scanner-job.yaml uses to
 # simulate a misconfigured pod for the KB6 demo. Enforcing that same bar here

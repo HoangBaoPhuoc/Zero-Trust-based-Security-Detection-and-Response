@@ -118,7 +118,7 @@ wait_statefulset() {
 }
 
 regenerate_policy_files() {
-  step "Step 0b: Regenerate OPA/NetworkPolicy files from policy/service-graph.yaml"
+  step "Step 0b: Regenerate OPA/NetworkPolicy từ policy/service-graph-crapi.yaml"
   # Safety net for VIEC-CON-TON-DONG.md item 3: opa/policies/service_acl.rego
   # and k8s/financial/network-policies/{aws,os}-pod-segmentation.yaml are
   # GENERATED from policy/service-graph.yaml, committed to the repo as the
@@ -130,7 +130,7 @@ regenerate_policy_files() {
   # No-op (git-clean) when service-graph.yaml already matches committed output.
   python3 "$REPO_ROOT/scripts/gen-rego-acl.py"
   python3 "$REPO_ROOT/scripts/gen-networkpolicy.py"
-  ok "Policy files regenerated (finance + crapi)"
+  ok "Policy files regenerated (crapi)"
 }
 
 apply_namespaces() {
@@ -139,7 +139,14 @@ apply_namespaces() {
   kos apply -f "$REPO_ROOT/k8s/namespaces.yaml"
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/namespace.yaml"
   kos apply -f "$REPO_ROOT/k8s/plg-stack/namespace.yaml"
-  ok "Namespaces ready on both clusters"
+
+  # CoreDNS override cho cluster OpenStack: chặn search-domain `openstacklocal`
+  # bằng NXDOMAIN tức thì để DNS nội cụm không treo khi upstream (8.8.8.8 qua
+  # uplink hotspot) timeout — nếu không, spire-agent dial spire-server timeout
+  # → SVID hết hạn → toàn mesh STRICT mТLS 503. Xem k8s/dns/*.
+  kos apply -f "$REPO_ROOT/k8s/dns/coredns-custom-openstack.yaml"
+  kos -n kube-system rollout restart deployment/coredns >/dev/null 2>&1 || true
+  ok "Namespaces + CoreDNS override ready on both clusters"
 }
 
 apply_network_policies() {
@@ -161,7 +168,7 @@ deploy_gatekeeper() {
 }
 
 deploy_istio() {
-  step "Step 1d: Istio (service mesh — all financial services migrated, both clouds, STRICT mTLS)"
+  step "Step 1d: Istio (service mesh — ns crapi, 2 cluster, STRICT mTLS)"
   local istio_version="1.22.3"
   local istioctl_bin="istioctl"
   if ! command -v istioctl >/dev/null 2>&1; then
@@ -295,7 +302,7 @@ else:
 }
 
 deploy_audience_mapper() {
-  step "Step 3b2: Keycloak Audience protocol mapper (web-portal/api-gateway -> aud=api-gateway)"
+  step "Step 3b2: Keycloak Audience protocol mapper (crapi-bff -> aud=crapi-bff)"
   if [[ "$SKIP_SECURITY_STACK" == true ]]; then
     log "Skipping Audience mapper (security stack was skipped, Keycloak not available)"
     return
@@ -348,7 +355,7 @@ for client_id in ('crapi-bff',):
 " || warn "Keycloak Audience mapper setup failed (non-fatal — but T-1.4 audience check degrades to a no-op without it, see KET-QUA-KIEM-TRA.md)"
   kubectl --context "$AWS_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
-  ok "Keycloak Audience mapper ensured on web-portal + api-gateway clients"
+  ok "Keycloak Audience mapper ensured on crapi-bff client"
 }
 
 deploy_stepup_flow() {
@@ -569,7 +576,7 @@ create_ai_secret() {
     --from-literal=SOAR_AUTO_EXECUTE="${SOAR_AUTO_EXECUTE:-true}" \
     --from-literal=SOAR_MIN_SEVERITY="medium" \
     --from-literal=SOAR_MIN_CONFIDENCE="0.50" \
-    --from-literal=SOAR_NAMESPACE="financial" \
+    --from-literal=SOAR_NAMESPACE="crapi" \
     --from-literal=SOAR_ALLOWED_CONTEXTS="${SOAR_ALLOWED_CONTEXTS:-ctx-aws,ctx-openstack}" \
     --from-literal=SOAR_API_TOKEN="${SOAR_API_TOKEN:-}" \
     --from-literal=SOAR_CASE_STORE_PATH="/data/cases.jsonl" \
@@ -699,42 +706,6 @@ EOF
   ok "Vault ready: unsealed, kubernetes auth configured, grafana-smtp-secret seeded"
 }
 
-create_core_banking_integrity_secret() {
-  local secret_value
-  if kaws get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
-    secret_value="$(kaws -n financial get secret core-banking-integrity-secret -o jsonpath='{.data.shared-secret}' | base64 -d)"
-    log "core-banking-integrity-secret already exists on AWS"
-  else
-    secret_value="$(openssl rand -hex 32 2>/dev/null || date +%s%N)"
-    kaws create secret generic core-banking-integrity-secret -n financial \
-      --from-literal=shared-secret="$secret_value"
-    ok "core-banking-integrity-secret created on AWS"
-  fi
-
-  if kos get secret core-banking-integrity-secret -n financial >/dev/null 2>&1; then
-    log "core-banking-integrity-secret already exists on OpenStack"
-  else
-    kos create secret generic core-banking-integrity-secret -n financial \
-      --from-literal=shared-secret="$secret_value"
-    ok "core-banking-integrity-secret created on OpenStack"
-  fi
-}
-
-create_financial_runtime_secrets() {
-  if kaws get secret web-portal-secret -n financial >/dev/null 2>&1; then
-    log "web-portal-secret already exists"
-    return
-  fi
-
-  local admin_password session_secret
-  admin_password="$(keycloak_admin_password)"
-  session_secret="$(openssl rand -hex 32 2>/dev/null || date +%s%N)"
-  kaws create secret generic web-portal-secret -n financial \
-    --from-literal=admin-password="$admin_password" \
-    --from-literal=session-secret="$session_secret"
-  ok "web-portal-secret created"
-}
-
 provision_grafana_configmaps() {
   log "Provisioning Grafana ConfigMaps"
   kaws delete configmap grafana-datasources grafana-dashboard-provider grafana-dashboards grafana-alerting \
@@ -751,10 +722,11 @@ provision_grafana_configmaps() {
     --from-file=envoy-access-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/envoy-access-logs.json" \
     --from-file=opa-decision-log.json="$REPO_ROOT/plg-stack/grafana/dashboards/opa-decision-log.json" \
     --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json" \
-    --from-file=ztlab-soar-dashboard.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-soar-dashboard.json"
+    --from-file=ztlab-soar-dashboard.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-soar-dashboard.json" \
+    --from-file=crapi-attack-surface.json="$REPO_ROOT/plg-stack/grafana/dashboards/crapi-attack-surface.json"
   kaws create configmap grafana-alerting -n plg-stack \
     --from-file=brute-force-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/brute-force-alert.yml" \
-    --from-file=fraud-gate-bypass-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/fraud-gate-bypass-alert.yml" \
+    --from-file=bfla-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/bfla-alert.yml" \
     --from-file=large-response-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/large-response-alert.yml" \
     --from-file=lateral-movement-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/lateral-movement-alert.yml" \
     --from-file=access-denied-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/access-denied-alert.yml" \

@@ -1,0 +1,34 @@
+# CoreDNS override cho cluster k3s OpenStack.
+#
+# Vì sao cần: Neutron DHCP cấp cho VM domain search "openstacklocal". Pod k8s
+# thừa hưởng nó vào /etc/resolv.conf `search` (sau các domain cluster.local).
+# Với ndots:5, một tên như `spire-server.spire.svc.cluster.local` (4 dấu chấm)
+# bị thử QUA các search domain trước → `...svc.cluster.local.openstacklocal` →
+# KHÔNG khớp plugin `kubernetes` → CoreDNS `forward` ra `/etc/resolv.conf`
+# (8.8.8.8). Uplink internet của host `aio` là hotspot điện thoại (172.20.10.x)
+# chặn/timeout UDP/53 → mỗi lần resolve treo 10s+ → spire-agent dial
+# spire-server:8081 timeout 30s → không attest được → SVID hết hạn → toàn mesh
+# STRICT mТLS 503.
+#
+# Fix: trả NXDOMAIN tức thì cho MỌI truy vấn `*.openstacklocal` (đằng nào cũng
+# là rác từ việc nối search domain), để resolver chuyển sang tên tuyệt đối
+# `...cluster.local.` và khớp plugin kubernetes ngay.
+#
+# k3s coredns Deployment đã mount sẵn ConfigMap `coredns-custom` vào
+# /etc/coredns/custom/ và Corefile có `import /etc/coredns/custom/*.server`.
+#
+# Áp: kubectl --context ctx-openstack apply -f k8s/dns/coredns-custom-openstack.yaml
+#     kubectl --context ctx-openstack -n kube-system rollout restart deployment/coredns
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  openstacklocal.server: |
+    openstacklocal:53 {
+        template ANY ANY {
+            rcode NXDOMAIN
+        }
+    }

@@ -8,20 +8,19 @@
 #
 # UI sau khi bật:
 #   Keycloak     → http://localhost:8180   (admin / ztlab-admin-2026)
-#   API Gateway  → http://localhost:18080
-#   Web Portal   → http://localhost:18081
+#   crAPI (BFF)  → http://localhost:18081   (entry point duy nhất — SPA + login OIDC)
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
 #   SOAR Engine  → http://localhost:8091
 #   AI Analyzer  → http://localhost:18082
 #   Scorer       → http://localhost:18092
 #   Prometheus   → http://localhost:9090
-#   pgAdmin      → http://localhost:5050   (admin@ztlab.com / ztlab2026)
-#   RedisInsight → http://localhost:5540
+#   MailHog      → http://localhost:8025   (mail signup/reset crAPI — cluster OpenStack)
 
 set -euo pipefail
 
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
+OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 PID_DIR="/tmp/ztlab-pf"
 LOG_FILE="/tmp/ztlab-pf.log"
 
@@ -106,18 +105,16 @@ show_status() {
   echo "=== ZTLab — Port-forward status ==="
   declare -A PORT_NAMES=(
     [8180]="Keycloak"
-    [18080]="API Gateway"
-    [18081]="Web Portal"
+    [18081]="crAPI (BFF)"
     [3000]="Grafana"
     [13100]="Loki"
     [8091]="SOAR Engine"
     [18082]="AI Analyzer"
     [18092]="Security Scorer"
     [9090]="Prometheus"
-    [5050]="pgAdmin"
-    [5540]="RedisInsight"
+    [8025]="MailHog"
   )
-  for port in 8180 18080 18081 3000 13100 8091 18082 18092 9090 5050 5540; do
+  for port in 8180 18081 3000 13100 8091 18082 18092 9090 8025; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -155,9 +152,11 @@ echo ""
 
 # Identity
 start_pf_daemon "Keycloak"            identity   keycloak          8180  8080
-# Financial
-start_pf_daemon "API Gateway"         financial  api-gateway      18080  8080
-start_pf_daemon "Web Portal"          financial  web-portal       18081  8080
+# crAPI (ứng dụng mục tiêu) — BFF là entry point DUY NHẤT (serve luôn SPA
+# crapi-web + /identity /community /workshop + login Keycloak OIDC). Cổng 18081
+# vì đó là redirectUri đã đăng ký cho client crapi-bff (BFF tự dựng
+# redirect_uri = <host đang gọi>/auth/callback → phải khớp Keycloak).
+start_pf_daemon "crAPI (BFF)"         crapi      bff              18081  8080
 # PLG Stack
 start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
 start_pf_daemon "Loki"                plg-stack  loki             13100  3100
@@ -174,16 +173,14 @@ start_pf_daemon "AI Analyzer"         plg-stack  ai-analyzer      18082  8080
 start_pf_daemon "Security Scorer"     plg-stack  security-scorer  18092  8080
 # Monitoring
 start_pf_daemon "Prometheus"          monitoring prometheus        9090  9090
-# DB Admin (cả hai chạy trên AWS cluster)
-start_pf_daemon "pgAdmin"             financial  pgadmin           5050  80
-start_pf_daemon "RedisInsight"        financial  redisinsight      5540  5540
+# Mail — mailhog nằm ở cluster OpenStack (cạnh crapi-identity)
+start_pf_daemon "MailHog"             crapi      mailhog           8025  8025  "$OS_CONTEXT"
 
 echo ""
 echo "Credentials:"
-echo "  Keycloak:  admin / ztlab-admin-2026"
-echo "  Grafana:   admin / ZTALab2026!"
-echo "  pgAdmin:   admin@ztlab.com / ztlab2026"
-echo "  Web Portal: testuser01 / Test1234!"
+echo "  Keycloak:   admin / ztlab-admin-2026"
+echo "  Grafana:    admin / ZTALab2026!"
+echo "  crAPI login (qua BFF, Keycloak OIDC): testuser01 / Test1234!  (demoadmin / Test1234! cho admin)"
 echo ""
 echo "Daemon tự restart nếu kubectl port-forward chết."
 echo "Dừng tất cả: bash scripts/open-admin-uis.sh stop"

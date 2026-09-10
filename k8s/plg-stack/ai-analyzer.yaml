@@ -42,7 +42,6 @@ data:
 
     MALICIOUS_PATTERNS = [
         (re.compile(r"jwt_verification_failed|invalid_credentials|auth_failures_total|brute.?force|too.?many.?(request|attempt|login|failure)", re.I), "brute_force"),
-        (re.compile(r"fraud_gate_bypass|fraud.gate|bypass.fraud", re.I), "fraud_gate_bypass"),
         (re.compile(r"lateral.?move|unauthorized_service_call|invalid.*svid|spiffe.*den|svid_not_authorized", re.I), "lateral_movement"),
         (re.compile(r"port.?scan|nmap|masscan|syn.?scan|network.?discover|ports_tried", re.I), "port_scan"),
         (re.compile(r"privilege.?escalation|setuid|cap_sys_admin", re.I), "privilege_escalation"),
@@ -62,7 +61,6 @@ data:
         "brute_force": "revoke_user_sessions",
         "credential_stuffing": "revoke_user_sessions",
         "jwt_replay": "revoke_user_sessions",
-        "fraud_gate_bypass": "isolate_workload",
         "lateral_movement": "isolate_workload",
         "account_manipulation": "isolate_workload",
         "large_response": "restrict_egress",
@@ -78,7 +76,6 @@ data:
 
     ATTACK_MITRE = {
         "brute_force": "T1110.001", "credential_stuffing": "T1110.004",
-        "jwt_replay": "T1550.001", "fraud_gate_bypass": "T1078.004",
         "lateral_movement": "T1021.007", "account_manipulation": "T1531",
         "large_response": "T1041", "data_staging": "T1074",
         "cryptomining": "T1496", "container_escape": "T1611",
@@ -217,12 +214,12 @@ data:
         return None
 
     def _infer_affected_service(text, reasons):
-        known = ["api-gateway", "payment-service", "fraud-detection", "notification-service", "core-banking", "account-service", "transaction-service"]
+        known = ["bff", "crapi-web", "crapi-community", "crapi-workshop", "crapi-identity", "postgresdb", "mailhog"]
         lowered = text.lower()
         for svc in known:
             if svc in lowered:
                 return svc
-        svc_map = {"fraud_gate_bypass": "payment-service", "lateral_movement": "core-banking", "cryptomining": "transaction-service", "large_response": "core-banking", "data_staging": "core-banking", "port_scan": "api-gateway", "exploit_probe": "api-gateway"}
+        svc_map = {"lateral_movement": "crapi-workshop", "large_response": "crapi-workshop", "data_staging": "crapi-workshop", "account_manipulation": "crapi-identity", "brute_force": "bff", "credential_stuffing": "bff", "access_denied": "bff", "jwt_replay": "bff", "port_scan": "bff", "exploit_probe": "bff"}
         for r in reasons:
             if r in svc_map:
                 return svc_map[r]
@@ -235,7 +232,6 @@ data:
         return None
 
     def _primary_attack_type(reasons):
-        priority = ["fraud_gate_bypass", "lateral_movement", "cryptomining", "container_escape", "large_response", "data_staging", "brute_force", "credential_stuffing", "jwt_replay", "port_scan", "exploit_probe", "privilege_escalation", "impair_defenses", "account_manipulation", "access_denied"]
         for a in priority:
             if a in reasons:
                 return a
@@ -303,7 +299,6 @@ data:
         unique_reasons = list(dict.fromkeys(reasons))
         flattened = " ".join(_flatten_log(e) for e in logs)
         primary = _primary_attack_type(unique_reasons)
-        critical_attacks = {"fraud_gate_bypass", "lateral_movement", "cryptomining", "container_escape", "privilege_escalation"}
         high_attacks = {"large_response", "brute_force", "credential_stuffing", "data_staging", "impair_defenses", "account_manipulation"}
         if critical_attacks & set(unique_reasons):
             severity = "critical"
@@ -605,7 +600,6 @@ spec:
             - name: AI_PROVIDER_COOLDOWN_SECONDS
               value: "900"
             - name: AI_ANALYZER_LOKI_QUERY
-              value: '{job=~"envoy-access|opa-decisions|kubernetes-pods"} |~ "(?i)(403|401|denied|fraud_gate_bypass|lateral|xmrig|cryptomin|port.scan|nmap|bytes_sent|large_response|unauthorized|svid|spiffe)"'
           readinessProbe:
             httpGet:
               path: /health

@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# Build ztlab/* images + pull crAPI images, sync to all K3s nodes to all K3s nodes (AWS + OpenStack)
-# so redeploy/recreate does not depend on external registry availability.
+# Build ztlab/* images (bff + detection engines) và import vào containerd của
+# mọi node K3s (AWS + OpenStack), để redeploy không phụ thuộc registry ngoài.
+# Ảnh bên thứ 3 (crAPI/postgres/mongo) KHÔNG build/sync ở đây — manifest ghim
+# digest, node tự pull. Đường air-gap cho ảnh bên thứ 3: `--pull-only`.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INVENTORY_FILE="$REPO_ROOT/ansible/inventory/hosts.yml"
-ARCHIVE_PATH="${ARCHIVE_PATH:-/tmp/ztlab-financial-images.tar}"
+ARCHIVE_PATH="${ARCHIVE_PATH:-/tmp/ztlab-app-images.tar}"
 IMAGE_TAG="${IMAGE_TAG:-1.0.0}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
-SKIP_PULL="${SKIP_PULL:-false}"
 BUILD_PAUSE_SECONDS="${BUILD_PAUSE_SECONDS:-5}"
 GROUP_PAUSE_SECONDS="${GROUP_PAUSE_SECONDS:-10}"
 MIN_SWAP_SIZE_GB="${MIN_SWAP_SIZE_GB:-8}"
@@ -115,35 +116,41 @@ build_images() {
   done
 }
 
-pull_images() {
-  log "Pulling 3rd-party images (crAPI + postgres + mongo), pinned by digest"
-  local pulled=()
+# ─────────────────────────────────────────────────────────────────────────────
+# Đường AIR-GAP tùy chọn (chỉ chạy qua `--pull-only`). KHÔNG nằm trong luồng
+# deploy mặc định: manifest `k8s/crapi/*` đã ghim ảnh bên thứ 3 bằng digest và
+# node K3s tự pull thẳng từ Docker Hub (giống hệt image istio/gatekeeper/opa/
+# redis/python — không cái nào được sync). Xem KET-QUA-CRAPI.md §1.1.
+#
+# LƯU Ý: `docker save` GỘP nhiều ảnh gốc multi-arch vào 1 tar → `ctr images
+# import` trên node lỗi `content digest sha256:…: not found` (blob thiếu trong
+# OCI index). Cách né: save + import TỪNG ảnh một, mỗi ảnh 1 tar tự nhất quán.
+pull_images_airgap() {
+  if [[ ! -f "$INVENTORY_FILE" ]]; then err "Inventory not found: $INVENTORY_FILE"; exit 1; fi
+  local pull_dir="${PULL_ARCHIVE%.tar}.d"
+  mkdir -p "$pull_dir"
+  log "Air-gap: pull + save + import 3rd-party images (crAPI + postgres + mongo), từng ảnh một"
+  local idx=0
   for spec in "${PULL_IMAGES[@]}"; do
-    local tagref="${spec%@*}"          # crapi/crapi-web:latest  |  postgres:14
-    local repo="${tagref%:*}"          # crapi/crapi-web         |  postgres
+    local tagref="${spec%@*}"              # crapi/crapi-web:latest  |  postgres:14
+    local repo="${tagref%:*}"              # crapi/crapi-web         |  postgres
     local digestref="${repo}@${spec#*@}"   # crapi/crapi-web@sha256:...
+    local tar="${pull_dir}/img$(printf '%02d' "$idx").tar"
+
     log "docker pull ${digestref}"
     docker pull --platform linux/amd64 "$digestref"
-    # Re-tag về :latest để manifest K8s (imagePullPolicy: IfNotPresent) khớp.
     docker tag "$digestref" "$tagref"
-    pulled+=("$tagref")
+
+    log "docker save ${tagref} -> ${tar}"
+    docker save -o "$tar" "$tagref"
+    ansible "$K3S_TARGETS" -i "$INVENTORY_FILE" -m copy \
+      -a "src=$tar dest=/tmp/$(basename "$tar") mode=0644"
+    ansible "$K3S_TARGETS" -i "$INVENTORY_FILE" -m shell \
+      -a "sudo -n ctr -n k8s.io images import /tmp/$(basename "$tar") && rm -f /tmp/$(basename "$tar")"
+    idx=$((idx + 1))
     sleep "$BUILD_PAUSE_SECONDS"
   done
-  log "Saving pulled images to ${PULL_ARCHIVE}"
-  docker save -o "$PULL_ARCHIVE" "${pulled[@]}"
-  ls -lh "$PULL_ARCHIVE"
-}
-
-copy_pull_archive_to_nodes() {
-  log "Copying ${PULL_ARCHIVE} to K3s nodes"
-  ansible "$K3S_TARGETS" -i "$INVENTORY_FILE" -m copy \
-    -a "src=$PULL_ARCHIVE dest=/tmp/$(basename "$PULL_ARCHIVE") mode=0644"
-}
-
-import_pull_archive_on_nodes() {
-  log "Importing ${PULL_ARCHIVE} into containerd on all K3s nodes"
-  ansible "$K3S_TARGETS" -i "$INVENTORY_FILE" -m shell \
-    -a "sudo -n ctr -n k8s.io images import /tmp/$(basename "$PULL_ARCHIVE")"
+  rm -rf "$pull_dir"
 }
 
 print_digests() {
@@ -243,15 +250,12 @@ main() {
   require_cmd ansible
   require_cmd kubectl
 
-  # --pull-only: bỏ qua build/save/import ảnh finance (đã có sẵn trên node),
-  # chỉ pull + import ảnh crAPI/postgres/mongo. Dùng khi thêm crAPI vào cụm
-  # đang chạy mà không muốn đụng lại toàn bộ finance images.
+  # --pull-only: chỉ chạy đường AIR-GAP (pull + save + import ảnh bên thứ 3
+  # crAPI/postgres/mongo vào containerd của node). Bình thường KHÔNG cần —
+  # node tự pull digest thẳng từ Docker Hub; dùng khi node thực sự bị air-gap.
   if [[ "${1:-}" == "--pull-only" ]]; then
-    if [[ ! -f "$INVENTORY_FILE" ]]; then err "Inventory not found: $INVENTORY_FILE"; exit 1; fi
-    pull_images
-    copy_pull_archive_to_nodes
-    import_pull_archive_on_nodes
-    log "Pull-only sync completed"
+    pull_images_airgap
+    log "Pull-only (air-gap) sync completed"
     exit 0
   fi
 
@@ -272,13 +276,12 @@ main() {
   copy_archive_to_nodes
   import_archive_on_nodes
 
-  if [[ "$SKIP_PULL" != "true" ]]; then
-    pull_images
-    copy_pull_archive_to_nodes
-    import_pull_archive_on_nodes
-  else
-    log "Skipping 3rd-party image pull (SKIP_PULL=true)"
-  fi
+  # Ảnh bên thứ 3 (crAPI/postgres/mongo) KHÔNG sync ở đây: manifest ghim digest,
+  # node K3s tự pull từ Docker Hub. `docker save` gộp nhiều ảnh multi-arch làm
+  # `ctr import` lỗi "content digest not found" (KET-QUA-CRAPI.md §1.1). Nếu node
+  # thật sự air-gap: chạy `scripts/sync-app-images.sh --pull-only` (save/import
+  # từng ảnh một).
+  log "Ảnh bên thứ 3 dùng digest-pin, node tự pull — bỏ qua sync (dùng --pull-only nếu air-gap)"
 
   ensure_tunnels_up
   restart_financial_deployments

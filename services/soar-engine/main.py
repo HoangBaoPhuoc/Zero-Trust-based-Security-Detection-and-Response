@@ -50,7 +50,6 @@ SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER)
 SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
 
 TARGETS_BY_ATTACK = {
-    "fraud_gate_bypass":    {"context": "ctx-aws",        "workload": "crapi-workshop"},
     "lateral_movement":     {"context": "ctx-aws",        "workload": "crapi-workshop"},
     "large_response":       {"context": "ctx-aws",        "workload": "crapi-workshop"},
     "cryptomining":         {"context": "ctx-aws",        "workload": "bff"},
@@ -68,7 +67,6 @@ TARGETS_BY_ATTACK = {
 }
 
 PLAYBOOK_BY_ATTACK = {
-    "fraud_gate_bypass":    "isolate_workload",
     "lateral_movement":     "isolate_workload",
     "large_response":       "restrict_egress",
     "cryptomining":         "quarantine_workload",
@@ -89,7 +87,6 @@ MITRE_BY_ATTACK: dict[str, str] = {
     "brute_force":          "T1110.001",
     "credential_stuffing":  "T1110.004",
     "jwt_replay":           "T1539",
-    "fraud_gate_bypass":    "T1078.004",
     "lateral_movement":     "T1021.007",
     "cryptomining":         "T1496",
     "port_scan":            "T1046",
@@ -117,7 +114,6 @@ ATTACK_DISPLAY_NAMES: dict[str, str] = {
     "brute_force":          "Brute Force Login (T1110.001)",
     "credential_stuffing":  "Credential Stuffing (T1110.004)",
     "jwt_replay":           "JWT Token Replay (T1539)",
-    "fraud_gate_bypass":    "Fraud Gate Bypass (T1078.004)",
     "lateral_movement":     "Lateral Movement — Invalid SVID (T1021.007)",
     "cryptomining":         "Cryptomining Detected (T1496)",
     "port_scan":            "Port Scan Detected (T1046)",
@@ -136,7 +132,6 @@ SUGGESTED_PLAYBOOKS: dict[str, list[str]] = {
     "brute_force":          ["revoke_user_sessions", "block_source_ip", "isolate_workload", "monitor_only"],
     "credential_stuffing":  ["revoke_user_sessions", "block_source_ip", "isolate_workload", "monitor_only"],
     "jwt_replay":           ["revoke_user_sessions", "block_source_ip", "isolate_workload", "monitor_only"],
-    "fraud_gate_bypass":    ["isolate_workload", "restrict_egress", "block_source_ip", "revoke_user_sessions", "monitor_only"],
     "lateral_movement":     ["isolate_workload", "restrict_egress", "block_source_ip", "revoke_user_sessions", "monitor_only"],
     "cryptomining":         ["quarantine_workload", "isolate_workload", "block_source_ip", "monitor_only"],
     "port_scan":            ["block_source_ip", "isolate_workload", "monitor_only"],
@@ -315,14 +310,13 @@ def _first_known_attack(alert: SecurityAlert) -> str:
     return tokens[0]
 
 
-_OPENSTACK_WORKLOADS = {"core-banking", "account-service", "transaction-service"}
+_OPENSTACK_WORKLOADS = {"crapi-identity", "postgresdb"}
 
 
 # ── Heuristic Log Poller (replaces ai-analyzer) ─────────────────────────────
 
 _HEURISTIC_RULES: list[tuple[re.Pattern, str, str, float]] = [
     (re.compile(r"jwt_verification_failed|invalid_jwt|authentication.fail|login.fail", re.I), "brute_force", "high", 0.80),
-    (re.compile(r"fraud.gate.bypass|fraud_block|channel.*tor", re.I), "fraud_gate_bypass", "high", 0.85),
     (re.compile(r"invalid.*svid|spiffe.*evil|lateral.move", re.I), "lateral_movement", "critical", 0.90),
     (re.compile(r"port.scan|nmap|masscan|syn.scan", re.I), "port_scan", "medium", 0.75),
     (re.compile(r"sqlmap|union.select|/etc/passwd|cmd=|command.inject", re.I), "exploit_probe", "high", 0.85),
@@ -333,7 +327,6 @@ _HEURISTIC_RULES: list[tuple[re.Pattern, str, str, float]] = [
 ]
 
 _HEURISTIC_MIN_COUNT: dict[str, int] = {
-    "brute_force": 5, "fraud_gate_bypass": 1, "lateral_movement": 1,
     "port_scan": 3, "exploit_probe": 1, "cryptomining": 1,
     "credential_stuffing": 2, "large_response": 1, "jwt_replay": 1,
 }
@@ -769,7 +762,6 @@ async def _investigate_loki(attack_type: str, workload: str | None, source_ip: s
         "brute_force":          "401|403|login.fail|authentication.fail",
         "credential_stuffing":  "401|403|login.fail|too.many",
         "lateral_movement":     "svid|denied|lateral|spiffe",
-        "fraud_gate_bypass":    "fraud_gate|fraud_score|bypass",
         "port_scan":            "port.scan|nmap|syn.scan|masscan",
         "exploit_probe":        "sqlmap|union.select|cmd.injection|payload",
         "cryptomining":         "xmrig|stratum|cryptomin|cpu",
@@ -800,19 +792,17 @@ async def _investigate_loki(attack_type: str, workload: str | None, source_ip: s
         return f"Loki query failed: {exc}"
 
 
-# Exact Loki LogQL queries per attack type — mirror the Grafana alert queries exactly
-# so email evidence matches what triggered the alert.
+# Exact Loki LogQL queries per attack type — khớp query Grafana alert (crAPI)
+# để evidence trong email HITL trùng đúng cái đã kích hoạt alert.
 _LOKI_EXACT_QUERIES: dict[str, str] = {
-    # KB1: envoy-access 403 từ api-gateway, path=/payments — xác nhận brute force bị Envoy block
-    "brute_force":       '{job="envoy-access", response_code="403", service_name="api-gateway", path="/payments"}',
-    # KB5: OPA structured deny log từ opa-server app (compact, có subject/roles/reason rõ ràng)
-    # Dùng stream này thay vì {job="opa-decisions", opa_result="false", request_path="/payments"}
-    # vì stream kia cũng bắt KB1 brute force (cùng path /payments, cùng OPA deny)
-    "access_denied":     '{app="opa-server", job="opa-decisions"} |= "rbac_deny"',
-    # KB3: OPA decision log cho /payments/internal/execute — chỉ lateral movement mới dùng path này
-    "lateral_movement":  '{job="opa-decisions", opa_result="false", request_path="/payments/internal/execute"}',
-    # KB2: payment-service AUDIT log event payment_blocked_fraud
-    "fraud_gate_bypass": '{namespace="crapi", app="payment-service"} | json | event="payment_blocked_fraud"',
+    # Keycloak LOGIN_ERROR (điểm vào xác thực là Keycloak qua BFF OIDC)
+    "brute_force":       '{namespace="identity", app="keycloak"} |~ "(?i)login_error|invalid_user_credentials"',
+    # OPA ext_authz deny + BFF audit rbac_denied
+    "access_denied":     '{job="opa-decisions", opa_result="false"}',
+    # OPA deny path nghiệp vụ workshop/community (ngoài service_acl) — loại /verify
+    "lateral_movement":  '{job="opa-decisions", opa_result="false", request_path=~"/(workshop|community)/api/.*"} != "/identity/api/auth/verify"',
+    # istio access log response >1MiB trong ns crapi
+    "large_response":    '{job="envoy-access", namespace="crapi"} | json | bytes_sent > 1048576',
 }
 
 _LOKI_SEARCH_TERMS: dict[str, str] = {
@@ -828,7 +818,7 @@ _LOKI_SEARCH_TERMS: dict[str, str] = {
     "privilege_escalation": "privilege_escalation|setuid|cap_dac_override|cap_sys_admin|uid=0",
 }
 
-_EVIDENCE_NAMESPACE_WIDE = {"lateral_movement", "fraud_gate_bypass"}
+_EVIDENCE_NAMESPACE_WIDE = {"lateral_movement", "access_denied", "large_response"}
 
 
 def _format_evidence_line(attack_type: str, raw_line: str, stream_labels: dict) -> str:
@@ -844,24 +834,20 @@ def _format_evidence_line(attack_type: str, raw_line: str, stream_labels: dict) 
         ts = ts[:19].replace("T", " ")
 
     if attack_type == "brute_force":
-        # Envoy access log thật từ api-gateway sidecar
-        src  = d.get("source_ip", "?")
-        code = d.get("response_code", "?")
-        path = d.get("path", "?")
-        meth = d.get("method", "POST")
-        svid = d.get("svid") or "null"
-        rt   = d.get("response_time", "?")
-        return f"[envoy-access] {ts} | {meth} {path} → HTTP {code} | src={src} | svid={svid} | response_time={rt}ms"
+        # Keycloak event log — LOGIN_ERROR
+        user = d.get("userId") or d.get("username") or d.get("preferred_username", "?")
+        err  = d.get("error") or d.get("details", {}).get("error", "?")
+        ip   = d.get("ipAddress") or d.get("source_ip", "?")
+        return f"[keycloak] {ts} | type=LOGIN_ERROR | user={user} | error={err} | ip={ip}" if "keycloak" not in raw_line.lower() else f"[keycloak] {raw_line[:280]}"
 
-    if attack_type == "fraud_gate_bypass":
-        # payment-service AUDIT log thật — event payment_blocked_fraud
-        score   = d.get("fraud_score") or d.get("fraud", {}).get("score", "?")
-        verdict = d.get("fraud", {}).get("verdict") or d.get("verdict", "?")
-        gate    = d.get("fraud", {}).get("gate", "?")
-        reasons = ", ".join(d.get("fraud", {}).get("reason") or [d.get("reason", "?")])
-        trace   = (d.get("trace_id") or "")[:16]
-        svc     = d.get("service", "payment-service")
-        return f"[{svc}] {ts} | event={d.get('event','payment_blocked_fraud')} | level={d.get('level','AUDIT')} | fraud_score={score} | verdict={verdict} | gate={gate} | reason=[{reasons}] | trace_id={trace}"
+    if attack_type == "large_response":
+        # istio access log — bytes_sent > 1MiB
+        src  = d.get("source_ip", "?")
+        path = d.get("path", "?")
+        bs   = d.get("bytes_sent", "?")
+        code = d.get("response_code", "?")
+        svid = d.get("svid") or "null"
+        return f"[envoy-access] {ts} | GET {path} → HTTP {code} | bytes_sent={bs} | src={src} | svid={svid}"
 
     if attack_type == "lateral_movement":
         # OPA decision log thật — full input từ Envoy ext_authz gRPC call
@@ -1002,7 +988,7 @@ async def _run_steps(
         elif playbook == "block_source_ip":
             if source_ip and context:
                 contain_action = _block_source_ip(context, source_ip)
-                # Also write to Redis so api-gateway can enforce in real-time
+                # Also write to Redis so BFF (edge PEP) can enforce in real-time
                 await redis_block_ip(source_ip, reason=f"SOAR: {attack_type}")
             else:
                 contain_action = "skipped: no source_ip or context available"
@@ -1591,7 +1577,7 @@ GRAFANA_SEVERITY_MAP = {
 }
 
 GRAFANA_ATTACK_MAP = {
-    "fraud": "fraud_gate_bypass",
+    "bfla": "access_denied",
     "brute": "brute_force",
     "anomaly": "access_denied",
     "lateral": "lateral_movement",
@@ -1629,8 +1615,8 @@ def _grafana_to_alert(alert_data: dict) -> SecurityAlert | None:
                 attack_type = mapped
                 break
 
-    # gap1 label means OpenStack-side exfiltration
-    affected_service = "core-banking" if labels.get("gap") == "gap1" else None
+    # gap1 label = phía OpenStack (crapi-identity)
+    affected_service = "crapi-identity" if labels.get("gap") == "gap1" else None
     source_ip = labels.get("source_ip") or annotations.get("source_ip")
     fingerprint = alert_data.get("fingerprint", "")
     evidence = [e for e in [desc, f"mitre={labels.get('mitre', '')}", f"fingerprint={fingerprint}"] if e]
@@ -2038,7 +2024,7 @@ async def execute_playbook_portal(
 ) -> CaseRecord:
     """Web Portal: admin chọn và thực thi một playbook cụ thể cho case pending_approval."""
     require_soar_token(authorization)
-    return await _execute_chosen_playbook(case_id, body.playbook, actor="web-portal")
+    return await _execute_chosen_playbook(case_id, body.playbook, actor="admin-ui")
 
 
 def _hitl_action_result_html(case_id: str, status: str, playbook_label: str) -> str:

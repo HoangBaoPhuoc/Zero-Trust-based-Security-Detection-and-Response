@@ -1,5 +1,10 @@
 apiVersion: 1
 
+# crAPI (KE-HOACH-CRAPI.md Phase 7). Data exfiltration / mass data harvesting:
+# một response bất thường lớn từ bất kỳ service crAPI nào (job=envoy-access,
+# bytes_sent > 1 MiB). Ví dụ: khai thác BOLA để dump hàng loạt bản ghi, tải
+# toàn bộ danh sách sản phẩm/đơn hàng/hồ sơ. THAY kịch bản cũ trỏ core-banking
+# /accounts/export (đặc thù ngân hàng, đã bỏ).
 groups:
   - orgId: 1
     name: large-response
@@ -7,33 +12,31 @@ groups:
     interval: 1m
     rules:
       - uid: large-response
-        title: "Kịch bản 4 — Data Exfiltration: Large Response (T1041)"
+        title: "crAPI — Data Exfiltration: Large Response (T1041)"
         for: 0s
         condition: A
         data:
           - refId: A
-            relativeTimeRange:
-              from: 600
-              to: 0
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: Loki
             model:
-              datasource:
-                type: loki
-                uid: Loki
-              expr: 'sum(count_over_time({job="envoy-access"} | json | bytes_sent > 1048576 [5m]))'
+              datasource: { type: loki, uid: Loki }
+              expr: 'sum(count_over_time({job="envoy-access", namespace="crapi"} | json | bytes_sent > 1048576 [5m]))'
               instant: true
               queryType: instant
               refId: A
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Response >1MB từ Envoy — nghi ngờ data exfiltration từ core-banking"
-          description: "ATT&CK T1041 — Envoy access log ghi bytes_sent > 1MB (path=/accounts/export). Có thể đang dump database hoặc exfiltrate file từ core-banking (OpenStack)."
+          summary: "Response >1MB từ một service crAPI — nghi ngờ data exfiltration / mass harvesting"
+          description: >
+            ATT&CK T1041 — istio access log (job=envoy-access) ghi bytes_sent > 1 MiB
+            trong ns crapi. Có thể đang dump dữ liệu qua BOLA (đọc hồ sơ/xe/đơn hàng
+            hàng loạt) hoặc tải trọn danh mục. crAPI GIỮ lỗ hổng BOLA (đúng chủ đích)
+            — lớp phát hiện + SOAR là phản ứng bù.
           soar_action: |
-            ✅ SOAR đã tự động:
-            1. Đề xuất restrict_egress — scale core-banking (OpenStack) xuống 0 replica, chặn data ra ngoài
-            2. Tạo case với playbook restrict_egress, chờ admin duyệt
-            🔧 Admin duyệt tại: Web Portal → /security → SOAR Cases (đăng nhập analyst01)
+            ✅ SOAR đề xuất: restrict_egress (hạn chế lưu lượng ra của workload nghi vấn)
+            🔧 Admin duyệt: Grafana → ZTLab → SOAR Cases (analyst01)
         labels:
           severity: high
           category: security

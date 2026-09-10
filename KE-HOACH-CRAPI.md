@@ -2,7 +2,7 @@
 
 > **File này dành cho agent (Claude CLI) thực thi.**
 
-> **TRẠNG THÁI 2026-09-09:** Phase 1–5 XONG + verified (branch `feat/crapi-target`). Phase 7 làm LIGHT. Phase 6 (fresh destroy+deploy-all) CẦN NGƯỜI DÙNG chạy terraform. Xem `KET-QUA-CRAPI.md`.
+> **TRẠNG THÁI 2026-09-10:** Phase 1–7 XONG + verified (branch `feat/crapi-target`). Phase 6 (fresh destroy→deploy-all) người dùng đã chạy — 7 điểm gãy đã sửa (SSH known_hosts, sync-app-images, cross-cloud-os rỗng, crapi-web mailhog, seed_db, open-admin-uis, **OpenStack uplink hotspot → DNS/WireGuard/SPIRE outage**). Phase 7 đầy đủ: 5 script tấn công `tests/crapi_*.sh`, alert rules crAPI, dashboard `crapi-attack-surface`, e2e SOAR loop verified. Xem `KET-QUA-CRAPI.md` (Phase 6 + Phase 7).
  Cùng quy ước `KE-HOACH-SUA-HE-THONG.md`.
 > Đích đã duyệt: xem **`TARGET-CRAPI.md`**. File này là các bước để đạt đích đó.
 >
