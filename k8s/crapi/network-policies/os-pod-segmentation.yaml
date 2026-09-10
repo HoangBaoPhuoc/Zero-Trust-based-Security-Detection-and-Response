@@ -1,4 +1,4 @@
-# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
+# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
 # Sinh lại: python3 scripts/gen-networkpolicy.py
 #
 # T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload

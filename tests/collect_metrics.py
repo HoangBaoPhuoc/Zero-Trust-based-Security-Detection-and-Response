@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """ZTLab Security Metrics Collector.
 
+    ⚠️  CHƯA CẬP NHẬT CHO crAPI (2026-09-10). Script còn tham chiếu Keycloak
+    client `api-gateway` + namespace `financial` của app cũ. Cần đổi sang luồng
+    login BFF (tests/lib/crapi_common.sh::crapi_login) + ns `crapi` trước khi chạy.
+
 Measures four key security performance indicators:
   MTTD  — Mean Time To Detect     (seconds from attack log injection to AI verdict)
   MTTR  — Mean Time To Respond    (seconds from AI verdict to SOAR playbook execution)

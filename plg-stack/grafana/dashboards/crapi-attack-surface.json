@@ -1,0 +1,73 @@
+{
+  "uid": "crapi-attack-surface",
+  "title": "crAPI — Attack Surface & Zero-Trust Enforcement",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["ztlab", "crapi", "zero-trust", "security"],
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    { "type": "row", "title": "Enforcement — OPA ext_authz (mТLS SVID + service_acl + RBAC)", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 1 },
+
+    { "id": 2, "type": "timeseries", "title": "OPA quyết định (allow / deny) — cả 2 cluster", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 20, "stacking": { "mode": "normal" } } } },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum by (opa_result) (count_over_time({job=\"opa-decisions\"} | json [1m]))", "refId": "A", "legendFormat": "result={{opa_result}}" } ] },
+
+    { "id": 3, "type": "timeseries", "title": "OPA DENY theo path nghiệp vụ (lateral movement / BFLA / unauthorized)", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum by (request_path) (count_over_time({job=\"opa-decisions\", opa_result=\"false\", request_path=~\"/(workshop|community|identity)/api/.*\"} [5m]))", "refId": "A", "legendFormat": "{{request_path}}" } ] },
+
+    { "type": "row", "title": "Kịch bản tấn công", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }, "id": 10 },
+
+    { "id": 11, "type": "stat", "title": "Lateral Movement (OPA deny, /workshop|/community)", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 6, "w": 5, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({job=\"opa-decisions\", opa_result=\"false\", request_path=~\"/(workshop|community)/api/.*\"} != \"/identity/api/auth/verify\" [10m]))", "refId": "A" } ] },
+
+    { "id": 12, "type": "stat", "title": "BFLA — BFF rbac_denied", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 6, "w": 5, "x": 5, "y": 10 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } } },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({job=\"bff-audit\"} | json | event=\"rbac_denied\" [10m]))", "refId": "A" } ] },
+
+    { "id": 13, "type": "stat", "title": "Step-up bắt buộc (hành động nhạy cảm)", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 6, "w": 5, "x": 10, "y": 10 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "blue", "value": 1 } ] } } },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({job=\"bff-audit\"} | json | event=\"step_up_required\" [10m]))", "refId": "A" } ] },
+
+    { "id": 14, "type": "stat", "title": "Brute force — Keycloak LOGIN_ERROR", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 6, "w": 4, "x": 15, "y": 10 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 10 } ] } } },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({namespace=\"identity\", app=\"keycloak\"} |~ \"(?i)login_error|invalid_user_credentials\" [5m]))", "refId": "A" } ] },
+
+    { "id": 15, "type": "stat", "title": "Device-trust từ chối (suspicious → write)", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 6, "w": 5, "x": 19, "y": 10 },
+      "fieldConfig": { "defaults": { "thresholds": { "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } } },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({job=\"bff-audit\"} | json | event=\"device_trust_denied\" [10m]))", "refId": "A" } ] },
+
+    { "type": "row", "title": "Zero-Trust nền tảng — mТLS / SPIRE SVID / cross-cloud", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 }, "id": 20 },
+
+    { "id": 21, "type": "timeseries", "title": "Hop nội mesh: có SVID vs svid:null (envoy-access)", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 17 },
+      "targets": [
+        { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({job=\"envoy-access\", namespace=\"crapi\"} | json | svid != \"\" [1m]))", "refId": "A", "legendFormat": "SVID present (mТLS ok)" },
+        { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum(count_over_time({job=\"envoy-access\", namespace=\"crapi\"} | json | svid = \"\" [1m]))", "refId": "B", "legendFormat": "svid:null (mТLS BROKEN)" }
+      ] },
+
+    { "id": 22, "type": "timeseries", "title": "Cross-cloud → crapi-identity (bff / community / workshop) — mã HTTP", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum by (response_code) (count_over_time({job=\"envoy-access\", namespace=\"crapi\"} | json | path=~\"/identity/.*\" [1m]))", "refId": "A", "legendFormat": "HTTP {{response_code}}" } ] },
+
+    { "type": "row", "title": "Phản ứng — SOAR / audit", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 }, "id": 30 },
+
+    { "id": 31, "type": "logs", "title": "SOAR actions (job=soar-engine)", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 26 },
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "{job=\"soar-engine\"} |~ \"soar_action|case|playbook\"", "refId": "A" } ] },
+
+    { "id": 32, "type": "timeseries", "title": "BFF audit events theo loại", "datasource": { "type": "loki", "uid": "Loki" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 26 },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum by (event) (count_over_time({job=\"bff-audit\"} | json [5m]))", "refId": "A", "legendFormat": "{{event}}" } ] }
+  ]
+}

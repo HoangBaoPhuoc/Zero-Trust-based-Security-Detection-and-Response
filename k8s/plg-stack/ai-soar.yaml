@@ -103,7 +103,7 @@ spec:
             - name: SOAR_MIN_CONFIDENCE
               value: "0.50"
             - name: SOAR_NAMESPACE
-              value: financial
+              value: crapi
             - name: SOAR_CASE_STORE_PATH
               value: /data/cases.jsonl
             # Keycloak Admin API — for revoke_user_sessions playbook

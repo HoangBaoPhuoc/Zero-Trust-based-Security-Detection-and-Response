@@ -30,7 +30,7 @@ GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
 NETPOL_DIR = REPO_ROOT / "k8s" / "crapi" / "network-policies"
 NS = "crapi"
 
-HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
+HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
 # Sinh lại: python3 scripts/gen-networkpolicy.py
 #
 # T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload

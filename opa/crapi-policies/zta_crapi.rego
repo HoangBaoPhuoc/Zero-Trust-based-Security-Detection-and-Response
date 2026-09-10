@@ -204,10 +204,24 @@ keycloak_gate if {
   startswith(source_principal, "spiffe://ztlab.local/aws/bff")
   valid_jwt
   role_permits_action
-  posture_compliant
-  device_trust_compliant
+  posture_ok
+  device_trust_ok
   step_up_ok
 }
+
+# Device posture + device trust là tín hiệu "dynamic policy" (tenet 7) — áp cho
+# hành động GHI và hành động nhạy cảm, KHỚP với BFF `_rbac_ok` (chỉ chặn
+# suspicious device ở POST/PUT/PATCH/DELETE) và KE-HOACH-CRAPI.md §3.2
+# ("áp cho sensitive_crapi_action"). Đọc thường (GET/HEAD, không nhạy cảm) vẫn
+# đủ mạnh bằng valid_jwt + RBAC + valid_svid + mТLS.
+strong_control_required if { method in ["POST", "PUT", "PATCH", "DELETE"] }
+strong_control_required if { sensitive_crapi_action }
+
+posture_ok if { not strong_control_required }
+posture_ok if { strong_control_required; posture_compliant }
+
+device_trust_ok if { not strong_control_required }
+device_trust_ok if { strong_control_required; device_trust_compliant }
 
 step_up_ok if { not sensitive_crapi_action }
 step_up_ok if { sensitive_crapi_action; step_up_satisfied }

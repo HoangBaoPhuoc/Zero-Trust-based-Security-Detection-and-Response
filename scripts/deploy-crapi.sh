@@ -31,6 +31,19 @@ step() { echo -e "\n${BLUE}══════ $* ══════${NC}"; }
 kaws() { kubectl --context "$AWS_CONTEXT" "$@"; }
 kos()  { kubectl --context "$OS_CONTEXT" "$@"; }
 
+# kubectl apply chỉ khi manifest có ít nhất 1 object. Bỏ qua file toàn comment
+# (vd cross-cloud-os.yaml khi mailhog nằm cùng cluster identity → không có hop
+# cross-cloud) — `kubectl apply` trên file rỗng thoát mã 1 "no objects passed
+# to apply", `set -e` giết cả script trên đường deploy-from-scratch.
+apply_manifest() { # <kaws|kos> <file>
+  local kc="$1" file="$2"
+  if [[ -s "$file" ]] && grep -vE '^[[:space:]]*(#|---|$)' "$file" | grep -q '[^[:space:]]'; then
+    $kc apply -f "$file"
+  else
+    log "$(basename "$file"): không có object YAML — bỏ qua"
+  fi
+}
+
 wait_rollout() { # ctx ns kind/name timeout
   kubectl --context "$1" -n "$2" rollout status "$3" --timeout="${4:-240s}" || warn "rollout $3 ($1) chưa xong trong ${4:-240s} — tiếp tục"
 }
@@ -81,8 +94,8 @@ deploy_crapi_workloads() {
   kos  apply -f "$CRAPI_DIR/mailhog.yaml"
   kos  apply -f "$CRAPI_DIR/os-workloads.yaml"
   kaws apply -f "$CRAPI_DIR/aws-workloads.yaml"
-  kaws apply -f "$CRAPI_DIR/cross-cloud-aws.yaml"
-  kos  apply -f "$CRAPI_DIR/cross-cloud-os.yaml"
+  apply_manifest kaws "$CRAPI_DIR/cross-cloud-aws.yaml"
+  apply_manifest kos  "$CRAPI_DIR/cross-cloud-os.yaml"
   wait_rollout "$OS_CONTEXT"  crapi deployment/mailhog 180s
   wait_rollout "$OS_CONTEXT"  crapi deployment/crapi-identity 300s
   for d in crapi-web crapi-community crapi-workshop; do
@@ -213,6 +226,24 @@ apply_network_policies() {
   ok "network-policies"
 }
 
+restart_workloads_for_sds() {
+  # Istio-proxy (SDS client) không tự tái lập stream tới spire-agent sau khi
+  # spire-agent bị restart / entry SPIRE thêm sau khi sidecar đã start → SVID
+  # hết hạn ở mốc TTL 1h mà KHÔNG được gia hạn → `svid:null` → mТLS STRICT fail
+  # → mọi hop nội mesh 503 (xem KET-QUA-KIEM-TRA.md T-2.1). Fix: sau khi SPIRE
+  # entries + DestinationRule custom-SAN + AuthorizationPolicy đã sẵn sàng, bounce
+  # toàn bộ Deployment nghiệp vụ để istio-proxy tái lập SDS sạch.
+  step "Restart workload crAPI để istio-proxy tái lập SDS/mТLS (sau SPIRE + mesh policy)"
+  kaws -n crapi rollout restart deployment 2>/dev/null || true
+  kos  -n crapi rollout restart deployment 2>/dev/null || true
+  for d in bff crapi-web crapi-community crapi-workshop; do
+    wait_rollout "$AWS_CONTEXT" crapi "deployment/$d" 240s
+  done
+  wait_rollout "$OS_CONTEXT" crapi deployment/crapi-identity 240s
+  wait_rollout "$OS_CONTEXT" crapi deployment/mailhog 180s
+  ok "workloads restarted — SVID nên VALID trở lại (kiểm: istioctl proxy-config secret deploy/crapi-workshop -n crapi)"
+}
+
 run_seed() {
   [[ -f "$CRAPI_DIR/seed-job.yaml" ]] || { log "seed-job chưa có — bỏ qua"; return; }
   step "Seed dữ liệu crAPI (Job trên OpenStack — thao tác app, KHÔNG phải hạ tầng)"
@@ -242,6 +273,7 @@ main() {
   reinstall_istio_for_crapi_provider
   deploy_mesh_policies
   apply_network_policies
+  restart_workloads_for_sds
   run_seed
   verify
   ok "deploy-crapi hoàn tất"

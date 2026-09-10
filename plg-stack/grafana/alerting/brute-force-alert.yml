@@ -1,9 +1,11 @@
 apiVersion: 1
 
-# crAPI (KE-HOACH-CRAPI.md Phase 7). crAPI challenge: brute-force OTP
-# (/identity/api/auth/v3/check-otp) + brute-force login. crapi-identity log
-# "Invalid Credentials" / OTP fail. Scrape: promtail job kubernetes-pods
-# (namespace crapi, app crapi-identity).
+# crAPI (KE-HOACH-CRAPI.md Phase 7). Điểm vào xác thực người dùng là Keycloak
+# (BFF OIDC/PKCE) → brute-force login = nhiều LOGIN_ERROR ở Keycloak. Ngoài ra
+# giữ tín hiệu brute-force OTP của chính crAPI (/identity/api/auth/v3/check-otp)
+# — crAPI có sẵn challenge này.
+#   - Keycloak:   {namespace="identity", app="keycloak"}  |~ "LOGIN_ERROR|invalid_user_credentials"
+#   - crapi OTP:  {namespace="crapi", app="crapi-identity"} |~ "otp.*(invalid|expired|mismatch)"
 groups:
   - orgId: 1
     name: brute-force
@@ -11,7 +13,7 @@ groups:
     interval: 1m
     rules:
       - uid: brute-force-crapi-identity
-        title: "crAPI — Brute Force (login / OTP) trên crapi-identity"
+        title: "crAPI — Brute Force (Keycloak login / crAPI OTP)"
         for: 0s
         condition: A
         data:
@@ -22,18 +24,19 @@ groups:
               datasource: { type: loki, uid: Loki }
               expr: >
                 sum(count_over_time(
-                  {namespace="crapi", app="crapi-identity"}
-                  |~ "(?i)(invalid credentials|invalid otp|bad credentials|otp.*(invalid|expired|mismatch))" [5m])) > 10
+                  {namespace=~"identity|crapi", app=~"keycloak|crapi-identity"}
+                  |~ "(?i)(login_error|invalid_user_credentials|invalid credentials|bad credentials|otp.*(invalid|expired|mismatch))" [5m])) > 10
               instant: true
               queryType: instant
               refId: A
         noDataState: OK
         execErrState: Alerting
         annotations:
-          summary: "Nhiều lần đăng nhập/OTP thất bại trên crapi-identity (brute force)"
+          summary: "Nhiều lần đăng nhập/OTP thất bại (Keycloak LOGIN_ERROR hoặc crAPI OTP fail) — brute force"
           description: >
-            ATT&CK T1110 — brute-force credential/OTP. crAPI có sẵn challenge OTP
-            brute-force (/identity/api/auth/v3/check-otp). Ngưỡng >10 lỗi/5 phút.
+            ATT&CK T1110 — brute-force credential/OTP. Người dùng cuối xác thực ở
+            Keycloak (qua BFF OIDC); crAPI còn challenge OTP brute-force riêng
+            (/identity/api/auth/v3/check-otp). Ngưỡng >10 lỗi/5 phút.
           soar_action: |
             ✅ SOAR đề xuất: revoke_user_sessions + block_source_ip
         labels:

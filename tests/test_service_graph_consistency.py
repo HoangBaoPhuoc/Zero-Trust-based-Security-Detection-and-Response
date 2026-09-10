@@ -1,22 +1,21 @@
-"""T-3.2 — kiểm tra policy/service-graph.yaml là nguồn sự thật duy nhất thật sự.
+"""Kiểm tra policy/service-graph-crapi.yaml là nguồn sự thật duy nhất thật sự
+cho phân đoạn service-to-service của crAPI (L7 + L4).
 
 Hai bài test:
-1. File sinh ra (opa/policies/service_acl.rego,
-   k8s/financial/network-policies/{aws,os}-pod-segmentation.yaml) khớp
-   CHÍNH XÁC với những gì generator sinh ra từ service-graph.yaml ngay lúc
-   này — nếu ai đó sửa tay 1 trong 2 phía (graph hoặc file generated) mà
-   quên chạy lại generator, test này FAIL. Đây là nghiệm thu chính thức của
-   T-3.2 trong KE-HOACH-SUA-HE-THONG.md ("chạy generator -> git diff không
-   đổi").
-2. Mọi edge nghiệp vụ (không phải l4_only, không phải cross_cluster) khai
-   báo trong service-graph.yaml phải xuất hiện Ở CẢ HAI file sinh ra (L7 và
-   L4) — tức là không có cặp nào chỉ được khai báo ở 1 tầng mà quên tầng kia.
+1. File sinh ra (opa/crapi-policies/service_acl.rego,
+   k8s/crapi/network-policies/{aws,os}-pod-segmentation.yaml) khớp CHÍNH XÁC
+   với những gì generator sinh ra từ service-graph-crapi.yaml ngay lúc này —
+   nếu ai đó sửa tay 1 trong 2 phía (graph hoặc file generated) mà quên chạy
+   lại generator, test này FAIL ("chạy generator -> git diff không đổi").
+2. Mọi edge nghiệp vụ (không phải l4_only, không phải cross_cluster) khai báo
+   trong service-graph-crapi.yaml phải xuất hiện Ở CẢ HAI file sinh ra (L7 và
+   L4) — không có cặp nào chỉ được khai báo ở 1 tầng mà quên tầng kia.
 
 LƯU Ý (đọc trước khi diễn giải test #2 là "L4 thực sự chặn"): test này chỉ
-xác nhận tính nhất quán giữa 2 FILE KHAI BÁO, không xác nhận enforcement
-thật ở hạ tầng. T-3.1 (KET-QUA-KIEM-TRA.md) đã xác nhận NetworkPolicy sinh
-ra từ đây KHÔNG được kube-router enforce cho traffic có Istio sidecar trên
-hạ tầng đang dùng — L7 (OPA, service_acl.rego) mới là lớp đang chặn thật.
+xác nhận tính nhất quán giữa 2 FILE KHAI BÁO, không xác nhận enforcement thật
+ở hạ tầng. Trên k3s/kube-router đang dùng, NetworkPolicy sinh ra từ đây KHÔNG
+được enforce cho traffic có Istio sidecar — L7 (OPA, service_acl.rego) mới là
+lớp đang chặn thật (xem KET-QUA-CRAPI.md PHASE 4).
 
 Chạy: python3 -m pytest tests/test_service_graph_consistency.py -v
       (hoặc: python3 tests/test_service_graph_consistency.py)
@@ -28,10 +27,10 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GRAPH_FILE = REPO_ROOT / "policy" / "service-graph.yaml"
-REGO_OUT = REPO_ROOT / "opa" / "policies" / "service_acl.rego"
-NETPOL_AWS = REPO_ROOT / "k8s" / "financial" / "network-policies" / "aws-pod-segmentation.yaml"
-NETPOL_OS = REPO_ROOT / "k8s" / "financial" / "network-policies" / "os-pod-segmentation.yaml"
+GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
+REGO_OUT = REPO_ROOT / "opa" / "crapi-policies" / "service_acl.rego"
+NETPOL_AWS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "aws-pod-segmentation.yaml"
+NETPOL_OS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "os-pod-segmentation.yaml"
 
 
 def _run_generator(script: str) -> None:
@@ -43,7 +42,7 @@ def _run_generator(script: str) -> None:
 
 
 def test_generated_files_match_source_of_truth():
-    """Nghiệm thu chính thức T-3.2: chạy generator xong, nội dung file không đổi."""
+    """Chạy generator xong, nội dung file generated không đổi."""
     before = {
         REGO_OUT: REGO_OUT.read_text(),
         NETPOL_AWS: NETPOL_AWS.read_text(),
@@ -56,7 +55,7 @@ def test_generated_files_match_source_of_truth():
     for path, old_content in before.items():
         new_content = path.read_text()
         assert new_content == old_content, (
-            f"{path.relative_to(REPO_ROOT)} lệch với policy/service-graph.yaml — "
+            f"{path.relative_to(REPO_ROOT)} lệch với policy/service-graph-crapi.yaml — "
             f"ai đó sửa tay file generated hoặc quên chạy lại generator sau khi sửa graph."
         )
 
@@ -77,8 +76,7 @@ def test_every_business_edge_present_in_both_layers():
     """Mọi cặp nguồn->đích nghiệp vụ (cùng cluster) phải có mặt ở CẢ L7 (rego)
     lẫn L4 (NetworkPolicy) — không cặp nào chỉ khai báo 1 tầng rồi quên tầng kia.
 
-    KHÔNG kiểm tra enforcement thật — chỉ kiểm tra khai báo. Xem docstring
-    module này + KET-QUA-KIEM-TRA.md §T-3.1 về giới hạn enforcement L4 thật.
+    KHÔNG kiểm tra enforcement thật — chỉ kiểm tra khai báo.
     """
     graph = yaml.safe_load(GRAPH_FILE.read_text())
     rego_text = REGO_OUT.read_text()

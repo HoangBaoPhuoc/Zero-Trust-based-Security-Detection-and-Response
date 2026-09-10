@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """ZTLab Performance Overhead Benchmark.
 
+    ⚠️  CHƯA CẬP NHẬT CHO crAPI (2026-09-10). Script còn tham chiếu Keycloak
+    client `api-gateway` + namespace `financial` của app cũ. Cần đổi sang luồng
+    login BFF (tests/lib/crapi_common.sh::crapi_login) + ns `crapi` trước khi chạy.
+
 Measures the latency overhead introduced by the Zero Trust security pipeline:
   - Envoy sidecar TLS termination + mTLS
   - OPA policy evaluation (ext_authz gRPC)

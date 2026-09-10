@@ -87,18 +87,6 @@ check_kctl_context() {
   fi
 }
 
-financial_manifests_ready() {
-  local manifests=(
-    "$REPO_ROOT/k8s/crapi/aws-workloads.yaml"
-    "$REPO_ROOT/k8s/crapi/os-workloads.yaml"
-  )
-  for f in "${manifests[@]}"; do
-    if [ ! -f "$f" ] || ! grep -qE '^apiVersion:' "$f"; then
-      return 1
-    fi
-  done
-  return 0
-}
 
 random_secret() {
   openssl rand -base64 32 2>/dev/null || date +%s%N
@@ -446,18 +434,10 @@ main() {
   log_info "✓ All components deployed successfully!"
   log_info "================================"
   log_info ""
-  log_info "Next steps:"
-  if financial_manifests_ready; then
-    log_info "1. Deploy financial workloads:"
-    log_info "   kubectl --context ctx-aws apply -f k8s/financial/aws-services.yaml"
-    log_info "   kubectl --context ctx-openstack apply -f k8s/financial/os-services.yaml"
-    log_info "2. Deploy PLG stack: ./scripts/deploy-plg-stack.sh"
-    log_info "3. Verify workloads: kubectl --context ctx-aws get pods -A && kubectl --context ctx-openstack get pods -A"
-  else
-    log_info "1. Financial manifests are not ready yet (k8s/financial/*.yaml still TODO/empty)."
-    log_info "2. Populate financial manifests before running kubectl apply on k8s/financial/*.yaml."
-    log_info "3. Deploy PLG stack after workloads are ready: ./scripts/deploy-plg-stack.sh"
-  fi
+  log_info "Next steps (thường do scripts/deploy-app.sh gọi tiếp, không cần chạy tay):"
+  log_info "1. deploy_crapi        → scripts/deploy-crapi.sh (crAPI + OPA + mesh policy + SPIRE entries)"
+  log_info "2. deploy_observability_response → Loki/Grafana/Promtail/Prometheus + SOAR/ai/scorer"
+  log_info "3. Verify: kubectl --context ctx-aws get pods -A && kubectl --context ctx-openstack get pods -A"
   log_info ""
 }
 

@@ -18,14 +18,13 @@ data:
         env: ztlab
 
     scrape_configs:
-      # AWS financial microservices — DNS resolvable within AWS cluster
-      - job_name: financial-services-aws
+      # crAPI edge + service phụ trợ (AWS) — có endpoint /metrics riêng (bff FastAPI,
+      # engine detection). crapi-web/community/workshop là ảnh stock crAPI, không
+      # expose Prometheus metrics → không scrape (chỉ quan sát qua istio access log).
+      - job_name: crapi-services-aws
         static_configs:
           - targets:
-              - api-gateway.financial.svc.cluster.local:8080
-              - payment-service.financial.svc.cluster.local:8080
-              - fraud-detection.financial.svc.cluster.local:8080
-              - notification-service.financial.svc.cluster.local:8080
+              - bff.crapi.svc.cluster.local:8080
         metrics_path: /metrics
         relabel_configs:
           - source_labels: [__address__]
@@ -33,33 +32,6 @@ data:
             target_label: service
           - target_label: cloud
             replacement: aws
-
-      # OpenStack financial services — reachable via NodePort on 192.168.101.11 (os-k3s-master)
-      - job_name: financial-services-openstack
-        static_configs:
-          - targets:
-              - 192.168.101.11:30084   # core-banking: NodePort→8080 (plain HTTP)
-              - 192.168.101.11:30086   # account-service: NodePort→8080 (HTTP; 30082=Envoy mTLS)
-              - 192.168.101.11:30087   # transaction-service: NodePort→8080 (HTTP; 30083=Envoy mTLS)
-        metrics_path: /metrics
-        relabel_configs:
-          - source_labels: [__address__]
-            regex: '192\.168\.101\.11:(\d+)'
-            target_label: __tmp_port
-          - source_labels: [__tmp_port]
-            regex: '30084'
-            target_label: service
-            replacement: core-banking
-          - source_labels: [__tmp_port]
-            regex: '30086'
-            target_label: service
-            replacement: account-service
-          - source_labels: [__tmp_port]
-            regex: '30087'
-            target_label: service
-            replacement: transaction-service
-          - target_label: cloud
-            replacement: openstack
 
       # Loki internal metrics
       - job_name: loki

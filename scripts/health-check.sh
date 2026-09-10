@@ -9,7 +9,7 @@ AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 LOKI_URL="${LOKI_URL:-http://127.0.0.1:13100}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
-AI_URL="${AI_URL:-http://127.0.0.1:8090}"
+AI_URL="${AI_URL:-http://127.0.0.1:18082}"
 SOAR_URL="${SOAR_URL:-http://127.0.0.1:8091}"
 SOAR_API_TOKEN="${SOAR_API_TOKEN:-}"
 RUN_REMOTE="${RUN_REMOTE:-0}"
@@ -199,16 +199,16 @@ check_local_stack() {
   http_check "Loki ready              (port 13100)" "$LOKI_URL/ready"
   http_check "Loki API labels         (port 13100)" "$LOKI_URL/loki/api/v1/labels"
   http_check "Grafana health          (port 3000)"  "$GRAFANA_URL/api/health"
-  http_check "AI Analyzer health      (port 8090)"  "$AI_URL/health"
+  http_check "AI Analyzer health      (port 18082)" "$AI_URL/health"
   http_check "SOAR health             (port 8091)"  "$SOAR_URL/health"
-  soar_http_check "SOAR incidents      (port 8091)" "$SOAR_URL/incidents"
+  soar_http_check "SOAR cases          (port 8091)" "$SOAR_URL/cases"
   if [[ "$RUN_K8S" == "1" ]]; then
-    _check_api_gw_jwks() {
+    _check_bff_health() {
       local d
-      d=$(curl -fsS --max-time 5 http://127.0.0.1:18080/health 2>&1) || return 1
-      echo "$d" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('jwks_keys_loaded',0)>0,'jwks=0 — restart api-gateway pod'; print(d)" 2>&1
+      d=$(curl -fsS --max-time 5 http://127.0.0.1:18081/health 2>&1) || return 1
+      echo "$d" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status')=='ok','bff status != ok'; print(d)" 2>&1
     }
-    run_warn_check "API Gateway health (jwks loaded)" _check_api_gw_jwks
+    run_warn_check "BFF health (crAPI edge, port 18081)" _check_bff_health
     run_warn_check "Security Scorer health (port 18092)" \
       curl -fsS --max-time 5 http://127.0.0.1:18092/health
     run_warn_check "Keycloak realm reachable (port 8180)" \
@@ -219,7 +219,8 @@ check_local_stack() {
 check_loki_data() {
   section "SIEM Log Evidence"
   run_warn_check "Loki has SOAR action stream" loki_query_has_results '{job="soar-engine"} |= "soar_action"'
-  run_warn_check "Loki has raw demo stream" loki_query_has_results '{job="demo-raw"}'
+  run_warn_check "Loki has security-healthcheck stream" loki_query_has_results '{job="security-healthcheck"}'
+  run_warn_check "Loki has OPA decision stream" loki_query_has_results '{job="opa-decisions"}'
 }
 
 usage() {

@@ -206,3 +206,78 @@ export $(grep -v '^#' .env | xargs)  # AWS creds (cho SG rule mới + SAML)
 bash scripts/deploy-all.sh           # fresh — kỳ vọng ra crapi + ZTA
 ```
 Nghiệm thu: xem TARGET-CRAPI.md §7.
+
+---
+
+## PHASE 6 — Reproducibility — ✅ ĐẠT (2026-09-10, người dùng chạy)
+
+Người dùng chạy `destroy-all.sh` → `deploy-all.sh` từ 0. Các điểm gãy trên đường
+fresh-deploy được sửa trong quá trình (branch `feat/crapi-target`):
+
+| # | Triệu chứng | Sửa |
+|---|---|---|
+| 1 | Bước 10: `Connection closed by UNKNOWN port 65535` — os_k3s_* UNREACHABLE | `deploy-all.sh` bước 9: `ssh-keygen -R` 3 jump-host IP trước khi patch inventory (ProxyJump con KHÔNG kế thừa `StrictHostKeyChecking=no`) |
+| 2 | Bước 13: `ctr images import: content digest … not found` | `sync-app-images.sh`: bỏ pull→save→import ảnh bên thứ 3 (node tự pull digest); `--pull-only` → save/import từng ảnh. `deploy-all.sh:299` → `deploy-app.sh --skip-images` |
+| 3 | `deploy-crapi.sh` thoát: `error: no objects passed to apply` | `apply_manifest()` guard — bỏ qua `cross-cloud-os.yaml` (file rỗng có chủ đích) |
+| 4 | `crapi-web` CrashLoopBackOff — nginx `[emerg] host not found in upstream "mailhog"` | `configmaps.yaml`: `MAILHOG_WEB_SERVICE` → `crapi-web:80` (mailhog ở OpenStack) |
+| 5 | Bước 14: `[seed_db] Seeding failed` (`namespaces "financial" not found`) | Bỏ `python3 tests/seed_db.py` — seed crAPI là Job `crapi-seed` trong `deploy-crapi.sh` |
+| 6 | Bước 14: `open-admin-uis.sh` `[FAIL]` 4 port-forward (api-gateway/web-portal/pgadmin/redisinsight) | Retarget: `crapi/bff` :18081 (entry point duy nhất — redirectUri Keycloak), `crapi/mailhog` :8025; bỏ pgadmin/redisinsight |
+| 7 | ~1h20m sau deploy: toàn bộ crapi 2-cloud 503, `svid:null` | **Uplink host `aio` = hotspot điện thoại drop NAT'd UDP** → DNS(8.8.8.8) + WireGuard chết → SPIRE agent không attest → SVID hết hạn → mТLS STRICT sập. Sửa: subnet DNS → 1.1.1.1 (terraform var); `k8s/dns/coredns-custom-openstack.yaml` (NXDOMAIN cho `openstacklocal` — chặn treo DNS nội cụm); `spire/k8s/agent-daemonset.yaml` `imagePullPolicy: IfNotPresent`; `wg-watchdog` systemd timer 60s trên 2 gateway; `deploy-crapi.sh::restart_workloads_for_sds()` (bounce workload sau SPIRE+mesh để istio-proxy tái lập SDS). Runbook khôi phục: memory `project-ztlab-openstack-uplink-fragility`. |
+
+**Nghiệm thu Phase 6 sau khôi phục (2026-09-10):**
+```
+crapi pods              2/2 cả 2 cluster; crapi-seed Completed
+mТLS SVID               VALID (istioctl proxy-config secret) mọi workload
+OPA crosscloud          zta/crapi/crosscloud/allow result:true (bff→identity)
+login testuser01        200 (Keycloak OIDC qua BFF, http://localhost:18081/login)
+GET workshop/identity   200 (device trình duyệt)
+BOLA                    còn nguyên (lỗ hổng app-layer — đúng chủ đích)
+health-check.sh         PASS=35 WARN=2 FAIL=0
+test_service_graph…py   2/2 PASS
+```
+
+---
+
+## PHASE 7 — Detection khớp attack surface crAPI — ✅ ĐẠT (2026-09-10)
+
+**Alert rules (`plg-stack/grafana/alerting/`):**
+- `access-denied` (OPA deny spike), `lateral-movement` (OPA deny + request_path nghiệp vụ),
+  `bfla` (BFF `rbac_denied`), `privilege-escalation` (security-scanner) — crAPI.
+- `brute-force` → viết lại: điểm vào là Keycloak → `{namespace="identity",app="keycloak"} |~ "LOGIN_ERROR"`
+  (+ giữ tín hiệu OTP crAPI). Bật `eventsEnabled` + `bruteForceProtected` realm ztlab (realm-config.json + live).
+- `large-response` → viết lại: `{job="envoy-access", namespace="crapi"} bytes_sent>1MiB` (bỏ core-banking/`/accounts/export`).
+- `security-control-plane` + `soar-engine` — infra, giữ.
+
+**Script tấn công THẬT (`tests/crapi_*.sh` + `tests/lib/crapi_common.sh`):**
+| Script | Cơ chế nghiệm thu | Kết quả |
+|---|---|---|
+| `crapi_lateral_movement.sh` | exec crapi-community → gọi crapi-workshop ngoài service_acl | 5/5 OPA deny (403) |
+| `crapi_bfla.sh` | testuser01 (crapi-user) → POST/DELETE admin/management | 4/4 BFF+OPA deny (403), `bff-audit rbac_denied` |
+| `crapi_step_up.sh` | testuser01 acr=1 → POST orders / reset-password | 2/2 → 401 `step_up_required`; đọc thường 200 |
+| `crapi_access_denied.sh` | crapi-web SVID → API workshop; + thiết bị suspicious → write | 14/14 deny |
+| `crapi_brute_force.sh` | 15× Keycloak login sai testuser01 | 15/15 fail, 15 `LOGIN_ERROR` → Loki |
+| `crapi_run_all.sh` | runner | PASS=5 FAIL=0 |
+
+**Sửa policy phát sinh:** `opa/crapi-policies/zta_crapi.rego` — `device_trust`/`posture` gate
+chuyển từ MỌI request bff→backend sang **write + `sensitive_crapi_action`** (`strong_control_required`),
+khớp BFF `_rbac_ok` (chỉ chặn suspicious device ở method GHI) + KE-HOACH §3.2. Trước đó `curl`
+không User-Agent → `device_trust:suspicious` → OPA 403 cả GET (lệch BFF).
+
+**Dashboard:** `plg-stack/grafana/dashboards/crapi-attack-surface.json` — OPA allow/deny,
+deny theo path nghiệp vụ, 5 stat kịch bản, SVID present vs null, cross-cloud→identity HTTP code,
+SOAR actions, BFF audit theo event. Thêm vào `deploy-app.sh` list.
+
+**Nghiệm thu e2e SOAR loop (2026-09-10, sau `crapi_run_all.sh`):**
+```
+Grafana rules FIRING:  Access Denied Spike · BFLA · Brute Force · Lateral Movement
+SOAR /cases:           access_denied→block_source_ip (2) · lateral_movement→isolate_workload (2)
+                       brute_force→revoke_user_sessions · large_response→restrict_egress
+                       tất cả status=pending_approval (HITL)
+Dashboard:             "crAPI — Attack Surface & Zero-Trust Enforcement" load OK
+```
+
+**Dọn kèm:** `promtail-daemonset.yaml` bỏ `financial` khỏi 3 namespace-regex ·
+`health-check.sh` bỏ check finance (api-gateway jwks→bff, AI 8090→18082, SOAR /incidents→/cases) ·
+`test_service_graph_consistency.py` → path crapi.
+
+**🛑 GATE 7 — HOÀN TẤT.**

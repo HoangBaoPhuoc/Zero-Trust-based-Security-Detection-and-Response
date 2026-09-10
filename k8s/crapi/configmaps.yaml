@@ -3,8 +3,10 @@
 #   - Postgres DUY NHẤT nằm ở OpenStack → community/workshop (AWS) trỏ tới
 #     selectorless Service `postgresdb-openstack` (NodePort 30432 qua WireGuard).
 #   - identity (OpenStack) trỏ Postgres local `postgresdb:5432`.
-#   - mailhog nằm ở AWS → identity (OpenStack) trỏ selectorless `mailhog-aws` :31025.
-#   - Mongo nằm ở AWS (chỉ community/workshop/mailhog dùng).
+#   - mailhog nằm ở OpenStack (cạnh identity → SMTP nội cluster). crapi-web (AWS)
+#     KHÔNG có Service `mailhog` → route /mailhog trỏ về `crapi-web:80` cho nginx
+#     khởi động được (xem mail thật qua Traefik `mailhog.ztlab.local` ở OpenStack).
+#   - Mongo nằm ở AWS (chỉ community/workshop dùng).
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -99,7 +101,10 @@ data:
   # chatbot ngoài phạm vi Core — trỏ về chính web để nginx không lỗi cấu hình;
   # không route nào của UI dùng /chatbot trong luồng demo.
   CHATBOT_SERVICE: "crapi-web:80"
-  MAILHOG_WEB_SERVICE: "mailhog:8025"
+  # mailhog ở cluster OpenStack — không có Service `mailhog` trên AWS. Trỏ về
+  # chính web (như CHATBOT_SERVICE) để nginx resolve upstream lúc start, không
+  # `[emerg] host not found in upstream "mailhog"` → CrashLoopBackOff.
+  MAILHOG_WEB_SERVICE: "crapi-web:80"
 ---
 apiVersion: v1
 kind: ConfigMap

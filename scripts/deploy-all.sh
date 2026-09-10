@@ -196,6 +196,16 @@ if run_step 9; then
 
   log "aws_bastion=$AWS_BASTION_IP  aws_gateway=$AWS_GATEWAY_IP  os_gateway=$OS_GATEWAY_IP"
 
+  # Xoá host key cũ của các jump host (bastion/gateway). Floating IP OpenStack
+  # (và có thể cả EIP AWS) được tái sử dụng qua nhiều lần deploy, nên known_hosts
+  # còn giữ key của instance cũ. ProxyJump mở một ssh con tới jump host KHÔNG kế
+  # thừa -o StrictHostKeyChecking=no/UserKnownHostsFile từ lệnh ngoài, nên key lệch
+  # làm hop này chết → "Connection closed by UNKNOWN port 65535" ở mọi node phía sau.
+  for _jh in "$AWS_BASTION_IP" "$AWS_GATEWAY_IP" "$OS_GATEWAY_IP"; do
+    ssh-keygen -R "$_jh" >/dev/null 2>&1 || true
+  done
+  ok "Đã xoá host key cũ của jump host trong known_hosts"
+
   HOSTS_YML="ansible/inventory/hosts.yml"
   cp "$HOSTS_YML" "$HOSTS_YML.bak"
 
@@ -286,7 +296,8 @@ if run_step 13; then
 
   IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh
   export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
-  bash scripts/deploy-app.sh
+  # --skip-images: sync-app-images.sh vừa chạy ngay trên, không lặp lại trong deploy-app.sh
+  bash scripts/deploy-app.sh --skip-images
 
   kubectl --context ctx-aws get pods -A
   kubectl --context ctx-openstack get pods -A
@@ -296,9 +307,10 @@ fi
 # ─────────────────────────────────────────────────────────
 step 14 "Seed data + mở UI"
 if run_step 14; then
-  python3 tests/seed_db.py
+  # Seed dữ liệu crAPI do Job `crapi-seed` (deploy-crapi.sh::run_seed) lo —
+  # signup user demo Keycloak + vehicle/product cho BOLA. Bước này chỉ mở UI.
   bash scripts/open-admin-uis.sh
-  ss -lnt | grep -E ':(18080|18081|3000|13100|8091|18082|18092|9090|5050|5540)\b' || true
+  ss -lnt | grep -E ':(8180|18081|3000|13100|8091|18082|18092|9090|8025)\b' || true
   ok "Seed + UI xong"
 fi
 
