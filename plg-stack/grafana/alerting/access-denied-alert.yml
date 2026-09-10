@@ -32,9 +32,9 @@ groups:
             RBAC (crapi-user cố gọi endpoint admin), lateral movement (crapi-community
             gọi crapi-workshop path ngoài service_acl), step-up chưa đạt, hoặc
             device-posture/trust non-compliant.
-          soar_action: |
-            ✅ SOAR đề xuất: block_source_ip / isolate_workload
-            🔧 Admin: Grafana → ZTLab → SOAR Cases → chọn playbook
+          recommended_response: |
+            🔎 Đề xuất cho người vận hành: chặn IP nguồn / cô lập workload (thủ công — không tự thực thi)
+            🔧 Bằng chứng: Grafana → ZTLab → Incident Evidence Dashboard
         labels:
           severity: high
           category: security

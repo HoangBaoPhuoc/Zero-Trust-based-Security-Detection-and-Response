@@ -12,7 +12,7 @@
 #     suspicious → POST đơn hàng → deny.
 #
 # Bằng chứng: OPA decision log spike (opa_result=false) + BFF audit
-# device_trust_denied → Grafana "Access Denied Spike" → SOAR block_source_ip.
+# device_trust_denied → Grafana "Access Denied Spike" → incident-analyzer evidence bundle.
 set -uo pipefail
 SCENARIO="crapi_access_denied"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,4 +58,4 @@ sleep 3
 n="$(loki_count '{job="opa-decisions", opa_result="false"}')"
 log "OPA deny trong 10 phút: $n dòng → Loki"
 
-pass "$SCENARIO — $denied/$total bị từ chối · OPA deny spike + device_trust_denied → Loki · Grafana 'Access Denied Spike' → SOAR block_source_ip"
+pass "$SCENARIO — $denied/$total bị từ chối · OPA deny spike + device_trust_denied → Loki · Grafana 'Access Denied Spike' → incident-analyzer evidence bundle"

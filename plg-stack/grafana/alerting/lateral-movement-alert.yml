@@ -38,8 +38,8 @@ groups:
             ATT&CK T1021 — một service crAPI bị chiếm quyền cố di chuyển ngang sang
             service khác. OPA (SPIFFE-based service_acl) chặn: cặp gọi này không có
             trong policy/service-graph-crapi.yaml.
-          soar_action: |
-            ✅ SOAR đề xuất: isolate_workload (patch Service selector cô lập pod)
+          recommended_response: |
+            🔎 Đề xuất cho người vận hành: cô lập workload nghi vấn (thủ công — không tự thực thi)
         labels:
           severity: critical
           category: security

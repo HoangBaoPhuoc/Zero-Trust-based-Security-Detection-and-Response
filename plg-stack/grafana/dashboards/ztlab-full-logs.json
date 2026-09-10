@@ -127,7 +127,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{namespace=~\"financial|plg-stack|identity\"} |~ \"(?i)(fraud|blocked|denied|attack|anomaly|error|401|403|malicious|bypass|injection|xmrig|brute.force|lateral|port.scan|credential.stuffing|soar_action)\"",
+          "expr": "{namespace=~\"financial|plg-stack|identity\"} |~ \"(?i)(fraud|blocked|denied|attack|anomaly|error|401|403|malicious|bypass|injection|xmrig|brute.force|lateral|port.scan|credential.stuffing|evidence_bundle)\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -154,7 +154,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{app=\"soar-engine\"} |~ \"soar_action\"",
+          "expr": "{app=\"incident-analyzer\"} |= \"evidence_bundle\"",
           "legendFormat": "",
           "refId": "A"
         }

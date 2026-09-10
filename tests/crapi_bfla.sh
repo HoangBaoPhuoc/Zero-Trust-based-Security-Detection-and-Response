@@ -9,7 +9,7 @@
 # /workshop/api/management/... và DELETE /identity/api/v2/admin/...
 #
 # Bằng chứng: BFF audit log (job=bff-audit, event=rbac_denied) → Grafana rule
-# "BFLA" → SOAR case (attack_type=access_denied) → block_source_ip.
+# "BFLA" → Grafana alert → incident-analyzer evidence bundle (attack_type=access_denied).
 set -uo pipefail
 SCENARIO="crapi_bfla"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,4 +41,4 @@ sleep 3
 n="$(loki_count '{job="bff-audit"} | json | event="rbac_denied"')"
 log "BFF audit rbac_denied trong 10 phút: $n dòng → Loki"
 
-pass "$SCENARIO — $denied/4 BFLA bị chặn · bff-audit rbac_denied → Loki · Grafana 'BFLA' → SOAR block_source_ip"
+pass "$SCENARIO — $denied/4 BFLA bị chặn · bff-audit rbac_denied → Loki · Grafana 'BFLA' → incident-analyzer evidence bundle"

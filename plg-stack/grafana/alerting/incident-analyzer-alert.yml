@@ -2,12 +2,12 @@ apiVersion: 1
 
 groups:
   - orgId: 1
-    name: soar-engine
+    name: incident-analyzer
     folder: ZTLab
     interval: 1m
     rules:
-      - uid: soar-action-log-alert
-        title: "SOAR Engine — Health Check (Action Recorded)"
+      - uid: incident-analyzer-health-alert
+        title: "Incident Analyzer — Health Check (Evidence Bundle Produced)"
         for: 0s
         condition: A
         data:
@@ -20,15 +20,15 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'count_over_time({job="soar-engine"} |= "soar_action" [10m])'
+              expr: 'count_over_time({job="incident-analyzer"} |= "evidence_bundle" [10m])'
               instant: true
               queryType: instant
               refId: A
         noDataState: OK
         execErrState: OK
         annotations:
-          summary: "SOAR Engine đang ghi nhận và thực thi action"
-          description: "Informational alert — xác nhận SOAR Engine hoạt động và đang xử lý events."
+          summary: "Incident Analyzer is producing evidence bundles"
+          description: "Informational — confirms the incident-analyzer received alerts and packaged evidence. This system takes no automated response action."
         labels:
           severity: info
           category: health

@@ -4,7 +4,7 @@
 # Mỗi kịch bản = tấn công THẬT vào lớp Zero-Trust đang chạy (mТLS SVID + OPA
 # service_acl + RBAC + step-up + device-trust), sinh log THẬT (OPA decision log
 # job=opa-decisions, istio access log job=envoy-access, BFF audit job=bff-audit,
-# Keycloak event) → Promtail → Loki → Grafana alert → SOAR case.
+# Keycloak event) → Promtail → Loki → Grafana alert → incident-analyzer evidence bundle.
 #
 # KHÔNG đẩy log giả vào Loki. KHÔNG phải bằng chứng "đã chặn" nếu chỉ chạy script
 # này — enforcement được xác nhận riêng bằng chính assertion trong từng script

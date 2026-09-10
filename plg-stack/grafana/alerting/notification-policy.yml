@@ -4,13 +4,13 @@ contactPoints:
   - orgId: 1
     name: ztlab-security-admin
     receivers:
-      # Kênh 1: SOAR engine tự động xử lý
-      - uid: ztlab-soar-webhook
+      # Kênh 1: incident-analyzer — đóng gói bằng chứng + gửi email (KHÔNG thực thi)
+      - uid: ztlab-incident-analyzer-webhook
         type: webhook
         settings:
-          url: "http://soar-engine.plg-stack.svc.cluster.local:8080/grafana-webhook"
+          url: "http://incident-analyzer.plg-stack.svc.cluster.local:8080/grafana-webhook"
           httpMethod: POST
-          title: "[ZTLab SOAR] {{ .CommonAnnotations.summary }}"
+          title: "[ZTLab Incident] {{ .CommonAnnotations.summary }}"
           message: "Severity: {{ .CommonLabels.severity }} | {{ .CommonAnnotations.description }}"
         disableResolveMessage: false
       # Kênh 2: Email cho admin
@@ -35,18 +35,16 @@ contactPoints:
             {{ end }}
             ─────────────────────────────────────────
 
-            SOAR REMEDIATION:
-            {{ .CommonAnnotations.soar_action }}
+            ĐỀ XUẤT PHẢN ỨNG (thủ công — hệ thống không tự thực thi):
+            {{ .CommonAnnotations.recommended_response }}
 
             👉 Xem chi tiết: http://127.0.0.1:3000/alerting/list
-            👉 SOAR Cases:   http://127.0.0.1:3000/d/soar-cases
+            👉 Bằng chứng:   http://127.0.0.1:3000/d/ztlab-incident-evidence
         disableResolveMessage: false
 
   # Kênh riêng cho lỗi hạ tầng bảo mật (SPIRE/OPA down) — CHỈ báo người,
-  # KHÔNG qua SOAR webhook. Lý do: SOAR playbook (isolate_workload/
-  # quarantine_workload) là hành động phá hủy; nếu chính SPIRE/OPA đang hỏng,
-  # để SOAR "tự xử lý" có thể khiến tình huống tệ hơn thay vì chỉ cần người
-  # vào sửa config/restart.
+  # KHÔNG qua incident-analyzer webhook. Lý do: lỗi control-plane cần admin
+  # vào sửa config/restart, không phải một evidence bundle.
   - orgId: 1
     name: ztlab-infra-admin
     receivers:
@@ -69,7 +67,7 @@ contactPoints:
             {{ end }}
             ─────────────────────────────────────────
 
-            Đây KHÔNG được SOAR tự xử lý — cần admin kiểm tra tay.
+            Hệ thống không tự xử lý — cần admin kiểm tra tay.
             👉 http://127.0.0.1:3000/alerting/list
         disableResolveMessage: false
 
@@ -83,9 +81,8 @@ policies:
     group_interval: 5m
     repeat_interval: 4h
     routes:
-      # Lỗi hạ tầng security control-plane (SPIRE/OPA) — chỉ báo người,
-      # KHÔNG qua SOAR. Đặt trước route category=security để không bị nuốt
-      # bởi matcher rộng hơn phía dưới.
+      # Lỗi hạ tầng security control-plane (SPIRE/OPA) — chỉ báo người.
+      # Đặt trước route category=security để không bị nuốt bởi matcher rộng hơn.
       - receiver: ztlab-infra-admin
         matchers:
           - 'category="infrastructure"'

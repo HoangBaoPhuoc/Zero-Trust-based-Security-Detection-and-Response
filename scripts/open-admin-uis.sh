@@ -11,11 +11,10 @@
 #   crAPI (BFF)  → http://localhost:18081   (entry point duy nhất — SPA + login OIDC)
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
-#   SOAR Engine  → http://localhost:8091
-#   AI Analyzer  → http://localhost:18082
-#   Scorer       → http://localhost:18092
+#   Incident Analyzer → http://localhost:8091   (evidence bundles — /evidence, /health)
 #   Prometheus   → http://localhost:9090
-#   MailHog      → http://localhost:8025   (mail signup/reset crAPI — cluster OpenStack)
+#   MailHog (crAPI)  → http://localhost:8025   (mail signup/reset crAPI — cluster OpenStack)
+#   MailHog (SOC)    → http://localhost:8026   (incident-analyzer evidence emails — plg-stack)
 
 set -euo pipefail
 
@@ -108,13 +107,12 @@ show_status() {
     [18081]="crAPI (BFF)"
     [3000]="Grafana"
     [13100]="Loki"
-    [8091]="SOAR Engine"
-    [18082]="AI Analyzer"
-    [18092]="Security Scorer"
+    [8091]="Incident Analyzer"
     [9090]="Prometheus"
-    [8025]="MailHog"
+    [8025]="MailHog (crAPI)"
+    [8026]="MailHog (SOC)"
   )
-  for port in 8180 18081 3000 13100 8091 18082 18092 9090 8025; do
+  for port in 8180 18081 3000 13100 8091 9090 8025 8026; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -168,13 +166,12 @@ if ! ss -lnt | awk '{print $4}' | grep -Eq ":13099$"; then
   echo $! > "$PID_DIR/loki-proxy.pid"
   echo "[ OK ] Loki-proxy → 10.10.10.1:13099 → localhost:13100 (for OpenStack promtail)"
 fi
-start_pf_daemon "SOAR Engine"         plg-stack  soar-engine       8091  8080
-start_pf_daemon "AI Analyzer"         plg-stack  ai-analyzer      18082  8080
-start_pf_daemon "Security Scorer"     plg-stack  security-scorer  18092  8080
+start_pf_daemon "Incident Analyzer"   plg-stack  incident-analyzer 8091  8080
 # Monitoring
 start_pf_daemon "Prometheus"          monitoring prometheus        9090  9090
 # Mail — mailhog nằm ở cluster OpenStack (cạnh crapi-identity)
-start_pf_daemon "MailHog"             crapi      mailhog           8025  8025  "$OS_CONTEXT"
+start_pf_daemon "MailHog (crAPI)"     crapi      mailhog           8025  8025  "$OS_CONTEXT"
+start_pf_daemon "MailHog (SOC)"       plg-stack  mailhog           8026  8025
 
 echo ""
 echo "Credentials:"

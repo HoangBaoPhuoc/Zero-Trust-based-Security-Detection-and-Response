@@ -33,10 +33,10 @@ groups:
             ATT&CK T1041 — istio access log (job=envoy-access) ghi bytes_sent > 1 MiB
             trong ns crapi. Có thể đang dump dữ liệu qua BOLA (đọc hồ sơ/xe/đơn hàng
             hàng loạt) hoặc tải trọn danh mục. crAPI GIỮ lỗ hổng BOLA (đúng chủ đích)
-            — lớp phát hiện + SOAR là phản ứng bù.
-          soar_action: |
-            ✅ SOAR đề xuất: restrict_egress (hạn chế lưu lượng ra của workload nghi vấn)
-            🔧 Admin duyệt: Grafana → ZTLab → SOAR Cases (analyst01)
+            — lớp phát hiện + phân tích bằng chứng là phản ứng bù (không tự thực thi).
+          recommended_response: |
+            🔎 Đề xuất cho người vận hành: hạn chế lưu lượng ra của workload nghi vấn (thủ công — không tự thực thi)
+            🔧 Bằng chứng: Grafana → ZTLab → Incident Evidence Dashboard (analyst01)
         labels:
           severity: high
           category: security

@@ -384,7 +384,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{app=\"soar-engine\"}",
+          "expr": "{app=\"incident-analyzer\"}",
           "refId": "A"
         }
       ]
