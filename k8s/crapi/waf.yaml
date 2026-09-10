@@ -1,0 +1,135 @@
+# WAF — ModSecurity3 + OWASP CRS in front of the BFF (A2 of KEHOACH-THAYDOI-HETHONG.md).
+#
+# SecRuleEngine = DetectionOnly: CRS evaluates every request and writes a JSON
+# audit record to stdout on a rule match, but NEVER blocks — so it cannot break
+# a crAPI business flow and does not distort the training telemetry. Its purpose
+# is a control measurement for the thesis: CRS flags SQLi/XSS/traversal but flags
+# NOTHING on a BOLA/BFLA request, which is the whole point of the Zero-Trust
+# authorization layer.
+#
+# Request path after A2:  Traefik ── HTTP ──> waf:8080 ── mTLS (Istio) ──> bff:8080
+# waf runs an Istio sidecar with a real SPIRE SVID (spiffe://ztlab.local/aws/waf),
+# so the waf->bff hop is mТLS and shows up in the OPA decision log / envoy access
+# log like any other in-mesh hop. The waf->bff edge is declared in
+# policy/service-graph-crapi.yaml (regenerate service_acl.rego + pod-segmentation).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: waf, namespace: crapi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf
+  namespace: crapi
+  labels: { app: waf }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: waf }
+  template:
+    metadata:
+      labels: { app: waf }
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/waf"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: waf
+      containers:
+        - name: waf
+          image: owasp/modsecurity-crs@sha256:1503b5ab7b8f8799d1525cd2a1690dfcdd5cc251a705523aa5783dd20e038b1b
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: PORT,            value: "8080" }
+            - { name: BACKEND,         value: "http://bff.crapi.svc.cluster.local:8080" }
+            - { name: SERVER_NAME,     value: "crapi.ztlab.local" }
+            # DetectionOnly — evaluate + log, never block (thesis control measurement)
+            - { name: MODSEC_RULE_ENGINE,          value: "DetectionOnly" }
+            - { name: MODSEC_REQ_BODY_ACCESS,      value: "on" }
+            - { name: MODSEC_RESP_BODY_ACCESS,     value: "off" }
+            # JSON audit to stdout on any relevant transaction (rule match);
+            # add K = matched-rules section so the flagged CRS rule ids are visible.
+            - { name: MODSEC_AUDIT_ENGINE,         value: "RelevantOnly" }
+            - { name: MODSEC_AUDIT_LOG,            value: "/dev/stdout" }
+            - { name: MODSEC_AUDIT_LOG_FORMAT,     value: "JSON" }
+            - { name: MODSEC_AUDIT_LOG_TYPE,       value: "Serial" }
+            - { name: MODSEC_AUDIT_LOG_PARTS,      value: "ABIJDEFHKZ" }
+            - { name: MODSEC_TAG,                  value: "ztlab-waf" }
+            # CRS in "blocking" paranoia posture but the engine is DetectionOnly,
+            # so the anomaly threshold decides only what gets *logged*, not blocked.
+            - { name: PARANOIA,                    value: "1" }
+            - { name: ANOMALY_INBOUND,             value: "5" }
+            - { name: ANOMALY_OUTBOUND,            value: "4" }
+            # Only the ModSecurity JSON audit stream should land on stdout so the
+            # promtail waf-audit job is clean; nginx access log goes nowhere,
+            # error log to stderr.
+            - { name: ACCESSLOG,                   value: "/dev/null" }
+            - { name: ERRORLOG,                    value: "/dev/stderr" }
+            # nginx must not add its own X-Forwarded-* trust; the edge (Traefik)
+            # and BFF handle forwarded identity. Keep proto/port passthrough only.
+            - { name: NGINX_ALWAYS_TLS_REDIRECT,   value: "off" }
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf
+  namespace: crapi
+  labels: { app: waf }
+spec:
+  selector: { app: waf }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+# waf receives plain HTTP from Traefik (not in the mesh) → PERMISSIVE.
+# Its outbound hop to bff is ISTIO_MUTUAL (bff-custom-san DestinationRule).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: waf-permissive
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: waf }
+  mtls:
+    mode: PERMISSIVE
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: waf-custom-san
+  namespace: crapi
+spec:
+  host: waf.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/waf"]
+---
+# Parity with the other crAPI edge workloads: every request through waf is also
+# evaluated by OPA ext_authz (the waf->bff edge in service_acl.rego allows it).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: waf-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: waf }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]

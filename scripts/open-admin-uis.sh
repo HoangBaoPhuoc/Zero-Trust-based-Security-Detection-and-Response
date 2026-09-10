@@ -8,7 +8,8 @@
 #
 # UI sau khi bật:
 #   Keycloak     → http://localhost:8180   (admin / ztlab-admin-2026)
-#   crAPI (BFF)  → http://localhost:18081   (entry point duy nhất — SPA + login OIDC)
+#   crAPI        → http://localhost:18081   (WAF→BFF — entry point; SPA + login OIDC)
+#   crAPI BFF bypass → http://localhost:18083   (bỏ qua WAF, debug)
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
 #   Incident Analyzer → http://localhost:8091   (evidence bundles — /evidence, /health)
@@ -104,7 +105,8 @@ show_status() {
   echo "=== ZTLab — Port-forward status ==="
   declare -A PORT_NAMES=(
     [8180]="Keycloak"
-    [18081]="crAPI (BFF)"
+    [18081]="crAPI (WAF→BFF)"
+    [18083]="crAPI BFF (bypass)"
     [3000]="Grafana"
     [13100]="Loki"
     [8091]="Incident Analyzer"
@@ -112,7 +114,7 @@ show_status() {
     [8025]="MailHog (crAPI)"
     [8026]="MailHog (SOC)"
   )
-  for port in 8180 18081 3000 13100 8091 9090 8025 8026; do
+  for port in 8180 18081 18083 3000 13100 8091 9090 8025 8026; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -150,11 +152,11 @@ echo ""
 
 # Identity
 start_pf_daemon "Keycloak"            identity   keycloak          8180  8080
-# crAPI (ứng dụng mục tiêu) — BFF là entry point DUY NHẤT (serve luôn SPA
-# crapi-web + /identity /community /workshop + login Keycloak OIDC). Cổng 18081
-# vì đó là redirectUri đã đăng ký cho client crapi-bff (BFF tự dựng
-# redirect_uri = <host đang gọi>/auth/callback → phải khớp Keycloak).
-start_pf_daemon "crAPI (BFF)"         crapi      bff              18081  8080
+# crAPI (ứng dụng mục tiêu) — điểm vào là WAF (ModSecurity/CRS DetectionOnly, A2)
+# đứng trước BFF. Cổng 18081 khớp redirectUri client crapi-bff. WAF proxy trong
+# suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).
+start_pf_daemon "crAPI (WAF→BFF)"     crapi      waf              18081  8080
+start_pf_daemon "crAPI BFF (bypass)"  crapi      bff              18083  8080
 # PLG Stack
 start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
 start_pf_daemon "Loki"                plg-stack  loki             13100  3100

@@ -39,4 +39,15 @@ service_acl := {
       "GET": ["/identity/health_check"],
     },
   },
+  "spiffe://ztlab.local/aws/waf": {
+    "spiffe://ztlab.local/aws/bff": {
+      "GET": ["/"],
+      "POST": ["/"],
+      "PUT": ["/"],
+      "DELETE": ["/"],
+      "PATCH": ["/"],
+      "HEAD": ["/"],
+      "OPTIONS": ["/"],
+    },
+  },
 }
