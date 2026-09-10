@@ -553,107 +553,14 @@ keycloak_admin_password() {
   fail "KEYCLOAK_ADMIN_PASSWORD is unset and identity/keycloak-secret does not exist"
 }
 
-create_keycloak_admin_secret() {
-  if kaws get secret keycloak-admin-secret -n plg-stack >/dev/null 2>&1; then
-    log "keycloak-admin-secret already exists"
-    return
-  fi
-  local admin_password
-  admin_password="$(keycloak_admin_password)"
-  kaws create secret generic keycloak-admin-secret -n plg-stack \
-    --from-literal=password="$admin_password"
-  ok "keycloak-admin-secret created"
-}
-
-create_ai_secret() {
-  if kaws get secret ai-secrets -n plg-stack >/dev/null 2>&1; then
-    log "ai-secrets already exists"
-    return
-  fi
-
-  kaws create secret generic ai-secrets -n plg-stack \
-    --from-literal=SOAR_DRY_RUN="${SOAR_DRY_RUN:-true}" \
-    --from-literal=SOAR_AUTO_EXECUTE="${SOAR_AUTO_EXECUTE:-true}" \
-    --from-literal=SOAR_MIN_SEVERITY="medium" \
-    --from-literal=SOAR_MIN_CONFIDENCE="0.50" \
-    --from-literal=SOAR_NAMESPACE="crapi" \
-    --from-literal=SOAR_ALLOWED_CONTEXTS="${SOAR_ALLOWED_CONTEXTS:-ctx-aws,ctx-openstack}" \
-    --from-literal=SOAR_API_TOKEN="${SOAR_API_TOKEN:-}" \
-    --from-literal=SOAR_CASE_STORE_PATH="/data/cases.jsonl" \
-    --from-literal=PORTAL_URL="${PORTAL_URL:-http://portal.ztlab.local}" \
-    --from-literal=ADMIN_WEBHOOK_URL="${ADMIN_WEBHOOK_URL:-}"
-}
-
-create_soar_main_patch_configmap() {
-  # k8s/plg-stack/ai-soar.yaml mounts this ConfigMap over /app/main.py — the base
-  # ztlab/soar-engine image lags services/soar-engine/main.py, so this patch is a
-  # hard requirement (not optional), refreshed on every deploy.
-  kaws create configmap soar-main-patch -n plg-stack \
-    --from-file=main.py="$REPO_ROOT/services/soar-engine/main.py" \
-    --dry-run=client -o yaml | kaws apply -f -
-}
-
-create_soar_openstack_kubeconfig_secret() {
-  # k8s/plg-stack/ai-soar.yaml mounts this as /etc/soar/openstack-kubeconfig/kubeconfig;
-  # soar-engine's isolate_workload/restrict_egress playbooks load it for context
-  # "ctx-openstack" to act on the OpenStack cluster. Skip if already created for
-  # this cluster generation — recreate manually (kubectl delete secret ...) if the
-  # OpenStack k3s master was rebuilt without a full destroy-all cycle.
-  if kaws get secret soar-openstack-kubeconfig -n plg-stack >/dev/null 2>&1; then
-    log "soar-openstack-kubeconfig already exists"
-    return
-  fi
-
-  local os_gateway_ip os_master_ip tmp_raw tmp_rewritten
-  os_gateway_ip="$(ansible-inventory -i "$REPO_ROOT/ansible/inventory/hosts.yml" --host os_gateway | python3 -c 'import json,sys; print(json.load(sys.stdin)["ansible_host"])')"
-  os_master_ip="$(ansible-inventory -i "$REPO_ROOT/ansible/inventory/hosts.yml" --host os_k3s_master | python3 -c 'import json,sys; print(json.load(sys.stdin)["ansible_host"])')"
-  [[ -n "$os_gateway_ip" && -n "$os_master_ip" ]] || fail "Could not resolve os_gateway/os_k3s_master from inventory"
-
-  tmp_raw="$(mktemp)"
-  tmp_rewritten="$(mktemp)"
-  ssh -i "$SSH_KEY" -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no \
-      -o ProxyCommand="ssh -i ${SSH_KEY} -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -W %h:%p ubuntu@${os_gateway_ip}" \
-      "ubuntu@${os_master_ip}" "sudo cat /etc/rancher/k3s/k3s.yaml" > "$tmp_raw"
-
-  # Rewrite server from the node-local https://127.0.0.1:6443 to the private IP
-  # reachable from AWS pods over the WireGuard tunnel, and rename default -> ctx-openstack
-  # (soar-engine's _load_k8s() looks up the kubeconfig by that context name).
-  python3 - "$tmp_raw" "$tmp_rewritten" "$os_master_ip" <<'PYEOF'
-import sys, yaml
-src, dst, master_ip = sys.argv[1:4]
-with open(src) as f:
-    kc = yaml.safe_load(f)
-kc["clusters"][0]["name"] = "ctx-openstack"
-kc["clusters"][0]["cluster"]["server"] = f"https://{master_ip}:6443"
-kc["contexts"][0]["name"] = "ctx-openstack"
-kc["contexts"][0]["context"]["cluster"] = "ctx-openstack"
-kc["contexts"][0]["context"]["user"] = "ctx-openstack"
-kc["users"][0]["name"] = "ctx-openstack"
-kc["current-context"] = "ctx-openstack"
-with open(dst, "w") as f:
-    yaml.safe_dump(kc, f)
-PYEOF
-
-  kaws create secret generic soar-openstack-kubeconfig -n plg-stack \
-    --from-file=kubeconfig="$tmp_rewritten"
-  rm -f "$tmp_raw" "$tmp_rewritten"
-  ok "soar-openstack-kubeconfig created"
-}
-
-create_smtp_secret() {
-  if kaws get secret grafana-smtp-secret -n plg-stack >/dev/null 2>&1; then
-    log "grafana-smtp-secret already exists"
-    return
-  fi
-  # SMTP_PASS may be empty in lab — secret is created anyway so pods start cleanly.
-  # soar-engine references this secret with optional: true.
-  kaws create secret generic grafana-smtp-secret -n plg-stack \
-    --from-literal=password="${SMTP_PASS:-}"
-  ok "grafana-smtp-secret created"
-}
+# A4 removed the SOAR execution engine. The plg-stack secrets it required
+# (keycloak-admin-secret for revoke_user_sessions, ai-secrets for SOAR_*,
+# soar-main-patch configmap, soar-openstack-kubeconfig for cross-cloud patching,
+# grafana-smtp-secret for the Gmail relay) are all gone. incident-analyzer keeps
+# no k8s client and notifies through a credential-less in-cluster MailHog.
 
 deploy_vault_and_seed_secrets() {
-  log "Deploying Vault and seeding grafana-smtp-secret KV"
+  log "Deploying Vault (Zero-Trust secrets component) and seeding smtp-secret KV"
   kaws apply -f "$REPO_ROOT/k8s/vault/vault.yaml"
   kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/vault-0 -n vault --timeout=120s
 
@@ -695,15 +602,18 @@ except Exception:
   kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault secrets enable -path=secret kv-v2" >/dev/null 2>&1 || true
   kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault auth enable kubernetes" >/dev/null 2>&1 || true
   kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault write auth/kubernetes/config kubernetes_host=https://kubernetes.default.svc:443" >/dev/null
-  kaws exec -i -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault policy write soar-engine -" >/dev/null <<'EOF'
-path "secret/data/grafana-smtp-secret" {
+  # Latent capability: a real SMTP relay password for incident-analyzer can be
+  # dropped into secret/smtp-secret and consumed via a Vault init container
+  # without redeploying Vault. MailHog (the default sink) needs no credential.
+  kaws exec -i -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault policy write incident-analyzer -" >/dev/null <<'EOF'
+path "secret/data/smtp-secret" {
   capabilities = ["read"]
 }
 EOF
-  kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault write auth/kubernetes/role/soar-engine bound_service_account_names=soar-engine bound_service_account_namespaces=plg-stack policies=soar-engine ttl=1h" >/dev/null
-  kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv put secret/grafana-smtp-secret password='${SMTP_PASS:-}'" >/dev/null
+  kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault write auth/kubernetes/role/incident-analyzer bound_service_account_names=incident-analyzer bound_service_account_namespaces=plg-stack policies=incident-analyzer ttl=1h" >/dev/null
+  kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv put secret/smtp-secret password='${SMTP_PASS:-}'" >/dev/null
 
-  ok "Vault ready: unsealed, kubernetes auth configured, grafana-smtp-secret seeded"
+  ok "Vault ready: unsealed, kubernetes auth configured, smtp-secret seeded"
 }
 
 provision_grafana_configmaps() {
@@ -722,7 +632,7 @@ provision_grafana_configmaps() {
     --from-file=envoy-access-logs.json="$REPO_ROOT/plg-stack/grafana/dashboards/envoy-access-logs.json" \
     --from-file=opa-decision-log.json="$REPO_ROOT/plg-stack/grafana/dashboards/opa-decision-log.json" \
     --from-file=threat-intel-feed.json="$REPO_ROOT/plg-stack/grafana/dashboards/threat-intel-feed.json" \
-    --from-file=ztlab-soar-dashboard.json="$REPO_ROOT/plg-stack/grafana/dashboards/ztlab-soar-dashboard.json" \
+    --from-file=incident-evidence-dashboard.json="$REPO_ROOT/plg-stack/grafana/dashboards/incident-evidence-dashboard.json" \
     --from-file=crapi-attack-surface.json="$REPO_ROOT/plg-stack/grafana/dashboards/crapi-attack-surface.json"
   kaws create configmap grafana-alerting -n plg-stack \
     --from-file=brute-force-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/brute-force-alert.yml" \
@@ -731,22 +641,18 @@ provision_grafana_configmaps() {
     --from-file=lateral-movement-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/lateral-movement-alert.yml" \
     --from-file=access-denied-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/access-denied-alert.yml" \
     --from-file=privilege-escalation-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/privilege-escalation-alert.yml" \
-    --from-file=soar-engine-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/soar-engine-alert.yml" \
+    --from-file=incident-analyzer-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/incident-analyzer-alert.yml" \
     --from-file=security-control-plane-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/security-control-plane-alert.yml" \
     --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
 }
 
 deploy_observability_response() {
-  step "Step 6: PLG, AI/SOAR, Prometheus"
+  step "Step 6: PLG, incident-analyzer, Prometheus"
 
-  # redis-auth must exist in plg-stack (soar-engine + security-scorer reference it)
-  kaws create secret generic redis-auth -n plg-stack \
-    --from-literal=password="ZTALab-Redis-2026!" \
-    --dry-run=client -o yaml | kaws apply -f -
-
-  create_keycloak_admin_secret
-  create_ai_secret
-  create_smtp_secret
+  # Vault stays deployed as the Zero-Trust secrets component; A4 dropped the
+  # soar-engine consumer, so no plg-stack redis-auth / keycloak-admin-secret /
+  # ai-secrets / grafana-smtp-secret are needed any more. incident-analyzer
+  # notifies via a credential-less in-cluster MailHog.
   deploy_vault_and_seed_secrets
 
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki-configmap.yaml"
@@ -788,21 +694,15 @@ sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/n
   kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
-  kaws apply -f "$REPO_ROOT/k8s/rbac/soar-rbac.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/rbac/web-portal-response-rbac.yaml"
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/security-scorer.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack security-scorer 120s
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-analyzer.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack ai-analyzer 120s
-  create_soar_main_patch_configmap
-  create_soar_openstack_kubeconfig_secret
-  kaws apply -f "$REPO_ROOT/k8s/plg-stack/ai-soar.yaml"
-  wait_deployment "$AWS_CONTEXT" plg-stack soar-engine 180s
+  # A4: single detection-side service (no RBAC, no k8s client, no response).
+  kaws apply -f "$REPO_ROOT/k8s/plg-stack/incident-analyzer.yaml"
+  wait_deployment "$AWS_CONTEXT" plg-stack mailhog 120s
+  wait_deployment "$AWS_CONTEXT" plg-stack incident-analyzer 150s
 
   kaws apply -f "$REPO_ROOT/k8s/monitoring/prometheus.yaml"
   wait_deployment "$AWS_CONTEXT" monitoring prometheus 180s
 
-  ok "PLG, AI/SOAR, and Prometheus ready on AWS"
+  ok "PLG, incident-analyzer, and Prometheus ready on AWS"
 }
 
 apply_policies_and_ingress() {

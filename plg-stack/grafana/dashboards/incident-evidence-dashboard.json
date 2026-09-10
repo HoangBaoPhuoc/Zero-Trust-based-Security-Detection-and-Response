@@ -184,7 +184,7 @@
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{namespace=~\"financial|plg-stack\"} |~ \"(?i)(fraud_gate_bypass|payment_blocked|ip_blocked|brute_force|lateral_movement|port_scan|exploit_probe|credential_stuffing|soar_action|blocked_fraud|email_sent)\"",
+          "expr": "{namespace=~\"financial|plg-stack\"} |~ \"(?i)(fraud_gate_bypass|payment_blocked|ip_blocked|brute_force|lateral_movement|port_scan|exploit_probe|credential_stuffing|evidence_bundle|blocked_fraud|email_sent)\"",
           "legendFormat": "",
           "refId": "A"
         }
@@ -195,7 +195,7 @@
       "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
       "id": 320,
-      "title": "🤖 SOAR Actions & Playbooks",
+      "title": "🧾 Evidence Bundles",
       "type": "row"
     },
 
@@ -214,12 +214,12 @@
         "sortOrder": "Descending",
         "wrapLogMessage": true
       },
-      "title": "🤖 SOAR Playbook Execution Log",
+      "title": "🧾 Evidence Bundle Log",
       "type": "logs",
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{app=\"soar-engine\"}",
+          "expr": "{app=\"incident-analyzer\"}",
           "legendFormat": "",
           "refId": "A"
         }
@@ -241,12 +241,12 @@
         "sortOrder": "Descending",
         "wrapLogMessage": true
       },
-      "title": "🧠 AI Analyzer Detections",
+      "title": "🧠 Incident Analyzer Detections",
       "type": "logs",
       "targets": [
         {
           "datasource": { "type": "loki", "uid": "Loki" },
-          "expr": "{app=\"soar-engine\"} |~ \"(?i)(alert|attack|block|detect|anomaly|playbook)\"",
+          "expr": "{app=\"incident-analyzer\"}",
           "legendFormat": "",
           "refId": "A"
         }
@@ -391,7 +391,7 @@
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "ZTLab SOAR Dashboard",
-  "uid": "ztlab-soar",
+  "title": "ZTLab Incident Evidence Dashboard",
+  "uid": "ztlab-incident-evidence",
   "version": 1
 }

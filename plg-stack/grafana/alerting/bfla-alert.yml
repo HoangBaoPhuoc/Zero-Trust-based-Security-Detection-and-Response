@@ -32,8 +32,8 @@ groups:
             OWASP API5:2023 BFLA. crapi-user hoặc soc-analyst cố gọi
             /identity/api/v2/admin/* hoặc /workshop/api/management/* hoặc ghi dữ liệu
             khi chỉ có quyền đọc. BFF `_rbac_ok` (gương OPA zta_crapi.rego) từ chối.
-          soar_action: |
-            ✅ SOAR đề xuất: block_source_ip + revoke_user_sessions (review account)
+          recommended_response: |
+            🔎 Đề xuất cho người vận hành: chặn IP nguồn + rà soát tài khoản (thủ công — không tự thực thi)
         labels:
           severity: high
           category: security

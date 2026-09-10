@@ -11,7 +11,7 @@
 #
 # Bằng chứng: OPA decision log (job=opa-decisions, opa_result=false,
 # request_path=/workshop/api/shop/orders) → Grafana rule "Lateral Movement"
-# (severity critical) → SOAR case attack_type=lateral_movement → playbook
+# (severity critical) → incident-analyzer evidence bundle (attack_type=lateral_movement)
 # isolate_workload.
 set -uo pipefail
 SCENARIO="crapi_lateral_movement"
@@ -44,4 +44,4 @@ n="$(loki_count '{job="opa-decisions", opa_result="false"} |~ "/workshop/api/sho
 log "OPA decision log (deny, /workshop/api/shop/orders) trong 10 phút: $n dòng vào Loki"
 [[ "$n" -ge 1 ]] || log "  (chưa thấy trên Loki — promtail có độ trễ ~15-30s; Grafana vẫn sẽ fire ở lần eval kế tiếp)"
 
-pass "$SCENARIO — $denied/5 bị OPA chặn · decision log → Loki · Grafana 'Lateral Movement' sẽ fire ≤1 phút → SOAR isolate_workload"
+pass "$SCENARIO — $denied/5 bị OPA chặn · decision log → Loki · Grafana 'Lateral Movement' sẽ fire ≤1 phút → incident-analyzer evidence bundle"

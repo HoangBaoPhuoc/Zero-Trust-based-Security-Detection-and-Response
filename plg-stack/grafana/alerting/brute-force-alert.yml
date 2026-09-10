@@ -37,8 +37,8 @@ groups:
             ATT&CK T1110 — brute-force credential/OTP. Người dùng cuối xác thực ở
             Keycloak (qua BFF OIDC); crAPI còn challenge OTP brute-force riêng
             (/identity/api/auth/v3/check-otp). Ngưỡng >10 lỗi/5 phút.
-          soar_action: |
-            ✅ SOAR đề xuất: revoke_user_sessions + block_source_ip
+          recommended_response: |
+            🔎 Đề xuất cho người vận hành: thu hồi phiên + chặn IP nguồn (thực hiện thủ công — hệ thống không tự thực thi)
         labels:
           severity: high
           category: security

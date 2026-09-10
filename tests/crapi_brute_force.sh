@@ -10,7 +10,7 @@
 # khoá tài khoản; script dừng ở 15 lần để không khoá vĩnh viễn tài khoản demo.)
 #
 # Bằng chứng: {namespace="identity",app="keycloak"} |~ "LOGIN_ERROR" → Grafana
-# rule "Brute Force" → SOAR case attack_type=brute_force → revoke_user_sessions
+# rule "Brute Force" → incident-analyzer evidence bundle (attack_type=brute_force)
 # + block_source_ip.
 set -uo pipefail
 SCENARIO="crapi_brute_force"
@@ -51,4 +51,4 @@ n="$(loki_count '{namespace="identity",app="keycloak"} |~ "(?i)login_error|inval
 log "Keycloak LOGIN_ERROR trong 10 phút: $n dòng → Loki"
 [[ "$n" -ge 1 ]] || log "  (nếu 0: bật event logging realm ztlab — Realm settings → Events → Save events; hoặc Keycloak log level)"
 
-pass "$SCENARIO — $fail_count/$ATTEMPTS login sai · Keycloak LOGIN_ERROR → Loki · Grafana 'Brute Force' → SOAR revoke_user_sessions"
+pass "$SCENARIO — $fail_count/$ATTEMPTS login sai · Keycloak LOGIN_ERROR → Loki · Grafana 'Brute Force' → incident-analyzer evidence bundle"

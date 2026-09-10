@@ -36,12 +36,8 @@ spec:
             matchLabels: { kubernetes.io/metadata.name: spire }
       ports:
         - { port: 8181, protocol: TCP }
-    # soar-engine + security-scorer (plg-stack) → redis :6379
-    - from:
-        - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: plg-stack }
-      ports:
-        - { port: 6379, protocol: TCP }
+    # (A4: dropped plg-stack → redis:6379 — soar-engine/security-scorer removed;
+    # incident-analyzer reads only from Loki.)
     # nội bộ ns crapi (podSelector {} nghĩa là bất kỳ pod crapi → pod crapi)
     - from:
         - namespaceSelector:

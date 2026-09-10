@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Chạy toàn bộ kịch bản tấn công crAPI → sinh log thật → Grafana → SOAR.
+# Chạy toàn bộ kịch bản tấn công crAPI → sinh log thật → Grafana → incident-analyzer.
 #
 # Yêu cầu: cụm chạy + port-forward (bash scripts/open-admin-uis.sh).
 # Sau khi chạy: xem Grafana (http://localhost:3000, Alerting → ZTLab) fire,
-# rồi SOAR cases (http://localhost:8091/cases) và mail HITL (MailHog :8025).
+# rồi evidence bundles (http://localhost:8091/evidence) và mail (MailHog SOC :8026).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -34,6 +34,6 @@ echo; echo "  PASS=$pass  FAIL=$failc"
 echo
 echo "Tiếp theo (≤2 phút):"
 echo "  1. Grafana  http://localhost:3000  → Alerting → Alert rules → folder ZTLab (xem rule chuyển Firing)"
-echo "  2. SOAR     http://localhost:8091/cases  (case mới theo attack_type)"
+echo "  2. Evidence http://localhost:8091/evidence  (bundle mới theo attack_type)"
 echo "  3. MailHog  http://localhost:8025  (mail HITL cho case severity cao)"
 [[ $failc -eq 0 ]] || exit 1

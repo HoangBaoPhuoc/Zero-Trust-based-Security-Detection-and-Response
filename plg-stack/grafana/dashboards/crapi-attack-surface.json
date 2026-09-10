@@ -59,12 +59,12 @@
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 17 },
       "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "sum by (response_code) (count_over_time({job=\"envoy-access\", namespace=\"crapi\"} | json | path=~\"/identity/.*\" [1m]))", "refId": "A", "legendFormat": "HTTP {{response_code}}" } ] },
 
-    { "type": "row", "title": "Phản ứng — SOAR / audit", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 }, "id": 30 },
+    { "type": "row", "title": "Phát hiện — evidence bundles / audit", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 }, "id": 30 },
 
-    { "id": 31, "type": "logs", "title": "SOAR actions (job=soar-engine)", "datasource": { "type": "loki", "uid": "Loki" },
+    { "id": 31, "type": "logs", "title": "Evidence bundles (job=incident-analyzer)", "datasource": { "type": "loki", "uid": "Loki" },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 26 },
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" },
-      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "{job=\"soar-engine\"} |~ \"soar_action|case|playbook\"", "refId": "A" } ] },
+      "targets": [ { "datasource": { "type": "loki", "uid": "Loki" }, "expr": "{job=\"incident-analyzer\"} |= \"evidence_bundle\"", "refId": "A" } ] },
 
     { "id": 32, "type": "timeseries", "title": "BFF audit events theo loại", "datasource": { "type": "loki", "uid": "Loki" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 26 },

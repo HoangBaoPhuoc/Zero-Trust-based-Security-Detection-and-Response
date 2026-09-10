@@ -37,12 +37,10 @@ if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
   K3S_TARGETS="$AWS_K3S_TARGETS:$OPENSTACK_K3S_TARGETS"
 fi
 
-# Ảnh ztlab/* tự build (còn lại sau khi gỡ finance app — KE-HOACH-CRAPI.md
-# Phase 5): bff (edge PEP crAPI) + lớp detection (soar-engine, ai-analyzer,
-# security-scorer). crAPI backends = PULL (PULL_IMAGES bên dưới).
+# Ảnh ztlab/* tự build: bff (edge PEP crAPI) + incident-analyzer (lớp phát hiện —
+# gộp soar-engine/ai-analyzer/security-scorer sau A4). crAPI backends = PULL.
 BATCHES=()
-BATCHES+=("bff soar-engine")
-BATCHES+=("ai-analyzer security-scorer")
+BATCHES+=("bff incident-analyzer")
 
 # Ảnh bên thứ 3 cho crAPI — PULL từ Docker Hub, ghim digest để tái tạo được
 # (KE-HOACH-CRAPI.md trục D). Import y hệt luồng save→copy→ctr import.
@@ -230,7 +228,7 @@ restart_financial_deployments() {
     kubectl --context ctx-aws -n "$ns" rollout restart deployment 2>/dev/null || true
     [[ "$SKIP_PUSH_OPENSTACK" != "true" ]] && kubectl --context ctx-openstack -n "$ns" rollout restart deployment 2>/dev/null || true
   done
-  kubectl --context ctx-aws -n plg-stack rollout restart deployment/soar-engine deployment/ai-analyzer deployment/security-scorer 2>/dev/null || true
+  kubectl --context ctx-aws -n plg-stack rollout restart deployment/incident-analyzer 2>/dev/null || true
 }
 
 verify_quick() {

@@ -28,7 +28,7 @@ groups:
         execErrState: Alerting
         annotations:
           summary: "Privilege Escalation trong container — vi phạm workload isolation"
-          description: "ATT&CK T1068 — security-scanner phát hiện container chạy uid=0 với dangerous capabilities (CAP_DAC_OVERRIDE, CAP_SETUID...) hoặc /etc/shadow đọc được — vi phạm least-privilege ở tầng container, không chỉ tầng network. Log thật từ k8s/financial/security-scanner-job.yaml. (Khác T1611 'Escape to Host' — kỹ thuật đó là thoát ra ngoài container tới host, ai-analyzer.yaml có pattern riêng cho container_escape/T1611, không trùng với rule này.)"
+          description: "ATT&CK T1068 — security-scanner phát hiện container chạy uid=0 với dangerous capabilities (CAP_DAC_OVERRIDE, CAP_SETUID...) hoặc /etc/shadow đọc được — vi phạm least-privilege ở tầng container, không chỉ tầng network. Log thật từ k8s/financial/security-scanner-job.yaml. (Khác T1611 'Escape to Host' — kỹ thuật đó là thoát ra ngoài container tới host, incident-analyzer phân loại container_escape/T1611 riêng, không trùng với rule này.)"
         labels:
           severity: critical
           category: security
