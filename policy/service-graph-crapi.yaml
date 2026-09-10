@@ -25,6 +25,9 @@ workloads:
   openstack/crapi-identity: { cluster: openstack, namespace: crapi, service_account: crapi-identity }
   openstack/postgresdb:     { cluster: openstack, namespace: crapi, app_label: postgresdb, spiffe: false }
   openstack/opa:            { cluster: openstack, namespace: crapi, app_label: opa, spiffe: false }
+  # A1 — Keycloak + keycloak-db chuyển sang OpenStack (ns identity). Không sidecar,
+  # không qua OPA service_acl; AWS gọi cross-cloud tới NodePort 30091.
+  openstack/keycloak:       { cluster: openstack, namespace: identity, app_label: keycloak, spiffe: false }
 
 edges:
   # ── Biên: Traefik → WAF (ModSecurity/CRS DetectionOnly) → bff ─────────────
@@ -100,6 +103,11 @@ edges:
   - { from: openstack/crapi-identity, to: openstack/postgresdb, l4_only: true, l4_ports: [5432] }
   # identity → mailhog (AWS) SMTP, cross-cloud
   - { from: openstack/crapi-identity, to: aws/mailhog, l4_only: true, cross_cluster: true, l4_ports: [31025] }
+  # A1 — bff (/kc proxy + token) và opa AWS (JWKS + OIDC discovery qua http.send)
+  # → Keycloak OpenStack, cross-cloud NodePort 30091 qua WireGuard. L4 thuần,
+  # không qua OPA service_acl (Keycloak không phải hop mesh).
+  - { from: aws/bff, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
+  - { from: aws/opa, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
 
   # ── OPA ext_authz — mọi workload nghiệp vụ trong cluster đó ─────────────
   - { from: aws/bff,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }

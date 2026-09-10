@@ -30,6 +30,9 @@ step() { echo -e "\n${BLUE}══════ $* ══════${NC}"; }
 
 kaws() { kubectl --context "$AWS_CONTEXT" "$@"; }
 kos()  { kubectl --context "$OS_CONTEXT" "$@"; }
+# A1: Keycloak trên cụm OpenStack — bước Admin API dùng context này.
+KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
+kkc()  { kubectl --context "$KEYCLOAK_CONTEXT" "$@"; }
 
 # kubectl apply chỉ khi manifest có ít nhất 1 object. Bỏ qua file toàn comment
 # (vd cross-cloud-os.yaml khi mailhog nằm cùng cluster identity → không có hop
@@ -111,12 +114,12 @@ configure_crapi_keycloak() {
   # realm-config.json khai báo sẵn cho FRESH import; --import-realm KHÔNG
   # retrofit lên realm đã import → đăng ký live luôn (mẫu deploy_audience_mapper).
   local admin_pass
-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
+  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
-  kaws delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kaws run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
+  kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
 import urllib.request, json, urllib.parse
 KC='http://keycloak.identity.svc.cluster.local:8080'; REALM='ztlab'
 def call(method, path, body=None):
@@ -162,7 +165,7 @@ for uname,rs in ROLE_ADD.items():
     print('user',uname,'+',rs)
 print('crapi keycloak config OK')
 " || warn "cấu hình Keycloak crapi lỗi (non-fatal — login bff sẽ hỏng cho tới khi sửa)"
-  kaws delete pod kc-crapi-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
   ok "Keycloak crapi roles/clients ensured"
 }
 

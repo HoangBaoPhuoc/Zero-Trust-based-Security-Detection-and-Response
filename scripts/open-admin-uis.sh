@@ -150,8 +150,8 @@ echo "=== ZTLab — Mở port-forwards (auto-restart daemons) ==="
 echo "Yêu cầu: K8s tunnel đang chạy (bash scripts/k8s-tunnel.sh up aws)"
 echo ""
 
-# Identity
-start_pf_daemon "Keycloak"            identity   keycloak          8180  8080
+# Identity — A1: Keycloak nay ở cụm OpenStack
+start_pf_daemon "Keycloak"            identity   keycloak          8180  8080  "$OS_CONTEXT"
 # crAPI (ứng dụng mục tiêu) — điểm vào là WAF (ModSecurity/CRS DetectionOnly, A2)
 # đứng trước BFF. Cổng 18081 khớp redirectUri client crapi-bff. WAF proxy trong
 # suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).

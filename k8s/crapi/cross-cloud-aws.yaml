@@ -7,6 +7,8 @@
 #                                                     ISTIO_MUTUAL → mТLS SPIRE)
 #   postgresdb-openstack     → OS k3s-master :30432  (TCP 5432, KHÔNG DR — plain
 #                                                     TCP mã hoá bởi WireGuard)
+#   keycloak-openstack       → OS k3s-master :30091  (HTTP, DR mode DISABLE —
+#                                                     Keycloak không sidecar; A1)
 # ── Áp trên cluster OpenStack ───────────────────────────────────────────────
 #   mailhog-aws              → AWS k3s-worker-1 :31025 (SMTP, KHÔNG DR)
 #
@@ -85,6 +87,44 @@ metadata:
   namespace: crapi
 spec:
   host: postgresdb-openstack.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+---
+# A1 — Keycloak trên OpenStack. BFF (/kc/* proxy + token/authorize) và OPA AWS
+# (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này. Keycloak không có
+# sidecar → DR mode DISABLE (istio-proxy client đi plaintext, WireGuard mã hoá).
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-openstack
+  namespace: crapi
+spec:
+  ports:
+    - name: http
+      port: 30091
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: keycloak-openstack
+  namespace: crapi
+subsets:
+  - addresses:
+      - ip: 192.168.101.11
+    ports:
+      - name: http
+        port: 30091
+        protocol: TCP
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: keycloak-openstack-plaintext
+  namespace: crapi
+spec:
+  host: keycloak-openstack.crapi.svc.cluster.local
   trafficPolicy:
     tls:
       mode: DISABLE
