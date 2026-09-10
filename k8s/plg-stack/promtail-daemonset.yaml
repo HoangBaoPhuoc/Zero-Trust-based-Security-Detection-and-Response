@@ -169,11 +169,22 @@ data:
               expressions:
                 decision_id: decision_id
                 opa_result: result
+                # A5.1 — thesis feature group B ("số danh tính đích khác nhau").
+                # OPA logs the full Envoy ext_authz `input` (decision_logs.console:
+                # true), so source/destination principal are already in the log
+                # body and queryable via `| json`. Promoting them to first-class
+                # labels here makes the count directly computable and immune to a
+                # future `output:` stage rewriting the body. Cardinality is low
+                # (~a dozen SPIFFE IDs, far below `request_path`).
+                source_principal: input.attributes.source.principal
+                destination_principal: input.attributes.destination.principal
           - regex:
               expression: '"[:]?path":"(?P<request_path>[^"]+)"'
           - labels:
               opa_result:
               request_path:
+              source_principal:
+              destination_principal:
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_node_name]
             action: keep
