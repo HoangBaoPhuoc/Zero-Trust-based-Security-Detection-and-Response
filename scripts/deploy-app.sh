@@ -221,6 +221,12 @@ deploy_istio() {
   # auto-injected and likely break (no SPIRE workload-socket volume mount).
   kaws label namespace crapi istio-injection=enabled --overwrite
   kos label namespace crapi istio-injection=enabled --overwrite
+  # A2: bff PeerAuthentication is STRICT — Prometheus (AWS-only, ns monitoring)
+  # scrapes bff:8080/metrics directly and needs a real SVID or that mTLS-only
+  # port rejects it outright. Pod-level sidecar.istio.io/inject annotation
+  # alone wasn't enough to trigger injection on this cluster; the namespace
+  # label is what actually works (k8s/monitoring/prometheus.yaml has the rest).
+  kaws label namespace monitoring istio-injection=enabled --overwrite
   ok "Istio installed on both clouds (trustDomain=ztlab.local), crapi namespaces labeled for injection"
 }
 
@@ -562,9 +568,16 @@ keycloak_admin_password() {
 
 # A4 removed the SOAR execution engine. The plg-stack secrets it required
 # (keycloak-admin-secret for revoke_user_sessions, ai-secrets for SOAR_*,
-# soar-main-patch configmap, soar-openstack-kubeconfig for cross-cloud patching,
-# grafana-smtp-secret for the Gmail relay) are all gone. incident-analyzer keeps
-# no k8s client and notifies through a credential-less in-cluster MailHog.
+# soar-main-patch configmap, soar-openstack-kubeconfig for cross-cloud patching)
+# are all gone. incident-analyzer keeps no k8s client and notifies through a
+# credential-less in-cluster MailHog.
+#
+# grafana-smtp-secret is UNRELATED to A4/incident-analyzer — it is consumed
+# directly by k8s/plg-stack/grafana.yaml (GF_SMTP_PASSWORD) so Grafana's own
+# alertmanager can email voha2005@gmail.com (notification-policy.yml's `email`
+# contact points), independent of incident-analyzer's MailHog bundle emails.
+# Provisioned below from SMTP_PASS (empty default — Grafana still starts, just
+# without a working relay until a real app-password is exported).
 
 deploy_vault_and_seed_secrets() {
   log "Deploying Vault (Zero-Trust secrets component) and seeding smtp-secret KV"
@@ -658,13 +671,20 @@ deploy_observability_response() {
 
   # Vault stays deployed as the Zero-Trust secrets component; A4 dropped the
   # soar-engine consumer, so no plg-stack redis-auth / keycloak-admin-secret /
-  # ai-secrets / grafana-smtp-secret are needed any more. incident-analyzer
-  # notifies via a credential-less in-cluster MailHog.
+  # ai-secrets are needed any more. incident-analyzer notifies via a
+  # credential-less in-cluster MailHog.
   deploy_vault_and_seed_secrets
 
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki-configmap.yaml"
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack loki 180s
+
+  # grafana.yaml's GF_SMTP_PASSWORD reads this secret directly (unrelated to
+  # Vault's smtp-secret KV, which is incident-analyzer's own latent capability).
+  # Without it Grafana CreateContainerConfigError-loops forever.
+  kaws create secret generic grafana-smtp-secret -n plg-stack \
+    --from-literal=password="${SMTP_PASS:-}" \
+    --dry-run=client -o yaml | kaws apply -f -
 
   provision_grafana_configmaps
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/grafana.yaml"

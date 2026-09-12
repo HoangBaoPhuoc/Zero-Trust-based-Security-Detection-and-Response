@@ -212,6 +212,94 @@ provision_spire_root_ca() {
   log_info "spire-upstream-ca secret deployed to both clusters"
 }
 
+# A3 — Device CA (tách bạch với SPIRE root CA: device identity ≠ workload identity).
+# Ký: (1) client certificate cho từng thiết bị (issue-device-cert.sh), (2) server
+# cert cho Traefik biên (crapi.ztlab.local). Khoá riêng của CA sẽ được đẩy vào
+# Vault ở bước deploy_vault_and_seed_secrets (deploy-app.sh) rồi xoá bản local —
+# KHÔNG commit vào repo (deploy/vendor/device-ca/ đã gitignore).
+provision_device_ca() {
+  log_step "3.1 Provision Device CA + edge server cert (A3 — client cert mTLS)"
+
+  local ca_dir="$REPO_ROOT/deploy/vendor/device-ca"
+  mkdir -p "$ca_dir"
+
+  if [[ ! -f "$ca_dir/device-ca.key" || ! -f "$ca_dir/device-ca.crt" ]]; then
+    # Nếu Vault đã có khoá (redeploy giữ Vault) — kéo về để giữ nguyên CA.
+    if kubectl --context "$AWS_CONTEXT" -n vault get pod vault-0 >/dev/null 2>&1 && \
+       _device_ca_from_vault "$ca_dir"; then
+      log_info "Device CA restored from Vault"
+    else
+      log_info "Generating new Device CA (ECDSA P-256, 10y)..."
+      openssl ecparam -name prime256v1 -genkey -noout -out "$ca_dir/device-ca.key" 2>/dev/null
+      openssl req -new -x509 -days 3650 -key "$ca_dir/device-ca.key" \
+        -out "$ca_dir/device-ca.crt" \
+        -subj "/C=VN/O=ZT-Lab/OU=device-identity/CN=ZTLab Device CA" \
+        -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign" \
+        -addext "subjectKeyIdentifier=hash" 2>/dev/null
+    fi
+  else
+    log_info "Device CA already present locally: $ca_dir/device-ca.crt"
+  fi
+
+  # Edge server cert cho Traefik (Host crapi.ztlab.local) — ký bởi Device CA nên
+  # client `--cacert device-ca.crt` verify được cả server lẫn chain client.
+  if [[ ! -f "$ca_dir/edge.crt" || ! -f "$ca_dir/edge.key" ]]; then
+    log_info "Issuing Traefik edge server cert (crapi.ztlab.local)..."
+    openssl ecparam -name prime256v1 -genkey -noout -out "$ca_dir/edge.key" 2>/dev/null
+    openssl req -new -key "$ca_dir/edge.key" -out "$ca_dir/edge.csr" \
+      -subj "/C=VN/O=ZT-Lab/CN=crapi.ztlab.local" 2>/dev/null
+    openssl x509 -req -in "$ca_dir/edge.csr" -CA "$ca_dir/device-ca.crt" \
+      -CAkey "$ca_dir/device-ca.key" -CAcreateserial -days 825 \
+      -out "$ca_dir/edge.crt" \
+      -extfile <(printf 'subjectAltName=DNS:crapi.ztlab.local,DNS:localhost\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n') 2>/dev/null
+    rm -f "$ca_dir/edge.csr"
+  fi
+
+  # k8s Secrets (ns crapi, cụm AWS — nơi Traefik phục vụ IngressRoute crapi-bff):
+  #   device-ca-cert : cert public (Traefik TLSOption clientAuth caFiles + BFF verify)
+  #   crapi-edge-tls  : server cert cho HTTPS entrypoint
+  kubectl --context "$AWS_CONTEXT" -n crapi create secret generic device-ca-cert \
+    --from-file=tls.ca="$ca_dir/device-ca.crt" \
+    --from-file=ca.crt="$ca_dir/device-ca.crt" \
+    --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+  kubectl --context "$AWS_CONTEXT" -n crapi create secret tls crapi-edge-tls \
+    --cert="$ca_dir/edge.crt" --key="$ca_dir/edge.key" \
+    --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+
+  # Edge marker: BFF chỉ tin header cert khi request mang marker này (do middleware
+  # Traefik gắn) — "chỉ chấp nhận giá trị do reverse proxy ở biên gắn vào" (RÀNG BUỘC #5).
+  local marker
+  if kubectl --context "$AWS_CONTEXT" -n crapi get secret bff-edge >/dev/null 2>&1; then
+    marker="$(kubectl --context "$AWS_CONTEXT" -n crapi get secret bff-edge -o jsonpath='{.data.marker}' | base64 -d)"
+  else
+    marker="$(openssl rand -hex 24)"
+    kubectl --context "$AWS_CONTEXT" -n crapi create secret generic bff-edge \
+      --from-literal=marker="$marker" \
+      --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+  fi
+  # Render edge-tls.yaml (Traefik TLSOption + Middlewares + HTTPS IngressRoute)
+  sed "s/__EDGE_MARKER__/${marker}/g" "$REPO_ROOT/k8s/crapi/edge-tls.yaml" \
+    | kubectl --context "$AWS_CONTEXT" apply -f -
+
+  chmod 600 "$ca_dir"/*.key
+  log_info "Device CA + edge cert ready. Client certs: scripts/issue-device-cert.sh <user> <compliant|non-compliant>"
+}
+
+_device_ca_from_vault() {
+  local ca_dir="$1" root_token
+  root_token="$(kubectl --context "$AWS_CONTEXT" -n vault get secret vault-unseal-keys -o jsonpath='{.data.root-token}' 2>/dev/null | base64 -d)" || return 1
+  [[ -n "$root_token" ]] || return 1
+  local resp
+  resp="$(kubectl --context "$AWS_CONTEXT" -n vault exec vault-0 -- sh -c \
+    "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv get -format=json secret/device-ca" 2>/dev/null)" || return 1
+  echo "$resp" | python3 -c 'import json,sys,base64
+d=json.load(sys.stdin)["data"]["data"]
+open(sys.argv[1]+"/device-ca.key","w").write(d["ca_key"])
+open(sys.argv[1]+"/device-ca.crt","w").write(d["ca_crt"])' "$ca_dir" 2>/dev/null || return 1
+  [[ -s "$ca_dir/device-ca.key" && -s "$ca_dir/device-ca.crt" ]]
+}
+
 deploy_step_3_spire_aws() {
   log_step "3.1 Deploy SPIRE on AWS"
 
@@ -426,6 +514,7 @@ main() {
   deploy_step_1_namespaces
   deploy_step_2_keycloak
   provision_spire_root_ca
+  provision_device_ca
   deploy_step_3_spire_aws
   deploy_step_3_spire_os
   register_spire_workloads

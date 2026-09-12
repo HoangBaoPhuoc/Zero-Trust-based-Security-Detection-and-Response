@@ -1,0 +1,82 @@
+# A3 (KEHOACH-THAYDOI-HETHONG.md) — Traefik biên: TLS + client-cert mTLS bằng
+# Device CA (tách bạch device identity ≠ workload identity — không dùng chung
+# spire/root-ca). Traefik verify cert của thiết bị rồi gắn header
+# X-Forwarded-Tls-Client-Cert-Info (Subject CN/OU, SAN) — BFF
+# (services/bff/main.py: _evaluate_device_cert) đọc header này để suy ra
+# device_id (SAN URI spiffe://ztlab.local/device/<id>) và posture (Subject
+# OU=posture:<compliant|non-compliant>). Cert phát hành bằng
+# scripts/issue-device-cert.sh.
+#
+# Middleware edge-marker gắn __EDGE_MARKER__ (bí mật secret bff-edge, do
+# scripts/deploy-security-stack.sh sinh ngẫu nhiên) vào MỌI request đi qua
+# Traefik — BFF chỉ tin X-Forwarded-Tls-Client-Cert-Info khi marker khớp, để
+# chặn trường hợp một pod trong cluster gọi thẳng waf/bff (bỏ qua Traefik) và
+# tự giả header cert (RÀNG BUỘC #5: chỉ chấp nhận giá trị do reverse proxy ở
+# biên gắn vào).
+---
+apiVersion: traefik.io/v1alpha1
+kind: TLSOption
+metadata:
+  name: device-mtls
+  namespace: crapi
+spec:
+  minVersion: VersionTLS12
+  clientAuth:
+    secretNames:
+      - device-ca-cert
+    clientAuthType: RequireAndVerifyClientCert
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: pass-client-cert
+  namespace: crapi
+spec:
+  passTLSClientCert:
+    info:
+      sans: true
+      subject:
+        commonName: true
+        organizationalUnit: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: edge-marker
+  namespace: crapi
+spec:
+  headers:
+    customRequestHeaders:
+      X-Edge-Marker: "__EDGE_MARKER__"
+      # WAF (nginx/ModSecurity) rewrites the standard X-Forwarded-Proto to its
+      # own (plain-HTTP) scheme when it proxies on to bff, so bff can never
+      # trust that header for building external redirect_uri/OAuth URLs. This
+      # route only ever serves websecure (HTTPS) — X-Edge-Scheme is a custom
+      # header name nginx doesn't recognize/touch, so it survives untouched,
+      # same as X-Edge-Marker and X-Forwarded-Tls-Client-Cert-Info already do.
+      X-Edge-Scheme: "https"
+---
+# HTTPS entrypoint duy nhất cho crapi.ztlab.local — thay route HTTP cũ
+# (k8s/crapi/ingress-aws.yaml, nay redirect sang https). Không TLS/không cert
+# hợp lệ/cert do CA khác ký → handshake fail ở tầng Traefik, KHÔNG tới được waf/bff.
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: crapi-bff-mtls
+  namespace: crapi
+spec:
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`crapi.ztlab.local`)
+      kind: Rule
+      middlewares:
+        - name: pass-client-cert
+        - name: edge-marker
+      services:
+        - name: waf
+          port: 8080
+  tls:
+    secretName: crapi-edge-tls
+    options:
+      name: device-mtls
+      namespace: crapi

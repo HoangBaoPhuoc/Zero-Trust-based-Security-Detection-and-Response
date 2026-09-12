@@ -12,10 +12,51 @@
 # so the waf->bff hop is mТLS and shows up in the OPA decision log / envoy access
 # log like any other in-mesh hop. The waf->bff edge is declared in
 # policy/service-graph-crapi.yaml (regenerate service_acl.rego + pod-segmentation).
+#
+# BUG FOUND during A3 live verification (root cause, not A3-specific — present
+# since A2): the base owasp/modsecurity-crs image's includes/proxy_backend.conf
+# does `proxy_set_header Host $host;` — nginx forwards the EXTERNAL client Host
+# header (`crapi.ztlab.local`) straight to bff instead of bff's own hostname.
+# Envoy's outbound HTTP router picks the target cluster by Host/:authority; that
+# header matches none of bff's known domain aliases, so it falls through to the
+# `allow_any` virtual host → PassthroughCluster — bypassing the DestinationRule
+# entirely (no mTLS upgrade, no SPIFFE principal). Every OPA check that needs
+# `valid_svid` (i.e. anything beyond the explicit `public_path` allowlist) then
+# fails closed with no decision even logged, since the request never carries a
+# principal at all. `waf-proxy-backend-conf` below overrides just that one
+# nginx include to use `$proxy_host` (nginx's own proxy_pass target) instead.
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata: { name: waf, namespace: crapi }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: waf-proxy-backend-conf, namespace: crapi }
+data:
+  proxy_backend.conf: |
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Proxy "";
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header X-REAL-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header X-Forwarded-Proto $scheme;
+
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_connect_timeout 60s;
+    proxy_read_timeout 36000s;
+    proxy_redirect off;
+
+    proxy_pass_header Authorization;
+    proxy_pass http://bff.crapi.svc.cluster.local:8080;
+
+    set_real_ip_from 127.0.0.1;
+
+    real_ip_header X-REAL-IP;
+    real_ip_recursive on;
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -72,6 +113,17 @@ spec:
             # nginx must not add its own X-Forwarded-* trust; the edge (Traefik)
             # and BFF handle forwarded identity. Keep proto/port passthrough only.
             - { name: NGINX_ALWAYS_TLS_REDIRECT,   value: "off" }
+          volumeMounts:
+            # /etc/nginx/includes/proxy_backend.conf is itself RE-GENERATED from
+            # this template by the image's docker-entrypoint (envsubst) on every
+            # container start — mounting straight over the generated file makes
+            # that regeneration step fail (Read-only file system) and crash-loop.
+            # Override the template source instead; envsubst is a harmless
+            # no-op here since this file has no ${VAR} placeholders.
+            - name: proxy-backend-conf
+              mountPath: /etc/nginx/templates/includes/proxy_backend.conf.template
+              subPath: proxy_backend.conf
+              readOnly: true
           readinessProbe:
             tcpSocket: { port: http }
             initialDelaySeconds: 5
@@ -83,6 +135,9 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: proxy-backend-conf
+          configMap: { name: waf-proxy-backend-conf }
 ---
 apiVersion: v1
 kind: Service

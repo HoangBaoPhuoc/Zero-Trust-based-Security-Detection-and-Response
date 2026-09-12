@@ -23,11 +23,12 @@ UA="$BROWSER_UA"
 log "Brute force Keycloak login testuser01 — $ATTEMPTS lần mật khẩu sai"
 
 fail_count=0
+declare -a _tls_opts; mapfile -t _tls_opts < <(crapi_curl_tls_opts)
 for i in $(seq 1 "$ATTEMPTS"); do
   jar="$(mktemp)"
-  page="$(curl -s -A "$UA" -c "$jar" -b "$jar" -L "$BFF_URL/auth/start")"
+  page="$(curl -s -A "$UA" "${_tls_opts[@]}" -c "$jar" -b "$jar" -L "$BFF_URL/auth/start")"
   action="$(printf '%s' "$page" | grep -oE 'action="[^"]+"' | head -1 | sed -E 's/^action="//;s/"$//;s/&amp;/\&/g')"
-  code="$(curl -s -A "$UA" -c "$jar" -b "$jar" -L -o /dev/null -w '%{http_code}' \
+  code="$(curl -s -A "$UA" "${_tls_opts[@]}" -c "$jar" -b "$jar" -L -o /dev/null -w '%{http_code}' \
     --data-urlencode "username=testuser01" --data-urlencode "password=wrong-pass-$i" "$action")"
   # login sai → Keycloak render lại trang login (200) hoặc 401; KHÔNG có
   # /auth/callback?code=. Coi là "fail" nếu không đăng nhập được.

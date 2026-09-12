@@ -60,6 +60,10 @@ data:
           - targets: ['localhost:9090']
 ---
 apiVersion: v1
+kind: ServiceAccount
+metadata: { name: prometheus, namespace: monitoring }
+---
+apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: prometheus-data-pvc
@@ -88,7 +92,18 @@ spec:
     metadata:
       labels:
         app: prometheus
+      annotations:
+        # A2 hardening: bff PeerAuthentication is STRICT — Prometheus scrapes
+        # bff.crapi.svc.cluster.local:8080/metrics directly (job crapi-services-aws),
+        # so it needs a real mesh identity or that scrape target goes down.
+        # /metrics is already unconditional public_path in zta_crapi.rego, so
+        # this only grants mTLS transport, not extra authz.
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/prometheus"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
+      serviceAccountName: prometheus
       securityContext:
         fsGroup: 65534
         runAsUser: 65534

@@ -2,14 +2,15 @@
 # KỊCH BẢN — Access Denied Spike (unauthenticated internal + device không tin cậy)
 #
 # Lớp Zero-Trust nghiệm thu: OPA fail-closed. (1) Gọi nội mesh KHÔNG có SVID
-# hợp lệ / KHÔNG có phiên → deny. (2) Thiết bị `suspicious` cố GHI → deny
-# (`device_trust_compliant`).
+# hợp lệ / KHÔNG có phiên → deny. (2) Thiết bị posture=non-compliant (A3 —
+# client cert Device CA, KHÔNG còn suy đoán qua User-Agent) cố GHI → deny
+# (`device_trust_compliant` / `posture_compliant`).
 #
 # Tấn công THẬT:
 #   - exec vào pod crapi-web (SVID web, KHÔNG có edge tới workshop/community trong
 #     service_acl trừ tĩnh) gọi API nghiệp vụ workshop → deny.
-#   - login testuser01 với User-Agent bất thường → BFF gắn X-Device-Trust:
-#     suspicious → POST đơn hàng → deny.
+#   - login testuser01 bằng cert thiết bị posture=non-compliant (scripts/issue-device-cert.sh)
+#     → BFF gắn X-Device-Trust: suspicious → POST đơn hàng → deny.
 #
 # Bằng chứng: OPA decision log spike (opa_result=false) + BFF audit
 # device_trust_denied → Grafana "Access Denied Spike" → incident-analyzer evidence bundle.
@@ -38,18 +39,19 @@ else
   log "1) bỏ qua — không tìm được pod crapi-web"
 fi
 
-log "2) Thiết bị 'suspicious' (User-Agent bất thường) cố GHI đơn hàng"
-BADUA="sqlmap/1.7-dev python-requests/2.31"
-Jb="$(crapi_login testuser01 'Test1234!' "$BADUA")"
+log "2) Thiết bị posture=non-compliant (cert Device CA) cố GHI đơn hàng"
+_orig_cert="$CRAPI_CLIENT_CERT"; _orig_key="$CRAPI_CLIENT_KEY"
+CRAPI_CLIENT_CERT="$CA_DIR/issued/test-noncompliant/device.crt"
+CRAPI_CLIENT_KEY="$CA_DIR/issued/test-noncompliant/device.key"
+Jb="$(crapi_login testuser01 'Test1234!')"
 for i in 1 2 3 4 5; do
   total=$((total + 1))
-  code="$(curl -s -A "$BADUA" -b "$Jb" -X POST -H 'Content-Type: application/json' \
-    -d '{"product_id":1,"quantity":1}' -o /dev/null -w '%{http_code}' --max-time 20 \
-    "$BFF_URL/workshop/api/shop/orders")"
-  log "   POST orders (suspicious device) attempt $i → $code"
+  code="$(crapi_call "$Jb" POST /workshop/api/shop/orders '{"product_id":1,"quantity":1}')"
+  log "   POST orders (posture=non-compliant) attempt $i → $code"
   [[ "$code" == "403" ]] && denied=$((denied + 1))
 done
 rm -f "$Jb"
+CRAPI_CLIENT_CERT="$_orig_cert"; CRAPI_CLIENT_KEY="$_orig_key"
 
 [[ $denied -ge $(( total / 2 )) ]] || fail "chỉ $denied/$total bị từ chối — kiểm tra OPA fail-closed / device_trust_compliant"
 log "Tổng $denied/$total request bị từ chối tại điểm enforcement (OPA / BFF)"

@@ -1,6 +1,18 @@
-# Traefik IngressRoute (cluster AWS) — điểm vào duy nhất của crAPI.
-# A2: qua WAF (ModSecurity/CRS DetectionOnly) → bff. Trước A2 route thẳng tới bff.
-# Access qua SSH tunnel: curl -H 'Host: crapi.ztlab.local' http://localhost:8080/
+# Traefik IngressRoute (cluster AWS) — cổng HTTP cũ của crAPI.
+# A3 (KEHOACH-THAYDOI-HETHONG.md): client-cert mTLS đòi TLS, nên cổng HTTP này
+# giờ chỉ redirect sang HTTPS (k8s/crapi/edge-tls.yaml — entryPoint websecure,
+# TLSOption device-mtls). KHÔNG còn proxy thẳng tới waf ở đây — nếu vẫn còn thì
+# cert mTLS bị bỏ qua được bằng cách gọi thẳng cổng 80.
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: crapi-https-redirect
+  namespace: crapi
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
 ---
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
@@ -12,6 +24,8 @@ spec:
   routes:
     - match: Host(`crapi.ztlab.local`)
       kind: Rule
+      middlewares:
+        - name: crapi-https-redirect
       services:
         - name: waf
           port: 8080

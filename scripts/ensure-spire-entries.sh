@@ -94,6 +94,9 @@ register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/bff" "$AWS_PARENT"
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-web" "$AWS_PARENT" crapi crapi-web
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-community" "$AWS_PARENT" crapi crapi-community
 register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-workshop" "$AWS_PARENT" crapi crapi-workshop
+# A2: bff PeerAuthentication STRICT — Prometheus scrapes bff:8080/metrics directly,
+# needs its own SVID or that scrape target goes down (k8s/monitoring/prometheus.yaml).
+register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/prometheus" "$AWS_PARENT" monitoring prometheus
 register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-identity" "$OS_PARENT" crapi crapi-identity
 register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-seed" "$OS_PARENT" crapi crapi-seed
 
@@ -101,7 +104,7 @@ register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-seed" "
 # (identity+seed). Entry idempotent — an toàn khi pod chưa có.
 aws_count=$(count_entries_matching "$AWS_CONTEXT" "spiffe://ztlab.local/aws/")
 os_count=$(count_entries_matching "$OS_CONTEXT" "spiffe://ztlab.local/openstack/")
-log_info "Verified entries present: AWS=$aws_count (expect 5), OpenStack=$os_count (expect 2)"
+log_info "Verified entries present: AWS=$aws_count (expect 6), OpenStack=$os_count (expect 2)"
 if [ "$aws_count" -lt 5 ] || [ "$os_count" -lt 2 ]; then
   log_error "SPIRE registration entries missing after registration attempt — spire-server datastore may be empty/corrupted. Check 'kubectl -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry show -socketPath /tmp/spire-server/private/api.sock' on both clusters."
   exit 1

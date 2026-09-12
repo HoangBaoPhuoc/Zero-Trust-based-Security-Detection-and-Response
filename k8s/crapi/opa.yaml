@@ -41,6 +41,18 @@ spec:
             - "--config-file=/etc/opa/opa-config.yaml"
             - "--ignore=.*"
             - "/policies"
+          env:
+            # A3/A2: same shared secret Traefik's edge-marker Middleware stamps
+            # onto every request (k8s/crapi/edge-tls.yaml) and BFF checks
+            # (services/bff/main.py) — zta_crapi.rego reads it via opa.runtime()
+            # to recognize waf's OWN inbound hop (Traefik has no SPIFFE SVID,
+            # so it can never pass valid_svid) as genuinely from the trusted
+            # edge, not a pod calling waf/bff directly to fake the header.
+            # Secret is AWS-only (edge only exists there) — optional so the
+            # OpenStack opa-server (crosscloud_crapi.rego, unrelated) still starts.
+            - name: EDGE_MARKER
+              valueFrom:
+                secretKeyRef: { name: bff-edge, key: marker, optional: true }
           ports:
             - { name: http, containerPort: 8181 }
             - { name: grpc-authz, containerPort: 9191 }

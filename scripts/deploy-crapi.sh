@@ -140,10 +140,21 @@ for name,desc in [('crapi-user','crAPI user'),('crapi-mechanic','crAPI mechanic'
     if name not in roles:
         call('POST','/admin/realms/%s/roles'%REALM,{'name':name,'description':desc}); print('role +',name)
 
-REDIR=['http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
+# A3: điểm vào HTTPS/mTLS (Traefik websecure) thay cổng HTTP cũ (8080/18081) —
+# giữ luôn các entry HTTP cũ cho tương thích ngược debug (bff bypass :18083 vẫn
+# HTTP). 18443 = tunnel dev (scripts/open-admin-uis.sh); production/NodePort đi
+# qua cổng 443 mặc định nên không cần khai báo cổng riêng.
+REDIR=['https://crapi.ztlab.local/*','https://crapi.ztlab.local:18443/*','http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
 for cid in ('crapi-bff','crapi-bff-stepup'):
     ex=call('GET','/admin/realms/%s/clients?clientId=%s'%(REALM,cid)) or []
-    if ex: print('client',cid,'exists'); continue
+    if ex:
+        cur=ex[0]
+        if set(cur.get('redirectUris') or []) != set(REDIR):
+            call('PUT','/admin/realms/%s/clients/%s'%(REALM,cur['id']),{**cur,'redirectUris':REDIR})
+            print('client',cid,'redirectUris updated')
+        else:
+            print('client',cid,'exists, redirectUris up to date')
+        continue
     call('POST','/admin/realms/%s/clients'%REALM,{
         'clientId':cid,'protocol':'openid-connect','publicClient':True,'standardFlowEnabled':True,
         'directAccessGrantsEnabled':False,'redirectUris':REDIR,'webOrigins':['+'],

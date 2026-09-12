@@ -26,7 +26,8 @@ trap 'rm -f "$J"' EXIT
 log "Đăng nhập testuser01 (crapi-user, token hợp lệ, thiết bị browser)"
 
 # Lấy vehicle của chính mình (nếu có) để có 1 UUID thật, rồi thử các UUID khác.
-own_json="$(curl -s -A "$BROWSER_UA" -b "$J" --max-time 20 "$BFF_URL/identity/api/v2/vehicle/vehicles" || true)"
+declare -a _tls_opts; mapfile -t _tls_opts < <(crapi_curl_tls_opts)
+own_json="$(curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 "$BFF_URL/identity/api/v2/vehicle/vehicles" || true)"
 own_uuid="$(printf '%s' "$own_json" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' | head -1)"
 log "vehicle của testuser01: ${own_uuid:-<none>}"
 
