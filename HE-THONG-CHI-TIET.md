@@ -2,7 +2,7 @@
 
 > Tài liệu mô tả toàn bộ **kiến trúc, cấu hình, module và luồng hoạt động** của hệ thống ở trạng thái hiện tại (branch `feat/crapi-target`, 2026-09-10). Ứng dụng mục tiêu: **OWASP crAPI** (thay ứng dụng "finance" tự viết trước đây). Toàn bộ khung Zero-Trust được giữ nguyên cơ chế.
 >
-> Tài liệu đồng hành: `DEPLOY.md` (quy trình triển khai), `TARGET-CRAPI.md` / `KE-HOACH-CRAPI.md` / `KET-QUA-CRAPI.md` (kế hoạch + kết quả migration), `README.md`.
+> Tài liệu đồng hành: `DEPLOY.md` (quy trình triển khai), `KET-QUA-CRAPI.md` (log kết quả migration finance→crAPI), `KEHOACH-THAYDOI-HETHONG.md` (kế hoạch A1-A5 + Giai đoạn B/C đang thực hiện), `README.md`.
 
 ---
 

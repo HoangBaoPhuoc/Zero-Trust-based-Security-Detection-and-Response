@@ -1,8 +1,8 @@
 # ZTLab — Zero Trust Security Detection & Response
 
-ZTLab là một **testbed thực nghiệm** hiện thực hoá các nguyên lý Zero Trust Architecture (NIST SP 800-207) trên một hệ microservices triển khai thật trên hai cloud (AWS + OpenStack), thay vì mô phỏng trên giấy hay chạy trên một cụm đơn lẻ. **Ứng dụng mục tiêu là [OWASP crAPI](https://github.com/OWASP/crAPI)** (Completely Ridiculous API — một ứng dụng cố tình chứa lỗ hổng để học API security). Luồng vận hành: user đăng nhập qua Keycloak OIDC/PKCE tại **BFF** (điểm vào duy nhất), BFF mint token crAPI-native + forward token Keycloak; mọi hop service-to-service bị Envoy sidecar + OPA ext_authz chặn trước khi tới đích, xác thực bằng SVID do SPIRE cấp; `crapi-identity` + toàn bộ dữ liệu nằm ở OpenStack, các service tiêu thụ ở AWS, nối nhau qua mTLS + WireGuard. Log từ cả hai cloud đổ về PLG Stack (Promtail → Loki → Grafana); khi Grafana phát hiện mẫu tấn công đã định nghĩa, SOAR Engine tạo case Human-in-the-Loop (HITL) — admin chọn playbook, SOAR thực thi trên Kubernetes.
+ZTLab là một **testbed thực nghiệm** hiện thực hoá các nguyên lý Zero Trust Architecture (NIST SP 800-207) trên một hệ microservices triển khai thật trên hai cloud (AWS + OpenStack), thay vì mô phỏng trên giấy hay chạy trên một cụm đơn lẻ. **Ứng dụng mục tiêu là [OWASP crAPI](https://github.com/OWASP/crAPI)** (Completely Ridiculous API — một ứng dụng cố tình chứa lỗ hổng để học API security). Luồng vận hành: user đăng nhập qua Keycloak OIDC/PKCE tại **BFF** (điểm vào duy nhất, sau WAF ModSecurity/CRS DetectionOnly), qua Traefik với **client-certificate mTLS bắt buộc** (Device CA riêng, posture nhúng trong cert) — BFF mint token crAPI-native + forward token Keycloak; mọi hop service-to-service bị Envoy sidecar + OPA ext_authz chặn trước khi tới đích, xác thực bằng SVID do SPIRE cấp; `crapi-identity` + toàn bộ dữ liệu nằm ở OpenStack, các service tiêu thụ ở AWS, nối nhau qua mTLS + WireGuard. Log từ cả hai cloud đổ về PLG Stack (Promtail → Loki → Grafana); khi Grafana phát hiện mẫu tấn công đã định nghĩa, **`incident-analyzer`** đóng gói bằng chứng (log OPA/Envoy/BFF/WAF quanh thời điểm cảnh báo) + chấm điểm ưu tiên rồi gửi email cho admin — **không tự thực thi hành động nào trên cluster** (SOAR execution đã bị bỏ, xem `KEHOACH-THAYDOI-HETHONG.md` mục A4).
 
-**Cần nói rõ ngay từ đầu:** (1) đây không phải sản phẩm bảo mật cắm-là-chạy — policy OPA, alert Grafana, playbook SOAR viết cứng cho đúng tập endpoint/service của hệ này. (2) **crAPI giữ NGUYÊN các lỗ hổng tầng ứng dụng** (BOLA, BFLA, JWT confusion, SSRF, mass assignment…) — đó là chủ đích. Đóng góp của ZTLab là **lớp Zero-Trust + phát hiện/phản ứng bao quanh**: chặn lateral movement, privilege escalation qua network, credential replay, ép step-up, và phát hiện → tạo case SOAR khi lỗ hổng app bị khai thác. Xem chi tiết đầy đủ ở **`HE-THONG-CHI-TIET.md`**.
+**Cần nói rõ ngay từ đầu:** (1) đây không phải sản phẩm bảo mật cắm-là-chạy — policy OPA, alert Grafana, rule WAF viết cứng cho đúng tập endpoint/service của hệ này. (2) **crAPI giữ NGUYÊN các lỗ hổng tầng ứng dụng** (BOLA, BFLA, JWT confusion, SSRF, mass assignment…) — đó là chủ đích. Đóng góp của ZTLab là **lớp Zero-Trust + phát hiện/phân tích bao quanh**: chặn lateral movement, privilege escalation qua network, credential replay, ép step-up, và phát hiện → đóng gói bằng chứng khi lỗ hổng app bị khai thác. Xem chi tiết đầy đủ ở **`HE-THONG-CHI-TIET.md`**.
 
 ---
 
@@ -39,17 +39,17 @@ Cả AWS, GCP, Azure đều bán sản phẩm gắn mác "Zero Trust" — cần 
 
 ### Zero Trust áp dụng ở lớp nào, và ZTLab có phải "khung giải pháp mới" không
 
-**Không.** ZTLab không đề xuất một mô hình Zero Trust mới — nó là một **hiện thực hoá cụ thể** của SP 800-207 bằng các thành phần mã nguồn mở sẵn có (SPIFFE/SPIRE, OPA, Envoy, Grafana, một SOAR tự viết), áp dụng có chọn lọc, không đều, lên 7 tenet gốc:
+**Không.** ZTLab không đề xuất một mô hình Zero Trust mới — nó là một **hiện thực hoá cụ thể** của SP 800-207 bằng các thành phần mã nguồn mở sẵn có (SPIFFE/SPIRE, OPA, Envoy, Traefik mTLS, WAF ModSecurity/CRS, Grafana, `incident-analyzer` tự viết), áp dụng có chọn lọc, không đều, lên 7 tenet gốc:
 
 | # | Tenet (NIST SP 800-207) | ZTLab có làm không | Bằng gì |
 |---|---|---|---|
 | 1 | *All data sources and computing services are considered resources* | Một phần | OPA phân biệt `internal_service_request` (có SVID) vs `external_api_request` (không SVID) theo **danh tính đã xác minh** (identity), không theo IP/network location — đúng tinh thần tenet, nhưng vẫn là một dạng phân loại request, không xử lý "mọi resource hoàn toàn như nhau" |
 | 2 | *All communication is secured regardless of network location* | Có | mTLS bắt buộc mọi service-to-service qua Envoy + SPIRE SVID, kể cả cross-cloud qua WireGuard tunnel |
 | 3 | *Access to resources is granted on a per-session basis* | Có | SVID TTL 1 giờ, auto-rotate; mỗi request đi qua OPA ext_authz riêng biệt — không có khái niệm "authenticated once, trusted thereafter" |
-| 4 | *Access determined by dynamic policy* (identity, app, asset, behavioral attributes) | Một phần | OPA dùng role (RBAC crapi-user/mechanic/admin) + trạng thái SVID + **device-posture** (`X-Device-Posture`) + **device-trust** (`X-Device-Trust`, phân tích UA) + **step-up OTP** (`acr=high`) cho hành động nhạy cảm — nhưng chưa có health attestation tích hợp EDR |
-| 5 | *Monitor and measure the integrity/security posture of all assets* | Một phần | `security-scanner-job.yaml` + `posture-agent` CronJob (ns crapi) kiểm tra container posture (uid, Linux capabilities, ảnh unpinned) → nối vào pipeline detection→response (`privilege-escalation-alert.yml` → SOAR `privilege_escalation` → `quarantine_workload`); Gatekeeper admission chặn container vi phạm — nhưng vẫn chủ yếu *phát hiện sau khi chạy* |
+| 4 | *Access determined by dynamic policy* (identity, app, asset, behavioral attributes) | Một phần | OPA dùng role (RBAC crapi-user/mechanic/admin) + trạng thái SVID + **device-posture/device-trust từ client certificate thật** (Device CA, SAN URI định danh + Subject OU posture, Traefik `RequireAndVerifyClientCert`) + **step-up OTP** (`acr=high`) cho hành động nhạy cảm — nhưng chưa có health attestation tích hợp EDR |
+| 5 | *Monitor and measure the integrity/security posture of all assets* | Một phần | `security-scanner-job.yaml` + `posture-agent` CronJob (ns crapi) kiểm tra container posture (uid, Linux capabilities, ảnh unpinned); Gatekeeper admission chặn container vi phạm — nhưng vẫn chủ yếu *phát hiện*, không tự thực thi hành động khắc phục (xem mục "ZTLab đóng góp gì" — SOAR execution đã bị bỏ) |
 | 6 | *Authentication/authorization are dynamic and strictly enforced before access* | Có | Istio CUSTOM AuthorizationPolicy → OPA ext_authz **fail-closed** (OPA lỗi/timeout → 503, không fail-open); xác nhận thật bằng `tests/chaos_opa_failover.sh` |
-| 7 | *Collect information on assets/network state to improve security posture* | Có | PLG Stack + OPA decision log (`decision_id` riêng từng decision) + istio access log (có SVID peer) + BFF audit log + SOAR case log — dùng để detect, respond, điều chỉnh policy |
+| 7 | *Collect information on assets/network state to improve security posture* | Có | PLG Stack + OPA decision log (`decision_id` riêng từng decision) + istio access log (có SVID peer) + BFF audit log + WAF audit log + `incident-analyzer` evidence bundle — dùng để detect, phân tích, điều chỉnh policy |
 
 Diễn giải bảng trên bằng một câu: ZTLab làm tốt các tenet thuộc phạm trù *identity + network + policy enforcement* (2, 3, 6, một phần 4), còn tenet thuộc phạm trù *device/asset posture* (5) mới dừng ở mức thủ công/one-off — đây không phải sơ suất che giấu mà là ranh giới phạm vi có chủ đích của một đồ án quy mô lab, đã nói rõ ở phần "ZTLab đóng góp gì" bên dưới.
 
@@ -69,9 +69,9 @@ flowchart LR
         direction TB
         I1["SPIRE SVID X.509 + Envoy mTLS<br/>bắt buộc mọi service-to-service"]
         I2["OPA ext_authz (Rego)<br/>kiểm JWT + RBAC + SVID mỗi request"]
-        I3["NetworkPolicy theo namespace +<br/>OPA fraud gate theo giao dịch"]
-        I4["PLG Stack + SOAR HITL<br/>phát hiện & phản ứng tự động"]
-        I5["SVID TTL 1h, Root CA 7 ngày<br/>rotate tự động, zero-downtime"]
+        I3["NetworkPolicy theo namespace +<br/>device-cert posture theo hành động"]
+        I4["PLG Stack + incident-analyzer<br/>phát hiện & đóng gói bằng chứng"]
+        I5["SVID TTL 1h, device cert 7 ngày<br/>rotate tự động, zero-downtime"]
     end
     T1 --> I1
     T2 --> I2
@@ -85,13 +85,13 @@ flowchart LR
 Cần tách bạch hai loại tuyên bố dễ bị nhầm lẫn với nhau:
 
 1. *"Hệ thống này chặn được N request tấn công trong bài test"* — đây là **kết quả thực nghiệm có thật**, đo được (`tests/crapi_*.sh`, kết quả trong `KET-QUA-CRAPI.md` Phase 7).
-2. *"Hệ thống này làm giảm tấn công / tăng bảo mật"* — đây là một tuyên bố **không có nghĩa** ở phạm vi một lab/testbed đơn lẻ. ZTLab không bảo vệ bất kỳ tài sản thật nào ngoài chính nó; nó không phải một control có thể "lắp vào" một hệ thống khác để hệ thống đó an toàn hơn. Toàn bộ Rego policy (`opa/crapi-policies/`), alert rule Grafana (`plg-stack/grafana/alerting/`), và playbook SOAR (`services/soar-engine/main.py`) đều viết cứng theo đúng tên endpoint/service/namespace của riêng hệ thống này — di chuyển nguyên trạng sang một codebase khác sẽ không hoạt động, phải viết lại từ đầu theo bề mặt tấn công (attack surface) của hệ thống đích. Chính lần migration finance-app → crAPI (xem `KE-HOACH-CRAPI.md`) là minh chứng: đổi ứng dụng mục tiêu buộc viết lại toàn bộ `service-graph`, policy, alert rule, script tấn công.
+2. *"Hệ thống này làm giảm tấn công / tăng bảo mật"* — đây là một tuyên bố **không có nghĩa** ở phạm vi một lab/testbed đơn lẻ. ZTLab không bảo vệ bất kỳ tài sản thật nào ngoài chính nó; nó không phải một control có thể "lắp vào" một hệ thống khác để hệ thống đó an toàn hơn. Toàn bộ Rego policy (`opa/crapi-policies/`), alert rule Grafana (`plg-stack/grafana/alerting/`), và WAF rule (`k8s/crapi/waf.yaml`) đều viết cứng theo đúng tên endpoint/service/namespace của riêng hệ thống này — di chuyển nguyên trạng sang một codebase khác sẽ không hoạt động, phải viết lại từ đầu theo bề mặt tấn công (attack surface) của hệ thống đích. Chính lần migration finance-app → crAPI (kết quả log tại `KET-QUA-CRAPI.md`) là minh chứng: đổi ứng dụng mục tiêu buộc viết lại toàn bộ `service-graph`, policy, alert rule, script tấn công.
 
 Vậy giá trị thực của dự án nằm ở đâu, nếu không phải "giảm tấn công"? Ba điểm, xếp theo mức độ chắc chắn giảm dần:
 
-**1. Bằng chứng thực nghiệm về operational feasibility — và về cái giá thật của nó.** Đóng góp **không phải** "ZTLab là một hệ thống chạy được" — một artifact chạy được không phải kết quả nghiên cứu, và pipeline này **không** tự chạy trơn tru qua các lần destroy/redeploy: mỗi lần dựng lại từ số 0 đều lộ ra lỗi mới chỉ xuất hiện ở đường fresh-deploy (SSH host-key sau khi VM đổi IP, `docker save` ảnh multi-arch hỏng khi `ctr import`, DNS/WireGuard chết vì uplink drop UDP → SPIRE/mТLS sập dây chuyền — xem `KET-QUA-CRAPI.md` Phase 6). Đóng góp thật nằm ở **quá trình lặp lại thực nghiệm đó**: lắp SPIFFE/SPIRE + OPA (PDP) + Istio/Envoy (PEP) + PLG/SOAR (vòng lặp detect–respond) thành một pipeline xuyên hai cloud có mô hình mạng/IAM khác hẳn nhau, rồi *đo lại chính xác nó gãy ở đâu và vì sao* — dữ liệu về chi phí kỹ sư thật của Zero Trust mà phần lớn tài liệu SP 800-207 (dừng ở nguyên lý trừu tượng) không đề cập.
+**1. Bằng chứng thực nghiệm về operational feasibility — và về cái giá thật của nó.** Đóng góp **không phải** "ZTLab là một hệ thống chạy được" — một artifact chạy được không phải kết quả nghiên cứu, và pipeline này **không** tự chạy trơn tru qua các lần destroy/redeploy: mỗi lần dựng lại từ số 0 đều lộ ra lỗi mới chỉ xuất hiện ở đường fresh-deploy (SSH host-key sau khi VM đổi IP, `docker save` ảnh multi-arch hỏng khi `ctr import`, DNS/WireGuard chết vì uplink drop UDP → SPIRE/mТLS sập dây chuyền — xem `KET-QUA-CRAPI.md` Phase 6). Đóng góp thật nằm ở **quá trình lặp lại thực nghiệm đó**: lắp SPIFFE/SPIRE + OPA (PDP) + Istio/Envoy (PEP) + PLG/incident-analyzer (vòng lặp detect–analyze) thành một pipeline xuyên hai cloud có mô hình mạng/IAM khác hẳn nhau, rồi *đo lại chính xác nó gãy ở đâu và vì sao* — dữ liệu về chi phí kỹ sư thật của Zero Trust mà phần lớn tài liệu SP 800-207 (dừng ở nguyên lý trừu tượng) không đề cập.
 
-**2. Số liệu chi phí runtime.** Câu hỏi "áp Zero Trust thì tốn thêm bao nhiêu mỗi request?" thường chỉ được trả lời định tính. `tests/perf_overhead.py` / `tests/collect_metrics.py` đo cho *chính kiến trúc này*: overhead latency lớp mТLS + OPA ext_authz (per-request), CPU/RAM steady-state của SPIRE/OPA/SOAR. Hữu ích cho người *đang cân nhắc* áp dụng kiến trúc tương tự — không phải bằng chứng "có Zero Trust thì an toàn hơn". *(Các script đo này hiện còn tham chiếu tên service của app cũ — cần cập nhật trước khi chạy lại cho crAPI.)*
+**2. Số liệu chi phí runtime.** Câu hỏi "áp Zero Trust thì tốn thêm bao nhiêu mỗi request?" thường chỉ được trả lời định tính. `tests/perf_overhead.py` / `tests/collect_metrics.py` đo cho *chính kiến trúc này*: overhead latency lớp mТLS + OPA ext_authz (per-request), CPU/RAM steady-state của SPIRE/OPA/incident-analyzer. Hữu ích cho người *đang cân nhắc* áp dụng kiến trúc tương tự — không phải bằng chứng "có Zero Trust thì an toàn hơn". *(Các script đo này hiện còn tham chiếu tên service của app cũ — cần cập nhật trước khi chạy lại cho crAPI.)*
 
 **3. Giới hạn của cách tiếp cận — cũng là một phần đóng góp, không phải điểm trừ cần giấu.** Lớp detection dựa hoàn toàn trên rule tĩnh (LogQL ngưỡng cố định) — không học pattern mới, không phân biệt tấn công chậm/rải rác, và **không suy rộng ra ngoài các kịch bản đã định nghĩa**: kỹ thuật không khớp LogQL nào sẽ đi qua không dấu vết. Ngược lại, OPA **có** tự verify chữ ký JWT của người dùng (Keycloak JWKS + OIDC discovery) — khác với bản finance-app trước đây giao việc đó cho tầng ứng dụng. Ghi nhận rõ giới hạn theo-thiết-kế quan trọng hơn quảng bá "chặn 100% trong bài test".
 
@@ -103,17 +103,19 @@ Tóm lại: ZTLab nên được đọc như **một nghiên cứu thực nghiệ
 
 ```mermaid
 flowchart LR
-    U(["👤 User<br/>browser"])
+    U(["👤 User<br/>browser + client cert"])
 
     subgraph AWS["AWS K3s"]
         direction TB
-        KC["Keycloak<br/>OIDC/PKCE"]
-        BFF["bff<br/>edge PEP · token-exchange · device-trust"]
+        TR["Traefik<br/>websecure · client-cert mTLS (Device CA)"]
+        WAF["waf<br/>ModSecurity/CRS DetectionOnly"]
+        KC["Keycloak<br/>(OpenStack — xem dưới)"]
+        BFF["bff<br/>edge PEP · token-exchange · device-trust/posture từ cert"]
         WEB["crapi-web (SPA)"]
         COM["crapi-community (Go)"]
         WS["crapi-workshop (Django)"]
         OPAA["OPA ×3<br/>zta/crapi/authz"]
-        BFF --> KC
+        TR --> WAF --> BFF
         BFF --> WEB
         BFF -->|"mTLS SVID + OPA"| COM
         BFF -->|"mTLS SVID + OPA"| WS
@@ -128,32 +130,32 @@ flowchart LR
         ID --- PG
     end
 
-    subgraph OBS["Observability & Response"]
+    subgraph OBS["Observability & Detection"]
         direction TB
         LK["Loki"]
         GF["Grafana alert rules"]
-        SOAR["SOAR Engine · HITL"]
+        IA["incident-analyzer<br/>evidence bundle + priority score"]
         EM(["📧 Admin"])
-        LK --> GF --> SOAR --> EM --> SOAR
+        LK --> GF --> IA --> EM
     end
 
-    U -->|OIDC/PKCE| BFF
+    U -->|"HTTPS + client cert"| TR
     BFF -->|"WireGuard + mTLS SVID cross-cloud"| ID
+    BFF -.->|"OIDC/PKCE (Keycloak thật ở OpenStack)"| KC
     COM -->|"/identity/api/auth/verify (mỗi request)"| ID
     WS -->|"/verify"| ID
     AWS -.->|Promtail| LK
     OS -.->|Promtail| LK
-    SOAR -.->|"isolate · restrict · revoke · block · quarantine"| AWS
-    SOAR -.-> OS
 ```
 
 **Stack:**
-- **Identity:** Keycloak OIDC/PKCE (realm `ztlab`, role crapi-user/mechanic/admin/soc-analyst), SPIFFE/SPIRE X.509 SVID (trust domain `ztlab.local`, TTL 1h, scheme `spiffe://ztlab.local/<cloud>/<svc>`)
+- **Identity:** Keycloak OIDC/PKCE (đặt trên OpenStack cùng dịch vụ định danh — Nghị định 53, realm `ztlab`, role crapi-user/mechanic/admin/soc-analyst), SPIFFE/SPIRE X.509 SVID (trust domain `ztlab.local`, TTL 1h, scheme `spiffe://ztlab.local/<cloud>/<svc>`)
+- **Edge/perimeter:** Traefik (websecure, `TLSOption` `RequireAndVerifyClientCert`) → WAF (ModSecurity3 + OWASP CRS, DetectionOnly — đối chứng cho luận điểm BOLA vượt qua chữ ký) → BFF. Device CA riêng (tách khỏi SPIRE root CA); cert client mang định danh (SAN URI) + posture (Subject OU) — `scripts/issue-device-cert.sh`
 - **Mesh:** Istio 1.22.3 — PeerAuth STRICT + DestinationRule custom-SAN mỗi service + CUSTOM AuthorizationPolicy → OPA ext_authz
 - **Policy:** OPA ×2 PDP (AWS `zta/crapi/authz/allow`, OpenStack `zta/crapi/crosscloud/allow`); `service_acl` sinh từ `policy/service-graph-crapi.yaml`
-- **Edge:** BFF (FastAPI) — điểm vào duy nhất, OIDC/PKCE + mint token crAPI RS256 + device-trust/posture + audit
+- **Edge PEP:** BFF (FastAPI) — điểm vào duy nhất, OIDC/PKCE + mint token crAPI RS256 + device-trust/posture (từ client cert đã verify) + audit
 - **Target app:** OWASP crAPI Core (identity/community/workshop/web/mailhog) + Postgres×1 (OpenStack) + Mongo/Redis (AWS)
-- **Observability:** Promtail → Loki → Grafana; Prometheus; SOAR Engine (HITL, playbooks isolate/restrict/revoke/block/quarantine)
+- **Observability & detection:** Promtail → Loki → Grafana; Prometheus; `incident-analyzer` (đóng gói bằng chứng + chấm điểm ưu tiên + email — không tự thực thi hành động trên cluster)
 
 ---
 
@@ -167,13 +169,16 @@ k8s/{istio,keycloak,identity,gatekeeper,vault,plg-stack,monitoring,security-moni
 opa/crapi-policies/ Rego: zta_crapi (authz AWS), crosscloud_crapi (OpenStack), service_acl (generated)
 policy/             service-graph-crapi.yaml — nguồn sự thật cho service_acl + NetworkPolicy
 spire/              SPIRE server/agent config + K8s manifest + root CA
-services/           bff (edge PEP) + soar-engine + ai-analyzer + security-scorer (Dockerfile chung)
+services/           bff (edge PEP) + incident-analyzer (Dockerfile chung)
 deploy/vendor/crapi-keys/  khoá JWT công khai của crAPI (bff mint bằng khoá này)
+deploy/vendor/device-ca/   Device CA cho client-cert mTLS (A3) — key không commit, .gitignore
 scripts/            deploy-all, deploy-app, deploy-crapi, deploy-security-stack, destroy-all,
-                    ensure-spire-entries, gen-rego-acl, gen-networkpolicy, k8s-tunnel, open-admin-uis, sync-app-images
-tests/              crapi_*.sh (5 kịch bản tấn công) + crapi_run_all + lib/ + chaos_*.sh + test_service_graph_consistency
+                    ensure-spire-entries, gen-rego-acl, gen-networkpolicy, k8s-tunnel, open-admin-uis,
+                    sync-app-images, issue-device-cert (phát hành client cert theo posture)
+tests/              crapi_*.sh (kịch bản tấn công) + crapi_run_all + lib/ + chaos_*.sh + test_service_graph_consistency
 legacy/             Cấu hình Envoy/SPIRE trước khi migrate sang Istio — tham chiếu lịch sử, KHÔNG áp dụng
 HE-THONG-CHI-TIET.md  Tài liệu hệ thống đầy đủ (kiến trúc/cấu hình/module/flow)
+KEHOACH-THAYDOI-HETHONG.md  Kế hoạch A1-A5 (Keycloak→OpenStack, WAF, client-cert mTLS, bỏ SOAR...) + Giai đoạn B/C
 DEPLOY.md           Quy trình triển khai + vận hành hàng ngày
 ```
 
@@ -201,8 +206,7 @@ Hướng dẫn cài đặt từng bước thủ công (dùng khi debug hoặc mu
 
 | Biến | Default | Khi nào cần đổi |
 |---|---|---|
-| `AI_PROVIDER` | `heuristic` | Đổi `openai`/`gemini` để AI Analyzer gọi LLM thật — phải kèm `OPENAI_API_KEY`/`GEMINI_API_KEY` |
-| `SOAR_DRY_RUN` / `SOAR_AUTO_EXECUTE` | `true` | Tắt dry-run nếu muốn SOAR thực thi hành động thật trên cluster |
+| `SMTP_PASS` | rỗng | Mật khẩu app-password cho Gmail relay của Grafana (`grafana-smtp-secret`) — không đặt thì Grafana vẫn khởi động nhưng không gửi được mail alert thật, chỉ có bundle qua MailHog (`incident-analyzer`) |
 
 > Một vài biến trong `.env.template` (`AWS_GATEWAY_PRIVATE_KEY`, `OS_GATEWAY_PRIVATE_KEY`, `SPIRE_JOIN_TOKEN`, `GRAFANA_ADMIN_PASSWORD`, `TERRAFORM_STATE_BUCKET`, `TERRAFORM_LOCK_TABLE`) hiện **không script nào đọc** — WireGuard/SPIRE tự sinh key lúc deploy, mật khẩu Grafana đang hardcode trong `k8s/plg-stack/grafana.yaml`. Khỏi cần điền các biến này.
 
@@ -217,7 +221,7 @@ bash scripts/destroy-all.sh            # gỡ hạ tầng
 bash scripts/k8s-tunnel.sh up all      # mở tunnel tới 2 cluster
 bash scripts/open-admin-uis.sh         # mở toàn bộ port-forward (tự-restart)
 bash scripts/health-check.sh           # kiểm tra sức khoẻ (kỳ vọng FAIL=0)
-bash tests/crapi_run_all.sh            # chạy 5 kịch bản tấn công → Grafana → SOAR
+bash tests/crapi_run_all.sh            # chạy các kịch bản tấn công → Grafana → incident-analyzer
 ```
 
 ---
@@ -226,17 +230,17 @@ bash tests/crapi_run_all.sh            # chạy 5 kịch bản tấn công → G
 
 | Service | URL | Credential |
 |---|---|---|
-| **crAPI (qua BFF)** | http://localhost:18081/login | testuser01 / Test1234! (Keycloak) |
+| **crAPI (qua WAF→BFF, HTTP, debug)** | http://localhost:18081/login | testuser01 / Test1234! (Keycloak) |
+| **crAPI (Traefik, client-cert mTLS thật — A3)** | https://crapi.ztlab.local:18443/login | cần client cert: `scripts/issue-device-cert.sh <id> compliant`, `--resolve crapi.ztlab.local:18443:127.0.0.1` |
 | Keycloak Admin | http://localhost:8180 | admin / ztlab-admin-2026 |
 | Grafana | http://localhost:3000 | admin / ZTALab2026! |
-| SOAR Engine | http://localhost:8091/cases | — |
-| AI Analyzer | http://localhost:18082 | — |
-| Security Scorer | http://localhost:18092 | — |
+| Incident Analyzer | http://localhost:8091/evidence | — |
 | Prometheus | http://localhost:9090 | — |
 | Loki | http://localhost:13100 | — |
-| MailHog (mail OTP/reset) | http://localhost:8025 | — |
+| MailHog (mail OTP/reset, crAPI) | http://localhost:8025 | — |
+| MailHog (evidence email, SOC) | http://localhost:8026 | — |
 
-> **Đăng nhập:** vào thẳng `http://localhost:18081/login` (form Keycloak), KHÔNG bấm nút Login trong SPA crAPI (form gốc của crAPI không dùng được — BFF chặn `/identity/*` khi chưa có phiên).
+> **Đăng nhập:** cổng `18081` (HTTP, không cert) dùng để debug nhanh; cổng `18443` là đường thật đi qua Traefik + client-cert mTLS (A3). KHÔNG bấm nút Login trong SPA crAPI (form gốc của crAPI không dùng được — BFF chặn `/identity/*` khi chưa có phiên).
 
 ---
 
@@ -254,22 +258,24 @@ User crAPI gốc (`adam007@example.com`…) chỉ nằm trong Postgres của crA
 
 ---
 
-## Kịch bản tấn công (Zero-Trust enforcement + detection → SOAR)
+## Kịch bản tấn công (Zero-Trust enforcement + detection → evidence)
 
-`tests/crapi_*.sh` — **tấn công thật**: `kubectl exec` vào pod / chạy luồng Keycloak OIDC, rồi assert mã 401/403 từ **đúng điểm enforcement thật** (OPA ext_authz / BFF), và xác nhận log vào Loki.
+`tests/crapi_*.sh` — **tấn công thật**: `kubectl exec` vào pod / chạy luồng Keycloak OIDC qua Traefik (client-cert mTLS thật, A3), rồi assert mã 401/403 từ **đúng điểm enforcement thật** (OPA ext_authz / BFF), và xác nhận log vào Loki.
 
-| Script | Cơ chế Zero-Trust nghiệm thu | ATT&CK | Alert rule | SOAR playbook |
-|---|---|---|---|---|
-| `crapi_lateral_movement.sh` | `crapi-community` (SVID hợp lệ) gọi `crapi-workshop` ngoài `service_acl` → OPA deny | T1021 | `lateral-movement-alert.yml` | `isolate_workload` |
-| `crapi_bfla.sh` | `crapi-user` GHI vào endpoint admin/management → BFF `_rbac_ok` + OPA `role_permits_action` deny; audit `rbac_denied` | API5:2023 | `bfla-alert.yml` | `block_source_ip` |
-| `crapi_step_up.sh` | Hành động nhạy cảm (đặt hàng, đổi mật khẩu) với phiên `acr=1` → `401 step_up_required` | — | — | — |
-| `crapi_access_denied.sh` | Gọi nội mesh không SVID hợp lệ + thiết bị `suspicious` GHI → OPA fail-closed deny | T1078 | `access-denied-alert.yml` | `block_source_ip` |
-| `crapi_brute_force.sh` | 15× Keycloak login sai → `LOGIN_ERROR` | T1110 | `brute-force-alert.yml` | `revoke_user_sessions` |
-| `crapi_run_all.sh` | Chạy cả 5 + hướng dẫn kiểm Grafana/SOAR | | | |
+| Script | Cơ chế Zero-Trust nghiệm thu | ATT&CK | Alert rule |
+|---|---|---|---|
+| `crapi_lateral_movement.sh` | `crapi-community` (SVID hợp lệ) gọi `crapi-workshop` ngoài `service_acl` → OPA deny | T1021 | `lateral-movement-alert.yml` |
+| `crapi_bfla.sh` | `crapi-user` GHI vào endpoint admin/management → BFF `_rbac_ok` + OPA `role_permits_action` deny; audit `rbac_denied` | API5:2023 | `bfla-alert.yml` |
+| `crapi_step_up.sh` | Hành động nhạy cảm (đặt hàng, đổi mật khẩu) với phiên `acr=1` → `401 step_up_required` | — | — |
+| `crapi_access_denied.sh` | (1) Gọi nội mesh không SVID hợp lệ → OPA fail-closed deny. (2) Cert thiết bị `posture:non-compliant` (A3, Device CA) GHI → OPA deny | T1078 | `access-denied-alert.yml` |
+| `crapi_brute_force.sh` | 15× Keycloak login sai → `LOGIN_ERROR` | T1110 | `brute-force-alert.yml` |
+| `crapi_bola.sh` | Đối chứng BOLA (A2): request vượt quyền không chứa payload injection nào → WAF/CRS **không bắt được gì**, chỉ ZTA (OPA+RBAC) mới xử lý | API1:2023 | — |
+| `crapi_sqli_waf.sh` | Đối chứng SQLi (A2): CRS **bắt được** trong `waf-audit`, request vẫn đi tiếp (DetectionOnly) | — | — |
+| `crapi_run_all.sh` | Chạy các kịch bản chính + hướng dẫn kiểm Grafana/evidence | | |
 
 Ngoài ra: `tests/chaos_opa_failover.sh` (OPA down → fail-closed 503), `tests/chaos_spire_failover.sh` (spire-server down → SVID cache vẫn hoạt động), `tests/test_service_graph_consistency.py` (`service_acl` = nguồn sự thật).
 
-> **crAPI giữ nguyên lỗ hổng tầng app** (BOLA `/identity/api/v2/vehicle/{id}/location`, BFLA, JWT confusion…) — Zero-Trust không vá tầng app, chỉ chặn lateral movement / privilege-escalation-qua-network / credential-replay, ép step-up, và phát hiện → SOAR khi lỗ hổng bị khai thác.
+> **crAPI giữ nguyên lỗ hổng tầng app** (BOLA `/identity/api/v2/vehicle/{id}/location`, BFLA, JWT confusion…) — Zero-Trust không vá tầng app, chỉ chặn lateral movement / privilege-escalation-qua-network / credential-replay, ép step-up, và phát hiện → đóng gói bằng chứng (`incident-analyzer`) khi lỗ hổng bị khai thác.
 
 ---
 
@@ -280,7 +286,8 @@ Ngoài ra: `tests/chaos_opa_failover.sh` (OPA down → fail-closed 503), `tests/
 | OPA decision | `{job="opa-decisions"}` (Loki) hoặc `kubectl logs -n crapi deploy/opa-server` | `opa_result` true/false, `source_principal`, `request_path` |
 | Istio access | `{job="envoy-access", namespace="crapi"}` | `svid` (SPIFFE peer), `method`, `path`, `response_code`, `bytes_sent` |
 | BFF audit | `{job="bff-audit"}` | `event` (user_login / rbac_denied / step_up_required / device_trust_denied), `username`, `roles`, `acr` |
-| SOAR cases | `curl http://localhost:8091/cases` | `attack_type`, `severity`, `recommended_playbook`, `status` |
+| WAF audit | `{job="waf-audit"}` | ModSecurity/CRS JSON audit (rule matched, anomaly score) — DetectionOnly, không chặn |
+| Evidence bundles | `curl http://localhost:8091/evidence` | `attack_type`, `mitre`, `priority_score`, `email_sent` (đóng gói bằng chứng, không có hành động thực thi) |
 | SPIRE agent | `kubectl logs -n spire daemonset/spire-agent` | node attestation, SVID cấp/renew |
 | Health | `bash scripts/health-check.sh` | tổng hợp PASS/WARN/FAIL |
 
@@ -290,4 +297,5 @@ Ngoài ra: `tests/chaos_opa_failover.sh` (OPA down → fail-closed 503), `tests/
 
 - **`HE-THONG-CHI-TIET.md`** — kiến trúc, cấu hình, module, 6 luồng hoạt động, bảng cấu hình nhanh, runbook khôi phục.
 - **`DEPLOY.md`** — quy trình triển khai từng bước + vận hành hàng ngày (redeploy code, health check).
-- **`TARGET-CRAPI.md` / `KE-HOACH-CRAPI.md` / `KET-QUA-CRAPI.md`** — kế hoạch + kết quả migration finance → crAPI.
+- **`KEHOACH-THAYDOI-HETHONG.md`** — kế hoạch đang thực hiện: Keycloak→OpenStack (A1), WAF (A2), client-cert mTLS (A3), bỏ SOAR execution (A4), sinh dataset (Giai đoạn B), mô hình ML (Giai đoạn C).
+- **`KET-QUA-CRAPI.md`** — log kết quả migration finance-app → crAPI (Phase 1-7, lệnh + output thật).
