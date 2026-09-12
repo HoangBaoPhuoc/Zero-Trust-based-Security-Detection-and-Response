@@ -50,7 +50,19 @@ spec:
                     | grep -c '^SPIFFE ID' || true)
                   AGENT_COUNT=${AGENT_COUNT:-0}
 
-                  OPA_CODE=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$OPA_URL" || echo 000)
+                  # k3s's embedded kube-router NetworkPolicy controller lags
+                  # behind this Job's own pod IP getting added to the
+                  # spire-ns ipset (this ns churns every minute), so the very
+                  # first curl right after pod start often gets an instant
+                  # "connection refused" even though OPA itself is healthy —
+                  # a real outage would still fail after every retry, this
+                  # only tolerates that startup race.
+                  OPA_CODE=000
+                  for _ in 1 2 3; do
+                    OPA_CODE=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$OPA_URL" || echo 000)
+                    [ "$OPA_CODE" = "200" ] && break
+                    sleep 5
+                  done
 
                   STATUS="healthy"
                   REASONS="[]"

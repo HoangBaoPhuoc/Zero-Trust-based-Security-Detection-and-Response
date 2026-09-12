@@ -74,11 +74,28 @@ count_entries_matching() {
     -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep -c "$pattern" || true
 }
 
+# A single slow-to-attest spire-agent pod (lab nodes are resource-constrained
+# and the OpenStack cluster's uplink is a phone hotspot — see docs on uplink
+# fragility) can occasionally take longer than one TIMEOUT_WAIT window to go
+# Ready even though the rollout is progressing normally, not stuck. Retrying
+# the same wait once before failing absorbs that without masking a real hang
+# (a truly stuck rollout still fails after both attempts).
+wait_rollout() {
+  local ctx="$1" kind="$2" name="$3" attempt
+  for attempt in 1 2; do
+    if kubectl --context "$ctx" -n spire rollout status "$kind/$name" --timeout="${TIMEOUT_WAIT}s"; then
+      return 0
+    fi
+    log_error "rollout status $kind/$name timed out on $ctx (attempt $attempt/2)"
+  done
+  return 1
+}
+
 log_info "Waiting for spire-server/spire-agent on both clusters..."
-kubectl --context "$AWS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
-kubectl --context "$AWS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
-kubectl --context "$OS_CONTEXT" -n spire rollout status deployment/spire-server --timeout="${TIMEOUT_WAIT}s"
-kubectl --context "$OS_CONTEXT" -n spire rollout status daemonset/spire-agent --timeout="${TIMEOUT_WAIT}s"
+wait_rollout "$AWS_CONTEXT" deployment spire-server
+wait_rollout "$AWS_CONTEXT" daemonset spire-agent
+wait_rollout "$OS_CONTEXT" deployment spire-server
+wait_rollout "$OS_CONTEXT" daemonset spire-agent
 
 AWS_PARENT="spiffe://ztlab.local/nodes/aws-k3s"
 OS_PARENT="spiffe://ztlab.local/nodes/os-k3s"
