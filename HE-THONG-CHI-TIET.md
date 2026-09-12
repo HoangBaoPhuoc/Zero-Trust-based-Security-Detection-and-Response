@@ -1,14 +1,16 @@
 # HỆ THỐNG CHI TIẾT — Zero-Trust Security Detection & Response cho Microservice đa Cloud
 
-> Tài liệu mô tả toàn bộ **kiến trúc, cấu hình, module và luồng hoạt động** của hệ thống ở trạng thái hiện tại (branch `feat/crapi-target`, 2026-09-10). Ứng dụng mục tiêu: **OWASP crAPI** (thay ứng dụng "finance" tự viết trước đây). Toàn bộ khung Zero-Trust được giữ nguyên cơ chế.
+> Tài liệu mô tả toàn bộ **kiến trúc, cấu hình, module và luồng hoạt động** của hệ thống ở trạng thái hiện tại (branch `feat/kehoach-thaydoi`, 2026-09-13, sau khi Giai đoạn A — A1 đến A5.2 của `KEHOACH-THAYDOI-HETHONG.md` — hoàn tất). Ứng dụng mục tiêu: **OWASP crAPI** (thay ứng dụng "finance" tự viết trước đây). Toàn bộ khung Zero-Trust được giữ nguyên cơ chế.
 >
-> Tài liệu đồng hành: `DEPLOY.md` (quy trình triển khai), `KET-QUA-CRAPI.md` (log kết quả migration finance→crAPI), `KEHOACH-THAYDOI-HETHONG.md` (kế hoạch A1-A5 + Giai đoạn B/C đang thực hiện), `README.md`.
+> Tài liệu đồng hành: `DEPLOY.md` (quy trình triển khai), `KET-QUA-CRAPI.md` (log kết quả migration finance→crAPI), `KEHOACH-THAYDOI-HETHONG.md` (kế hoạch A1-A5 + Giai đoạn B/C, A1-A5.2 nay đã DONE), `README.md`.
+>
+> **Đổi so với bản 2026-09-10 (Giai đoạn A):** Keycloak chuyển sang OpenStack (A1, §4.7); thêm WAF ModSecurity3+CRS trước BFF và siết `bff` PeerAuthentication về STRICT (A2, §4.2 + §4.7 mới); thêm Device CA + client-certificate mTLS với posture nhúng trong cert (A3, §4.8 mới); gộp `soar-engine`+`ai-analyzer`+`security-scorer` thành `incident-analyzer`, bỏ mọi khả năng thực thi (A4, §7.3); `destination_principal`/`source_principal` được promote thành Loki label (A5.1, §7.1); thêm `tests/crapi_run_campaign.sh` gắn nhãn theo lần chạy (A5.2, §10.1).
 
 ---
 
 ## 1. TỔNG QUAN & MỤC TIÊU
 
-**Bài toán:** áp dụng mô hình **Zero Trust** (NIST SP 800-207) cho một hệ microservice **triển khai trên nhiều đám mây** (AWS + OpenStack), kèm lớp **phát hiện và phản ứng** (SIEM + SOAR) khớp với bề mặt tấn công thực tế.
+**Bài toán:** áp dụng mô hình **Zero Trust** (NIST SP 800-207) cho một hệ microservice **triển khai trên nhiều đám mây** (AWS + OpenStack), kèm lớp **phát hiện + phân tích bằng chứng + thông báo** (SIEM, **không** có thành phần thực thi phản ứng tự động — A4) khớp với bề mặt tấn công thực tế.
 
 **Nguyên tắc Zero Trust hiện thực hoá:**
 
@@ -20,9 +22,9 @@
 | 4. Chính sách động | RBAC realm-role + **step-up OTP** (theo *loại* hành động) + **device posture** + **device trust** |
 | 5. Giám sát toàn vẹn tài sản | `posture-agent` CronJob + `security-scanner-job` (container isolation) + Gatekeeper admission |
 | 6. Xác thực + cấp quyền động, nghiêm ngặt | Keycloak OIDC/PKCE ở BFF; OPA tự verify chữ ký JWT (Keycloak JWKS + OIDC discovery) + kiểm `aud`/`iss`/`exp` |
-| 7. Thu thập tối đa dữ liệu để cải thiện | PLG (Promtail→Loki→Grafana) + Prometheus + OPA decision log + istio access log + BFF audit log → SOAR |
+| 7. Thu thập tối đa dữ liệu để cải thiện | PLG (Promtail→Loki→Grafana) + Prometheus + OPA decision log + istio access log + BFF audit log → `incident-analyzer` (evidence bundle, A4 — không còn SOAR thực thi) |
 
-**Ranh giới đóng góp (làm rõ trong luận văn):** hệ thống **KHÔNG** vá lỗ hổng tầng ứng dụng của crAPI (BOLA, BFLA, JWT confusion, SSRF, mass assignment...). Đó là **chủ đích** — chúng là "challenge" của crAPI. Đóng góp là **lớp hạ tầng Zero-Trust + phát hiện/phản ứng** bao quanh: chặn *lateral movement*, *privilege escalation qua network*, *credential replay*, ép *step-up*, và phát hiện → tạo case SOAR khi lỗ hổng app bị khai thác.
+**Ranh giới đóng góp (làm rõ trong luận văn):** hệ thống **KHÔNG** vá lỗ hổng tầng ứng dụng của crAPI (BOLA, BFLA, JWT confusion, SSRF, mass assignment...). Đó là **chủ đích** — chúng là "challenge" của crAPI. Đóng góp là **lớp hạ tầng Zero-Trust + phát hiện/phản ứng** bao quanh: chặn *lateral movement*, *privilege escalation qua network*, *credential replay*, ép *step-up*, và phát hiện → đóng gói bằng chứng + thông báo người vận hành (§7.3) khi lỗ hổng app bị khai thác — **không** có hành động thực thi tự động nào (A4).
 
 ---
 
@@ -32,32 +34,36 @@
 
 ```
                     ┌─────────────────────────── Người dùng (trình duyệt) ───────────────────────────┐
-                    │                         http://crapi.ztlab.local  (hoặc port-forward :18081)   │
+                    │        https://crapi.ztlab.local:18443  (Traefik, client-cert mTLS bắt buộc)   │
                     ▼
          ╔══════════════════════ AWS (VPC 10.10.0.0/16) ══════════════════════╗   ╔════════ OpenStack (Kolla AIO trên host `aio`) ════════╗
          ║  k3s cluster "aws-k3s"  (master + 2 worker, subnet 10.10.1.0/24)   ║   ║  k3s cluster "os-k3s" (master + 2 worker,             ║
          ║                                                                    ║   ║                        subnet 192.168.101.0/24)      ║
          ║  ns crapi:                                                         ║   ║  ns crapi:                                            ║
-         ║   • bff            (FastAPI — EDGE PEP, điểm vào DUY NHẤT)          ║   ║   • crapi-identity  (Java Spring — cấp JWT)          ║
-         ║   • crapi-web      (React/nginx tĩnh, bff proxy tới)               ║   ║   • postgresdb      (Postgres 14 — DB DUY NHẤT)      ║
-         ║   • crapi-community(Go)                                            ║   ║   • mailhog         (SMTP + UI, MH_STORAGE=memory)   ║
-         ║   • crapi-workshop (Django)                                        ║   ║   • opa-server ×3   (PDP — path crosscloud)          ║
-         ║   • mongodb, redis                                                 ║   ║                                                      ║
-         ║   • opa-server ×3  (PDP — path authz)                              ║   ║  ns spire: spire-server + spire-agent (DaemonSet)    ║
-         ║                                                                    ║   ║  ns istio-system: istiod                              ║
-         ║  ns identity: keycloak + keycloak-db (Postgres)                    ║   ║                                                      ║
-         ║  ns identity-directory: openldap (SCIM demo directory)             ║   ║  os-gateway VM (192.168.100.10 / .101.1 / .102.1)    ║
-         ║  ns spire, istio-system, gatekeeper-system, vault                  ║   ║   — NAT private/identity → internet, WireGuard peer  ║
-         ║  ns plg-stack: loki, grafana, promtail, soar-engine,               ║   ║                                                      ║
-         ║                ai-analyzer, security-scorer                        ║   ║  edge-router (Neutron): DMZ 192.168.100.0/24 ↔ ext   ║
-         ║  ns monitoring: prometheus                                         ║   ║                          (floating IP 172.10.10.169) ║
+         ║   • waf            (nginx+ModSecurity3+CRS — DetectionOnly, A2)    ║   ║   • crapi-identity  (Java Spring — cấp JWT)          ║
+         ║   • bff            (FastAPI — EDGE PEP, sau waf; PeerAuth STRICT)  ║   ║   • postgresdb      (Postgres 14 — DB DUY NHẤT)      ║
+         ║   • crapi-web      (React/nginx tĩnh, bff proxy tới)               ║   ║   • mailhog         (SMTP + UI, MH_STORAGE=memory)   ║
+         ║   • crapi-community(Go)                                            ║   ║   • opa-server ×3   (PDP — path crosscloud)          ║
+         ║   • crapi-workshop (Django)                                        ║   ║                                                      ║
+         ║   • mongodb, redis                                                 ║   ║  ns identity: keycloak + keycloak-db (Postgres, A1)  ║
+         ║   • opa-server ×3  (PDP — path authz)                              ║   ║  ns identity-directory: openldap (SCIM demo)         ║
+         ║                                                                    ║   ║  ns spire: spire-server + spire-agent (DaemonSet)    ║
+         ║  ns spire, istio-system, gatekeeper-system, vault                  ║   ║  ns istio-system: istiod                              ║
+         ║  ns plg-stack: loki, grafana, promtail, incident-analyzer,         ║   ║                                                      ║
+         ║                mailhog (SMTP sink cho incident-analyzer)           ║   ║  os-gateway VM (192.168.100.10 / .101.1 / .102.1)    ║
+         ║  ns monitoring: prometheus (mesh-injected, SVID aws/prometheus)    ║   ║   — NAT private/identity → internet, WireGuard peer  ║
          ║  aws-gateway VM (WireGuard peer) · aws-bastion (SSH jump)          ║   ║                                                      ║
+         ║                                                                    ║   ║  edge-router (Neutron): DMZ 192.168.100.0/24 ↔ ext   ║
+         ║                                                                    ║   ║                          (floating IP thay đổi mỗi   ║
+         ║                                                                    ║   ║                           lần terraform apply)       ║
          ╚════════════════════════════════════╤═══════════════════════════════╝   ╚═══════════════════╤══════════════════════════════════╝
                                               │                                                       │
                                               └───────────── WireGuard (wg0, 10.200.0.0/24, UDP 51820) ┘
                                                     aws_gateway 10.200.0.1  ◄────►  os_gateway 10.200.0.2
                                     (định tuyến chéo: 10.42/10.43 ◄─► 192.168.101/102, PersistentKeepalive=25 + wg-watchdog)
 ```
+
+**Đường request biên (sau A2+A3):** `trình duyệt --[TLS mTLS, Device CA]--> Traefik --[HTTP + X-Edge-Marker + X-Forwarded-Tls-Client-Cert-Info]--> waf (CRS DetectionOnly) --[mTLS SPIRE]--> bff`. Không TLS / cert sai CA / cert hết hạn → handshake fail ngay ở Traefik, không tới được waf/bff. Chi tiết: §4.7 (WAF), §4.8 (Device CA + client-cert mTLS).
 
 **Vì sao chia như vậy** (khớp Nghị định 53/2022 về nội địa hoá dữ liệu):
 - **OpenStack** = "nơi cấp danh tính + toàn bộ dữ liệu" → `crapi-identity` + `postgresdb` (DB **duy nhất**, chứa cả `user_login` lẫn dữ liệu shop) + `mailhog`.
@@ -76,6 +82,8 @@
 | IdP | Keycloak (realm `ztlab`, image trong `k8s/keycloak/`) |
 | Admission | Gatekeeper (OPA Constraint Framework) |
 | Secrets | HashiCorp Vault (dev mode, kubernetes auth) |
+| WAF (A2) | nginx + ModSecurity **v3** + OWASP CRS **v4** (`owasp/modsecurity-crs`, ghim `@sha256:`), `SecRuleEngine=DetectionOnly` |
+| Device CA (A3) | CA riêng ECDSA P-256 tự sinh (`scripts/deploy-security-stack.sh::provision_device_ca`), tách bạch với SPIRE root CA; private key lưu Vault, không commit git |
 | SIEM | Grafana + Loki + Promtail (PLG) + Prometheus |
 | Target app | OWASP crAPI Core (identity/community/workshop/web/mailhog), ảnh ghim `@sha256:` từ Docker Hub |
 
@@ -139,7 +147,7 @@ Security groups OpenStack (`terraform/openstack/security_groups.tf`): `neutron-s
 
 - Cài bằng `istioctl install -f k8s/istio/istio-operator.yaml` (2 cluster). `trustDomain: ztlab.local`. SPIRE là nguồn cert thật (Istio agent SDS ↔ spire-agent qua socket).
 - **`meshConfig.extensionProviders`**: `opa-ext-authz` → `envoyExtAuthzGrpc` `opa-service.crapi.svc.cluster.local:9191`.
-- **PeerAuthentication** ns `crapi`: `default` = **STRICT**; per-workload PERMISSIVE cho `bff` + `crapi-web` (nhận traffic từ ngoài mesh: BFF từ Traefik/port-forward; crapi-web static do BFF gọi).
+- **PeerAuthentication** ns `crapi`: `default` = **STRICT**; per-workload PERMISSIVE chỉ còn `waf` (nhận HTTP trần từ Traefik — nằm ngoài mesh theo thiết kế) và `crapi-web` (static do BFF gọi). **`bff` đã siết về STRICT ở A2** — từ khi WAF đứng trước (Traefik→waf→bff mọi hop đều mТLS thật) BFF không còn nhận trực tiếp traffic không-cert nữa; xem §4.7. Hệ quả: mọi consumer khác của `bff:8080/metrics` (vd Prometheus) bắt buộc phải có SVID riêng, không được nương nhờ PERMISSIVE nữa (§4.9).
 - **DestinationRule custom-SAN** — mỗi service một cái (`k8s/crapi/istio-policies.yaml`), ví dụ:
   - `crapi-workshop.crapi.svc.cluster.local` → `subjectAltNames: ["spiffe://ztlab.local/aws/crapi-workshop"]`
   - `crapi-identity-openstack.crapi.svc.cluster.local` → `mode: ISTIO_MUTUAL`, SAN `spiffe://ztlab.local/openstack/crapi-identity` (hop cross-cloud, cả 2 đầu có sidecar).
@@ -177,7 +185,9 @@ Security groups OpenStack (`terraform/openstack/security_groups.tf`): `neutron-s
 
 **`zta_crapi.rego` (AWS) — cấu trúc quyết định:**
 ```
-allow if public_path                    # /health, /identity/health_check, POST /identity/api/auth/{signup,login,verify,check-otp,…}, GET jwks.json, bff→crapi-web static
+allow if public_path                    # /health, /identity/health_check, POST /identity/api/auth/{signup,login,verify,check-otp,…}, GET jwks.json,
+                                         # BFF OIDC bootstrap (/auth/start, /auth/callback, /auth/logout, /login, /kc — A3), waf's own inbound hop
+                                         # (Traefik→waf, gated on X-Edge-Marker == EDGE_MARKER, A3), bff→crapi-web static
 allow if internal_service_request       # valid_svid ∧ allowed_by_acl ∧ keycloak_gate
 
 keycloak_gate:
@@ -196,11 +206,11 @@ device_trust_ok   = ¬strong_control_required ∨ (x-device-trust ≠ "suspiciou
 sensitive_crapi_action = POST {/workshop/api/shop/orders, …/return_order, /identity/api/v2/user/reset-password, …/change-email}
 step_up_ok        = ¬sensitive_crapi_action ∨ jwt_payload.acr == "high"
 ```
-> **Lưu ý thiết kế:** `posture`/`device_trust` chỉ gate **hành động GHI + nhạy cảm**, khớp BFF `_rbac_ok` (chỉ chặn suspicious device ở method GHI) và KE-HOACH §3.2. Đọc thường vẫn đủ mạnh bằng valid_jwt + RBAC + valid_svid + mТLS.
+> **Lưu ý thiết kế:** `posture`/`device_trust` chỉ gate **hành động GHI + nhạy cảm**, khớp BFF `_rbac_ok` (chỉ chặn suspicious device ở method GHI). Đọc thường vẫn đủ mạnh bằng valid_jwt + RBAC + valid_svid + mТLS. **Từ A3**, `posture`/`device_trust` không còn là heuristic User-Agent nữa mà đọc từ client certificate đã verify ở Traefik — xem §4.8.
 
 **`crosscloud_crapi.rego` (OpenStack)** — giữ `service_acl` + `allowed_by_acl` + `posture_compliant`; **bỏ** `device_trust_compliant` (BFF đã kiểm ở đầu vào; hop bff→identity cross-cloud chỉ tới OPA OpenStack). Guard `crapi-identity`: chỉ chấp nhận nguồn `bff` / `crapi-community` / `crapi-workshop`.
 
-**JWT verify:** OPA gọi `http.send` tới `keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs` + `.well-known/openid-configuration` (`force_cache` 300s). Xác nhận qua `counter_rego_builtin_http_send_network_requests: 2` trong decision log.
+**JWT verify:** OPA (AWS) gọi `http.send` tới `http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/protocol/openid-connect/certs` + `.../.well-known/openid-configuration` (`force_cache` 300s) — **kể từ A1**, đây là hop cross-cloud thật qua Service selectorless `keycloak-openstack` (NodePort 30091, xem §6), không còn nội cụm `keycloak.identity.svc:8080` như trước A1. Xác nhận qua `counter_rego_builtin_http_send_network_requests: 2` trong decision log.
 
 ### 4.4 NetworkPolicy L4
 
@@ -212,8 +222,9 @@ step_up_ok        = ¬sensitive_crapi_action ∨ jwt_payload.acr == "high"
 
 ### 4.5 Keycloak — IdP
 
-- Realm `ztlab` (`k8s/keycloak/realm-config.json`, `--import-realm` lần boot đầu; các thiết lập không retrofit được thì `deploy-crapi.sh` / `deploy-app.sh` đăng ký live qua Admin API).
-- **Client:** `crapi-bff` (public, PKCE S256, `standardFlowEnabled`, redirectUris `http://crapi.ztlab.local/*` + `http://localhost:18081/*` + `http://localhost:8080/*` + `127.0.0.1` tương ứng), `crapi-bff-stepup` (cùng cấu hình, dùng cho flow step-up). Protocol mapper `aud-crapi-bff` (oidc-audience-mapper → `aud=crapi-bff` trong access token, để OPA kiểm `aud`).
+- **Từ A1 (2026-09-11): chạy trên OpenStack** (`ctx-openstack`, ns `identity`), không còn ở AWS. Lý do là pháp lý, không phải kỹ thuật: Nghị định 53/2022 Điều 26 buộc thông tin cá nhân người dùng lưu trong nước; OpenStack (host `aio`) là "nơi cấp danh tính + toàn bộ dữ liệu" của kiến trúc này (§2.1), nên IdP phải đứng cùng phía. Expose qua NodePort **30091** trên `os-k3s-master`; phía AWS (BFF, OPA) gọi qua Service selectorless `keycloak-openstack` (§6, §4.3) — không sidecar (`DestinationRule mode: DISABLE`, WireGuard lo mã hoá).
+- Realm `ztlab` (`k8s/keycloak/realm-config.json`, `--import-realm` lần boot đầu; các thiết lập không retrofit được thì `deploy-crapi.sh` / `deploy-app.sh` đăng ký live qua Admin API — nay trỏ `ctx-openstack`). `redirectUris` của client `crapi-bff`/`crapi-bff-stepup` giờ **diff-and-PUT-update** ở mỗi lần deploy (trước A3 chỉ set lúc tạo mới lần đầu, nên thêm domain HTTPS mới không tự áp dụng cho client đã tồn tại).
+- **Client:** `crapi-bff` (public, PKCE S256, `standardFlowEnabled`, redirectUris gồm cả HTTPS thật (`https://crapi.ztlab.local/*`, `https://crapi.ztlab.local:18443/*` — A3) lẫn HTTP dev/bypass (`http://crapi.ztlab.local/*`, `http://localhost:18081/*`, `http://localhost:8080/*`, `127.0.0.1` tương ứng)), `crapi-bff-stepup` (cùng cấu hình, dùng cho flow step-up). Protocol mapper `aud-crapi-bff` (oidc-audience-mapper → `aud=crapi-bff` trong access token, để OPA kiểm `aud`).
 - **Realm role:** `crapi-user`, `crapi-mechanic`, `crapi-admin`, `soc-analyst`.
 - **User demo** (khai trong realm-config.json, đồng thời seed vào crAPI Postgres qua Job):
 
@@ -237,8 +248,8 @@ step_up_ok        = ¬sensitive_crapi_action ∨ jwt_payload.acr == "high"
 |---|---|
 | **OIDC/PKCE** | `/login`, `/auth/start`, `/auth/start-stepup` (`acr_values=high`), `/auth/callback` (đổi code→token), `/auth/logout`. State + `code_verifier` ký (`itsdangerous`), lưu trong token tạm. Keycloak proxy dưới `/kc/*` (rewrite `/realms/` → `/kc/realms/` trong HTML + Location + Set-Cookie path) → luồng login self-contained trên cùng host. |
 | **Session** | Cookie `ztlab_bff_session` = `{sid}` ký; state thật ở **Redis** `bff:session:<sid>` (TTL, fallback in-proc). Cookie `ztlab_bff_device` = device id ổn định (365 ngày). |
-| **Device trust** | `_evaluate_device_trust`: phân tích User-Agent (`_parse_device_label`) + so với `bff:known_devices:<user>` trong Redis → `trusted` \| `new_device` \| `suspicious` (UA không phải trình duyệt). Gắn header `X-Device-Trust`. |
-| **Device posture** | `shared/posture.py` — posture của chính pod bff (`DEVICE_POSTURE` = `compliant`/…). Gắn header `X-Device-Posture`. |
+| **Device cert + posture (A3, thay heuristic UA cũ)** | `_evaluate_device_cert`: đọc `X-Forwarded-Tls-Client-Cert-Info` do Traefik gắn sau khi verify client cert bằng Device CA (`k8s/crapi/edge-tls.yaml`) — chỉ tin khi header `X-Edge-Marker` khớp `EDGE_MARKER` (bí mật chia sẻ, chặn pod trong cluster tự giả header cert khi gọi thẳng bff bỏ qua Traefik). `_parse_cert_info` decode URL-encoding rồi regex `key="value"` lấy `Subject`/`SAN`; `device_id` = SAN URI `spiffe://ztlab.local/device/<id>`, `posture` = `Subject OU=posture:<compliant\|non-compliant>`. Thiếu marker/cert/device_id → mặc định `posture:unknown, device_trust:suspicious`. Gắn header `X-Device-Trust`/`X-Device-Posture` cho hop đi tiếp. |
+| **OIDC redirect scheme (A3)** | `_external_base`: WAF's nginx ghi đè `X-Forwarded-Proto` về scheme của chính nó (luôn `http`, vì TLS đã kết thúc ở Traefik) nên không tin được header chuẩn — đọc `X-Edge-Scheme` (header riêng do Middleware `edge-marker` gắn, nginx không biết tên này nên đi qua nguyên vẹn) để dựng đúng `redirect_uri` HTTPS cho OIDC. |
 | **Token exchange (mỗi request proxy)** | `Authorization: Bearer <crapi_jwt>` — bff **mint RS256** `{sub: email, role: <"user"/"mechanic"/"admin">, iat, exp}` bằng **khoá RSA của chính crAPI** (`deploy/vendor/crapi-keys/jwks.json` == `default_jwks.json` nhúng trong ảnh identity, `kid = MKMZkDenUfuDF2byYowDj7tW5Ox6XG4Y1THTEGScRg8`). `X-Access-Token: <keycloak_access_token>` — cho OPA kiểm realm role + `acr`. Client KHÔNG được tự đặt các header này (bff strip trước khi forward). |
 | **RBAC gương** (`_rbac_ok`) | Gương của `zta_crapi.rego` `role_permits_action` — cần vì hop bff→identity (cross-cloud) chỉ qua OPA OpenStack (không kiểm token người dùng). GET/HEAD/OPTIONS → OK cho mọi role hợp lệ; GHI vào `_ADMIN_PREFIXES` → cần `crapi-admin`; GHI mechanic prefix → mechanic/admin. → audit `event=rbac_denied` khi từ chối. |
 | **Step-up gương** (`_is_sensitive`) | Danh sách `SENSITIVE_ACTIONS` → nếu `session.acr != "high"` → `401 {"error":"step_up_required","stepup_url":"/auth/start-stepup"}` + audit `event=step_up_required`. |
@@ -246,10 +257,29 @@ step_up_ok        = ¬sensitive_crapi_action ∨ jwt_payload.acr == "high"
 | **Reverse proxy** | `/identity/*` → `crapi-identity-openstack.crapi.svc:30090` (cross-cloud) · `/community/*` → `crapi-community:8087` · `/workshop/*` → `crapi-workshop:8000` · còn lại → `crapi-web:80`. `CHATBOT_SERVICE`/`MAILHOG_WEB_SERVICE` trỏ về `crapi-web:80` (không deploy — để nginx crapi-web resolve upstream, khỏi `[emerg] host not found`). |
 | **Audit → Loki** | `_audit(event, …)` POST JSON tới `LOKI_URL` job `bff-audit` (`user_login`, `rbac_denied`, `step_up_required`, `device_trust_denied`, `sensitive_action_ok`, `proxy_error`). |
 
-### 4.7 Gatekeeper + Vault
+### 4.7 WAF — ModSecurity3 + OWASP CRS (A2, `k8s/crapi/waf.yaml`)
+
+Đứng ngay sau Traefik, trước `bff`: `Traefik --HTTP--> waf:8080 --mTLS(Istio)--> bff:8080`. `SecRuleEngine=DetectionOnly` — CRS đánh giá **mọi** request và ghi audit JSON ra stdout khi khớp rule, nhưng **không bao giờ chặn** → không thể làm hỏng luồng nghiệp vụ crAPI, không làm nhiễu telemetry huấn luyện. Đây là phép đo đối chứng của luận văn: CRS bắt SQLi/XSS/path-traversal nhưng **không bắt được** request BOLA/BFLA nào — cho thấy phương pháp dựa trên chữ ký không phát hiện được lớp tấn công vượt quyền, biện minh cho lớp Zero-Trust authorization đứng sau.
+
+- `waf` chạy Istio sidecar với SVID thật `spiffe://ztlab.local/aws/waf`; `PeerAuthentication` PERMISSIVE (nhận HTTP trần từ Traefik, ngoài mesh theo thiết kế); `DestinationRule waf-custom-san` (ISTIO_MUTUAL) + `AuthorizationPolicy CUSTOM → opa-ext-authz` cho hop **ra** (waf→bff) — parity với các workload khác.
+- **Bug hạ tầng thật đã sửa (tồn tại từ A2, phát hiện khi verify sống A3):** ảnh gốc `owasp/modsecurity-crs` có `includes/proxy_backend.conf` dùng `proxy_set_header Host $host;` — nginx forward nguyên Host header của **client bên ngoài** (`crapi.ztlab.local`) sang bff thay vì host thật của bff. Envoy outbound router của waf chọn cluster đích theo Host/`:authority`; header đó không khớp alias nào của bff → rơi vào `allow_any` virtual host → **PassthroughCluster** (bỏ qua hẳn `DestinationRule`, không mТLS, không SPIFFE principal). Mọi check OPA cần `valid_svid` (tức mọi thứ ngoài `public_path`) fail-closed **mà không hề có decision log nào** — trông y hệt như "OPA chưa từng được gọi", rất khó chẩn đoán. Fix: `waf-proxy-backend-conf` ConfigMap override include đó bằng `proxy_set_header Host $proxy_host;`, mount lên **đường dẫn TEMPLATE** (`/etc/nginx/templates/includes/proxy_backend.conf.template`) chứ không phải file đã envsubst — mount thẳng lên file generated làm entrypoint tự regen fail (`Read-only file system`) và crash-loop.
+- **Gate waf's own inbound hop:** vì Traefik nằm ngoài mesh, hop Traefik→waf không bao giờ có `source_principal` — `internal_service_request`/`valid_svid` không thể đúng ở đây dù path là gì. Thay vì nới lỏng chung chung, OPA chỉ cho qua khi request mang đúng `X-Edge-Marker` (bí mật chia sẻ do Middleware `edge-marker` gắn — xem §4.8) — pod nào gọi thẳng `waf` bỏ qua Traefik sẽ không có marker này nên vẫn bị chặn. Authorization theo user/role/posture thật sự diễn ra ở hop **kế tiếp** (waf→bff, mТLS thật cả 2 đầu).
+
+### 4.8 Device CA — Client-certificate mTLS + posture nhúng trong cert (A3)
+
+Thay heuristic User-Agent cũ (không đáng tin — client tự khai) bằng client-certificate mTLS thật ở biên Traefik, posture nhúng ngay trong cert nên **không có cert hợp lệ = không kết nối được**, không phải "OPA/BFF từ chối sau khi đã kết nối".
+
+- **Device CA riêng** (`scripts/deploy-security-stack.sh::provision_device_ca`), tách bạch với SPIRE root CA (device identity ≠ workload identity): ECDSA P-256, tự sinh 10 năm nếu chưa có, hoặc phục hồi từ Vault (`_device_ca_from_vault`, để redeploy giữ nguyên CA thay vì phát hành lại toàn bộ cert thiết bị). **Private key KHÔNG commit git** (`deploy/vendor/device-ca/` trong `.gitignore`).
+- **`k8s/crapi/edge-tls.yaml`:** `TLSOption device-mtls` (`clientAuthType: RequireAndVerifyClientCert`, `caFiles` = Device CA) trên `IngressRoute crapi-bff-mtls` (entrypoint `websecure`, tls secret `crapi-edge-tls` = cert server ký bởi Device CA). Không TLS / cert sai CA / cert hết hạn → **handshake fail ngay ở Traefik**, không tới được waf/bff.
+- **`Middleware pass-client-cert`:** Traefik gắn `X-Forwarded-Tls-Client-Cert-Info` (Subject CN/OU + SAN của cert đã verify) cho BFF đọc.
+- **`Middleware edge-marker`:** gắn 2 header riêng vào MỌI request qua Traefik — `X-Edge-Marker` (bí mật `bff-edge`, sinh ngẫu nhiên bởi `provision_device_ca`) để BFF/OPA chỉ tin cert-info/nới lỏng waf khi request thật sự đi qua Traefik (RÀNG BUỘC #5 — chỉ chấp nhận giá trị do reverse-proxy biên gắn, không phải client tự khai); và `X-Edge-Scheme: https` để BFF dựng đúng `redirect_uri` OIDC (§4.6) khi WAF ở giữa ghi đè `X-Forwarded-Proto`.
+- **Posture nhúng ở Subject `OU=posture:<compliant|non-compliant>`**, device id ở SAN URI `spiffe://ztlab.local/device/<id>` — phát hành bằng `scripts/issue-device-cert.sh <device-id> <compliant|non-compliant>`. `tests/lib/crapi_common.sh::crapi_preflight` tự issue 2 cert cố định `test-compliant`/`test-noncompliant` cho test suite.
+- **3 kịch bản đã verify sống qua `https://crapi.ztlab.local:18443` (không bypass):** (1) cert hợp lệ + `compliant` → truy cập bình thường; (2) cert hợp lệ + `non-compliant` → OPA/BFF deny ở hành động ghi, có decision log; (3) không cert / cert hết hạn / cert do CA khác ký → TLS handshake fail, không có decision log nào (chưa từng tới được BFF/OPA).
+
+### 4.9 Gatekeeper + Vault
 
 - **Gatekeeper** (`k8s/gatekeeper/`): constraint-templates + constraints — admission control (vd chặn container privileged, bắt buộc label/resource limit). Chạy `gatekeeper-system` ns trên AWS.
-- **Vault** (`k8s/vault/vault.yaml`): dev mode, kubernetes auth. `soar-engine` role → đọc `secret/grafana-smtp-secret` (mật khẩu SMTP cho email HITL). `deploy-app.sh` unseal + config + seed secret.
+- **Vault** (`k8s/vault/vault.yaml`): dev mode, kubernetes auth — vẫn là thành phần Zero-Trust secrets chính (giữ private key Device CA, §4.8). **A4 đã bỏ** consumer cũ `soar-engine`/`SOAR_*`; hiện Vault không có consumer thực thi nào, chỉ giữ vai trò lưu trữ. `grafana-smtp-secret` (mật khẩu SMTP cho **Grafana's own alertmanager**, khác hẳn secret của incident-analyzer) là k8s Secret thường tạo trực tiếp trong `deploy-app.sh::deploy_observability_response`, **không** qua Vault.
 
 ---
 
@@ -288,13 +318,16 @@ DestinationRule crapi-identity-openstack-mtls  → ISTIO_MUTUAL, SAN spiffe://�
 Service postgresdb-openstack          (port 30432, KHÔNG selector)
 Endpoints postgresdb-openstack        → 192.168.101.11:30432
 DestinationRule postgresdb-openstack-plaintext → tls mode DISABLE   (Postgres không sidecar → WireGuard lo)
+Service keycloak-openstack            (port 30091, KHÔNG selector — A1)
+Endpoints keycloak-openstack          → 192.168.101.11:30091
+DestinationRule keycloak-openstack-plaintext   → tls mode DISABLE   (Keycloak không sidecar → WireGuard lo)
 
 # Áp trên OpenStack (k8s/crapi/cross-cloud-os.yaml): TRỐNG (mailhog nằm cùng cluster identity, không có hop OS→AWS)
 ```
 
 CoreDNS resolve tên `…svc.cluster.local` native → Istio auto-discover Endpoints như mọi Service → traffic đi `pod (10.42.x) → os-gateway/aws-gateway → WireGuard (10.200.0.x) → NodePort đích`. `deploy-crapi.sh::apply_manifest()` bỏ qua file cross-cloud rỗng (tránh `error: no objects passed to apply` giết script `set -e`).
 
-**6 hop cross-cloud thực tế** (verified qua istio access log): `bff→identity` (HTTP mТLS), `community→identity /verify` (HTTP mТLS, mỗi request), `workshop→identity /verify` (idem), `community→postgresdb:30432` (TCP/WG), `workshop→postgresdb:30432` (TCP/WG), (`identity→mailhog` nay nội cụm OpenStack).
+**8 hop cross-cloud thực tế** (verified qua istio access log / OPA decision log): `bff→identity` (HTTP mТLS), `community→identity /verify` (HTTP mТLS, mỗi request), `workshop→identity /verify` (idem), `community→postgresdb:30432` (TCP/WG), `workshop→postgresdb:30432` (TCP/WG), (`identity→mailhog` nay nội cụm OpenStack); **thêm từ A1:** `bff→keycloak-openstack:30091` (OIDC token/authorize/userinfo, HTTP plaintext qua WireGuard — Keycloak không sidecar) và `opa(AWS)→keycloak-openstack:30091` (JWKS + OIDC discovery, `http.send`, §4.3).
 
 **WireGuard** (`ansible/templates/wg0-{aws,os}-gateway.j2`): `wg0` 10.200.0.0/24, UDP 51820, `PersistentKeepalive = 25`. `allowed_ips` os_gateway: `10.42.0.0/16, 10.43.0.0/16` (pod/svc AWS) ; aws_gateway: `192.168.101.0/24, 192.168.102.0/24`. **`wg-watchdog`** (systemd timer 60s): tunnel chết vì UDP drop kéo dài KHÔNG tự phục hồi → watchdog restart.
 
@@ -310,44 +343,41 @@ CoreDNS resolve tên `…svc.cluster.local` native → Istio auto-discover Endpo
 |---|---|---|
 | `kubernetes-pods` | ns `crapi\|identity\|plg-stack`, mọi container | log ứng dụng (Keycloak `LOGIN_ERROR`, crapi-identity, bff…) |
 | `envoy-access` | ns `crapi`, container `istio-proxy` | JSON access log (`svid`, `method`, `path`, `response_code`, `bytes_sent`, `upstream`) |
-| `opa-decisions` | ns `crapi`, container `opa-server`, lọc `msg=="Decision Log"` | quyết định OPA (`opa_result`, `source_principal`, `request_path`, `decision_id`) — pipeline parse `request_path` thành label |
+| `opa-decisions` | ns `crapi`, container `opa-server`, lọc `msg=="Decision Log"` | quyết định OPA (`opa_result`, `request_path`, `decision_id`) — **A5.1:** `source_principal`/`destination_principal` cũng được promote thành **label** riêng (không chỉ nằm trong body JSON), phục vụ nhóm đặc trưng B của luận văn ("số danh tính đích khác nhau") mà không cần `\| json` mỗi query |
+| `waf-audit` | ns `crapi`, container `waf` (A2) | ModSecurity audit JSON (`transaction.messages[]` = rule id khớp, `transaction.request.headers.host`…) |
 | `bff-audit` | (bff push trực tiếp qua Loki API) | `event`, `username`, `path`, `method`, `roles`, `acr` |
-| `soar-engine` | ns `plg-stack` | `soar_action`, case, playbook |
+| `incident-analyzer` | ns `plg-stack` (A4, thay `soar-engine`) | `event=evidence_bundle`, alert gốc, ATT&CK technique, priority score — **không** có `soar_action`/playbook nào (không còn khả năng thực thi) |
 | `security-healthcheck` | ns `spire` (CronJob mỗi phút) | `status`, `spire=<n>/<n>`, `opa=<code>`, `loki_push` |
 
 ### 7.2 Alert rules (`plg-stack/grafana/alerting/`, folder Grafana `ZTLab`, eval 1m)
 
-| Rule | LogQL (rút gọn) | Severity | attack_type → SOAR playbook |
+| Rule | LogQL (rút gọn) | Severity | attack_type → xử lý |
 |---|---|---|---|
-| **Lateral Movement** | `{job="opa-decisions", opa_result="false", request_path=~"/(workshop\|community)/api/.*\|/identity/api/v2/.*"} != "/identity/api/auth/verify"` | critical | `lateral_movement` → `isolate_workload` |
-| **Access Denied Spike** | `{job="opa-decisions", opa_result="false"}` [10m] | high | `access_denied` → `block_source_ip` |
-| **BFLA** | `{job="bff-audit"} \| json \| event="rbac_denied"` | high | `access_denied` → `block_source_ip` |
-| **Brute Force** | `{namespace=~"identity\|crapi", app=~"keycloak\|crapi-identity"} \|~ "login_error\|invalid_user_credentials\|otp.*(invalid\|expired)"` > 10/5m | high | `brute_force` → `revoke_user_sessions` |
-| **Data Exfil / Large Response** | `{job="envoy-access", namespace="crapi"} \| json \| bytes_sent > 1048576` | high | `large_response` → `restrict_egress` |
-| **Privilege Escalation (container)** | `{namespace="crapi", app="security-scanner"} \| json \| event="privilege_escalation"` | critical | `privilege_escalation` → `quarantine_workload` |
-| **Security Control-Plane Down** | SPIRE/OPA health (từ `security-healthcheck`) | critical | infra |
-| **SOAR Engine Health** | `{job="soar-engine"}` action recorded | — | infra |
+| **Lateral Movement** | `{job="opa-decisions", opa_result="false", request_path=~"/(workshop\|community)/api/.*\|/identity/api/v2/.*"} != "/identity/api/auth/verify"` | critical | `lateral_movement` → evidence bundle + email |
+| **Access Denied Spike** | `{job="opa-decisions", opa_result="false"}` [10m] | high | `access_denied` → evidence bundle + email |
+| **BFLA** | `{job="bff-audit"} \| json \| event="rbac_denied"` | high | `access_denied` → evidence bundle + email |
+| **Brute Force** | `{namespace=~"identity\|crapi", app=~"keycloak\|crapi-identity"} \|~ "login_error\|invalid_user_credentials\|otp.*(invalid\|expired)"` > 10/5m | high | `brute_force` → evidence bundle + email |
+| **Data Exfil / Large Response** | `{job="envoy-access", namespace="crapi"} \| json \| bytes_sent > 1048576` | high | `large_response` → evidence bundle + email |
+| **Privilege Escalation (container)** | `{namespace="crapi", app="security-scanner"} \| json \| event="privilege_escalation"` | critical | `privilege_escalation` → evidence bundle + email |
+| **Security Control-Plane Down** | SPIRE/OPA health (từ `security-healthcheck`) | critical | infra — **KHÔNG** qua incident-analyzer webhook, admin xử lý trực tiếp |
+| **incident-analyzer Health** | `{job="incident-analyzer"} \|= "evidence_bundle"` được ghi nhận trong 10m | — | informational — chỉ xác nhận incident-analyzer còn sống, không phải cảnh báo tấn công |
 
-`notification-policy.yml` → contact point webhook `http://soar-engine.plg-stack:8080/grafana-webhook`.
+**A4** đã bỏ hoàn toàn cột "→ SOAR playbook thực thi" — mọi `attack_type` giờ chỉ dẫn tới **một hành động duy nhất: đóng gói bằng chứng + gửi email cho người vận hành**, không có bất kỳ thay đổi nào trên cụm. `notification-policy.yml` → contact point webhook `http://incident-analyzer.plg-stack:8080/grafana-webhook` (đổi từ `soar-engine`).
 
-### 7.3 SOAR engine (`services/soar-engine/main.py`, ns plg-stack)
+### 7.3 incident-analyzer (`services/incident-analyzer/main.py`, ns plg-stack) — A4: gộp soar-engine + ai-analyzer + security-scorer
 
-- `POST /grafana-webhook` → parse alert → `attack_type` → tạo **case** (`CaseRecord`, lưu `/data/cases.jsonl`).
-- `TARGETS_BY_ATTACK` (context + workload) + `PLAYBOOK_BY_ATTACK` + `SUGGESTED_PLAYBOOKS` (admin chọn).
-- `SOAR_NAMESPACE = "crapi"`, `SOAR_DRY_RUN` / `SOAR_AUTO_EXECUTE` / `SOAR_MIN_SEVERITY` / `SOAR_MIN_CONFIDENCE` (secret `ai-secrets`).
-- **Playbook** (`ALLOWED_PLAYBOOKS`): `isolate_workload` (patch Service selector → cô lập pod), `restrict_egress`, `block_source_ip` (NetworkPolicy chặn IP), `revoke_user_sessions` (Keycloak Admin API logout user), `quarantine_workload`, `scale_deployment`, `monitor_only`.
-- **HITL:** case severity cao → email (SMTP MailHog qua Vault secret) + endpoint `/cases/{id}/approve|deny` (+ `-admin`). `SOAR_ALLOWED_CONTEXTS = ctx-aws,ctx-openstack` — SOAR có kubeconfig cả 2 cluster (`soar-openstack-kubeconfig` secret) → phản ứng xuyên cloud.
-- **RBAC k8s** (`k8s/rbac/soar-rbac.yaml`, `web-portal-response-rbac.yaml`): SA `soar-engine` + `web-portal` (ns crapi) chỉ `get/patch deployments`, `get/patch services` — least privilege cho playbook.
+**Thay thế hoàn toàn bộ ba service cũ** (`soar-engine`, `ai-analyzer`, `security-scorer` — mã nguồn cũ vẫn còn trong `services/` như tham khảo lịch sử nhưng **không còn manifest k8s nào** deploy chúng, `k8s/plg-stack/incident-analyzer.yaml` là file duy nhất). Lý do gộp: khoá luận cam kết dừng ở **phát hiện + phân tích bằng chứng + thông báo**, không có "SOAR có playbook thực thi thật" (mâu thuẫn với chính cam kết đó ở bản cũ).
 
-### 7.4 ai-analyzer + security-scorer (ns plg-stack)
+- `POST /grafana-webhook` (+ `POST /alerts` tổng quát) → map alert → kỹ thuật **MITRE ATT&CK** → chấm **priority score** rule-based (0-100, kế thừa logic cũ của `security-scorer`) → truy vấn **Loki** quanh thời điểm cảnh báo (±5 phút, job `opa-decisions`/`envoy-access`/`bff-audit`/`waf-audit`) → đóng gói thành **evidence bundle**.
+- Gửi bundle qua email tới `MAIL_TO` (mặc định `soc@ztlab.local`) bằng SMTP **MailHog** trong cụm (không auth, không TLS) — không phải relay thật, chỉ demo HITL notification.
+- Ghi lại evidence record (`EVIDENCE_STORE_PATH`, `/data/evidence.jsonl`) + mirror 1 dòng tóm tắt về Loki (`job=incident-analyzer`).
+- **KHÔNG có khả năng phản ứng nào:** không Kubernetes client, không playbook, không chặn IP, không revoke session, không endpoint approve/deny. ServiceAccount chạy dưới đây **không gắn RBAC nào** (khác hẳn `soar-rbac.yaml`/`web-portal-response-rbac.yaml` cũ, đã xoá cùng quyền `patch deployments/services`).
+- **Chừa sẵn** `POST /evidence/{id}/risk-score` — điểm cắm cho model ML của **Giai đoạn C** gắn risk score vào evidence record đã có, không cần sửa lại service này khi ML sẵn sàng.
 
-- `ai-analyzer` (`services/ai-analyzer/main.py`): làm giàu case — map log → kỹ thuật ATT&CK, `known_services`/`service_map` = crapi. Pattern riêng cho `container_escape`/T1611.
-- `security-scorer` (`services/security-scorer/main.py`): chấm điểm rủi ro theo RULES regex, đọc `REDIS_URL = redis.crapi.svc…:6379/2`.
+### 7.4 Dashboard Grafana
 
-### 7.5 Dashboard Grafana
-
-- `crapi-attack-surface.json` (mới) — **"crAPI — Attack Surface & Zero-Trust Enforcement"**: OPA allow/deny, deny theo path nghiệp vụ, 5 stat kịch bản (lateral / BFLA / step-up / brute-force / device-trust), SVID present vs `svid:null`, cross-cloud→identity HTTP code, SOAR actions, BFF audit theo event.
-- Giữ: `zta-security-overview`, `ztlab-security-overview`, `ztlab-full-logs`, `envoy-access-logs`, `opa-decision-log`, `threat-intel-feed`, `ztlab-soar-dashboard`.
+- `crapi-attack-surface.json` — **"crAPI — Attack Surface & Zero-Trust Enforcement"**: OPA allow/deny, deny theo path nghiệp vụ, 5 stat kịch bản (lateral / BFLA / step-up / brute-force / device-trust), SVID present vs `svid:null`, cross-cloud→identity HTTP code, panel **evidence bundles** (đổi tên từ "SOAR actions" — A4, không còn hành động thực thi nào để đếm), BFF audit theo event. **A2** thêm hàng WAF/CRS control (số CRS hit theo loại tấn công cạnh số OPA deny; số CRS hit trên riêng request BOLA — kỳ vọng = 0).
+- Giữ: `zta-security-overview`, `ztlab-security-overview`, `ztlab-full-logs`, `envoy-access-logs`, `opa-decision-log`, `threat-intel-feed`; `ztlab-soar-dashboard` **đổi tên** thành dashboard incident-analyzer (A4).
 
 ---
 
@@ -376,7 +406,12 @@ CoreDNS resolve tên `…svc.cluster.local` native → Istio auto-discover Endpo
      ├─ deploy_gatekeeper
      ├─ deploy_istio  (istioctl install 2 cluster, label ns crapi istio-injection=enabled)
      ├─ sync_images (skip)
-     ├─ deploy_security_stack  (scripts/deploy-security-stack.sh: SPIRE server/agent + root CA + ensure-spire-entries.sh; OPA no-op — ở deploy-crapi)
+     ├─ deploy_security_stack  (scripts/deploy-security-stack.sh, thứ tự thật — xem log "STEP: N."):
+     │    1. namespaces  →  2. Keycloak trên OpenStack (A1)  →  3.0 SPIRE root CA (shared)
+     │    →  3.1 Device CA + edge server cert (A3, provision_device_ca — tự sinh hoặc phục hồi
+     │       từ Vault, sinh bff-edge marker, render edge-tls.yaml)  →  3.1/3.2 SPIRE server+agent
+     │       AWS/OpenStack  →  3.3 register_spire_workloads (ensure-spire-entries.sh, gate 6/2)
+     │       →  3.4 security-healthcheck CronJob. OPA no-op ở đây — deploy ở deploy-crapi.
      ├─ deploy_openldap_and_federation  (openldap + Keycloak LDAP provider live)
      ├─ deploy_audience_mapper  (Keycloak aud-crapi-bff mapper live)
      ├─ deploy_stepup_flow  (Keycloak browser-stepup flow)
@@ -385,12 +420,14 @@ CoreDNS resolve tên `…svc.cluster.local` native → Istio auto-discover Endpo
      │    create_secrets (crapi-jwt-key 2 cluster) → apply_namespace_and_config → deploy_databases
      │    → deploy_crapi_workloads (mailhog+identity OS; web/community/workshop+cross-cloud-aws AWS)
      │    → configure_crapi_keycloak (role + client crapi-bff/-stepup + gán role user)
-     │    → deploy_bff (+ ingress-aws/os) → register_spire → deploy_crapi_opa (opa-config + policies + opa.yaml)
-     │    → reinstall_istio_for_crapi_provider → deploy_mesh_policies (istio-policies.yaml)
+     │    → deploy_bff (**+ waf.yaml, A2** + ingress-aws/os, ingress-aws.yaml nay redirect → HTTPS)
+     │    → register_spire → deploy_crapi_opa (opa-config + policies + opa.yaml, gồm EDGE_MARKER env — A3)
+     │    → reinstall_istio_for_crapi_provider → deploy_mesh_policies (istio-policies.yaml, + waf→bff edge)
      │    → apply_network_policies (pod-segmentation) → restart_workloads_for_sds (bounce workload → istio-proxy tái lập SDS)
      │    → run_seed (Job crapi-seed)
-     ├─ deploy_observability_response  (Loki, Grafana + datasources/dashboards/alerting, Promtail, Prometheus, soar/ai/scorer, Vault)
-     ├─ apply_policies_and_ingress  (k8s/ingress.yaml — Traefik IngressRoute)
+     ├─ deploy_observability_response  (Loki, Grafana + datasources/dashboards/alerting, Promtail,
+     │    Prometheus **mesh-injected (A2, SVID aws/prometheus)**, incident-analyzer (A4, thay soar/ai/scorer), Vault, grafana-smtp-secret)
+     ├─ apply_policies_and_ingress  (k8s/ingress.yaml — Traefik IngressRoute; edge-tls.yaml/crapi-bff-mtls đã apply sớm hơn ở provision_device_ca §3.1)
      └─ verify_final
 14 Seed + mở UI  (scripts/open-admin-uis.sh — port-forward)
 ```
@@ -398,22 +435,31 @@ CoreDNS resolve tên `…svc.cluster.local` native → Istio auto-discover Endpo
 ### 8.2 Luồng đăng nhập người dùng
 
 ```
-Trình duyệt → http://localhost:18081/login  (BFF)
+Trình duyệt (client cert đã cài, vd scripts/issue-device-cert.sh testuser01 compliant)
+  → https://crapi.ztlab.local:18443/login
+  → Traefik: TLS handshake + RequireAndVerifyClientCert (device-mtls) → verify cert bằng Device CA
+      (không cert/cert sai CA/hết hạn → handshake fail ngay, KHÔNG tới waf/bff)
+  → Middleware pass-client-cert gắn X-Forwarded-Tls-Client-Cert-Info; edge-marker gắn X-Edge-Marker + X-Edge-Scheme:https
+  → waf (ModSecurity CRS DetectionOnly — log nếu khớp rule, không chặn) → mTLS thật → bff
   → BFF /auth/start: sinh state + PKCE verifier/challenge → 302 tới BFF /kc/realms/ztlab/protocol/openid-connect/auth?client_id=crapi-bff&code_challenge=…
-  → (BFF proxy) → Keycloak: render trang login "ZTLab"
+  → (BFF proxy) → Keycloak (OpenStack, qua keycloak-openstack:30091 — A1): render trang login "ZTLab"
   → POST username/password → /kc/realms/ztlab/login-actions/authenticate
-  → Keycloak 302 → BFF /auth/callback?code=…&state=…
+  → Keycloak 302 → BFF /auth/callback?code=…&state=…  (redirect_uri dùng _external_base — X-Edge-Scheme:https, không phải scheme http nginx tự ghi đè)
   → BFF: verify state → POST /kc/…/token (grant authorization_code + code_verifier) → nhận Keycloak access/id/refresh token
-  → BFF: _evaluate_device_trust (UA + Redis known_devices) → trust
-  → BFF: tạo session Redis {username, email, roles, acr, keycloak access_token, device_trust, crapi_token(mint RS256)} → Set-Cookie ztlab_bff_session
+  → BFF: _evaluate_device_cert (đọc X-Forwarded-Tls-Client-Cert-Info đã verify, chỉ tin khi X-Edge-Marker khớp) → device_id + posture:compliant → device_trust:trusted
+  → BFF: tạo session Redis {username, email, roles, acr, keycloak access_token, device_trust, posture, crapi_token(mint RS256)} → Set-Cookie ztlab_bff_session
   → audit event=user_login → Loki (job=bff-audit)
   → 302 → BFF /  → proxy crapi-web (SPA crAPI load)
 ```
+> Tunnel dev `http://localhost:18081` (`open-admin-uis.sh`, port-forward thẳng tới Service `waf`) vẫn tồn tại để test nhanh không cần cài client cert — nhưng đó là đường **bỏ qua Traefik**, không phải luồng Zero-Trust A3 thật; kịch bản demo/test chính thức (`tests/crapi_*.sh`) đi qua `:18443`.
 
 ### 8.3 Luồng request Đông–Tây (bff → crapi-workshop, có mТLS + OPA + RBAC)
 
 ```
 Trình duyệt: GET /workshop/api/shop/products  (cookie ztlab_bff_session)
+  → https://crapi.ztlab.local:18443 → Traefik (verify client cert lại — mỗi request, không chỉ lúc login)
+    → waf (CRS DetectionOnly, không match rule nào cho request GET thường) → mТLS thật → bff
+      (giống hệt hop biên ở §8.2 — chỉ viết tắt ở đây, xem §8.2 cho chi tiết Traefik/waf)
   → BFF: _get_session → có phiên?  (không → 401 {"login_url":"/auth/start"})
   → BFF: device_trust=="suspicious" ∧ method GHI?  (GET → bỏ qua)
   → BFF: _rbac_ok(roles, GET, /workshop/api/shop/products)  → GET luôn OK cho role hợp lệ
@@ -444,22 +490,25 @@ POST /workshop/api/shop/orders  (phiên acr=1)
   → session.acr = "high"  → POST orders lại → qua
 ```
 
-### 8.5 Luồng phát hiện → phản ứng (end-to-end SOAR)
+### 8.5 Luồng phát hiện → phân tích → thông báo (A4 — KHÔNG có phản ứng tự động)
 
 ```
 [Tấn công] vd exec crapi-community → POST crapi-workshop /workshop/api/shop/orders (ngoài service_acl)
   → istio-proxy crapi-workshop → OPA ext_authz → deny (403)
-  → OPA decision log (opa_result=false, request_path=/workshop/api/shop/orders, source_principal=aws/crapi-community)
+  → OPA decision log (opa_result=false, request_path=/workshop/api/shop/orders,
+    source_principal=aws/crapi-community — nay CŨNG là label riêng, không chỉ nằm trong body JSON, A5.1)
   → container log OPA → Promtail (job=opa-decisions) → Loki
 [≤1 phút] Grafana eval rule "Lateral Movement": sum(count_over_time({job=opa-decisions, opa_result=false, request_path=~…}[10m])) > 0
-  → Firing → notification-policy → webhook POST http://soar-engine.plg-stack:8080/grafana-webhook
-  → SOAR: attack_type=lateral_movement → TARGETS_BY_ATTACK{ctx-aws, crapi-workshop} + PLAYBOOK{isolate_workload}
-       → tạo CaseRecord (severity=critical, status=pending_approval) → /data/cases.jsonl
-       → ai-analyzer làm giàu (ATT&CK T1021) → security-scorer chấm điểm
-       → email HITL (SMTP MailHog, secret từ Vault) tới analyst
-  → Admin: Grafana/SOAR UI → /cases/{id}/choose-action → approve playbook isolate_workload
-       → SOAR patch Service crapi-workshop selector (ctx-aws) → cô lập pod → case status=executed
-  → soar_action log → Loki (job=soar-engine) → dashboard cập nhật
+  → Firing → notification-policy → webhook POST http://incident-analyzer.plg-stack:8080/grafana-webhook  (đổi từ soar-engine, A4)
+  → incident-analyzer: attack_type=lateral_movement → map ATT&CK (T1021) → chấm priority score (rule-based)
+       → truy vấn Loki ±5 phút quanh thời điểm alert (opa-decisions/envoy-access/bff-audit/waf-audit) → đóng gói evidence bundle
+       → lưu evidence record (/data/evidence.jsonl) → mirror tóm tắt về Loki (job=incident-analyzer)
+       → email evidence bundle (SMTP MailHog trong cụm) tới MAIL_TO (soc@ztlab.local)
+  → DỪNG Ở ĐÂY. Không có bước "approve playbook", không patch Service/Deployment nào, không
+    revoke session nào — incident-analyzer không có Kubernetes client, không RBAC. Admin đọc
+    email + dashboard rồi tự quyết định, thủ công, ngoài phạm vi hệ thống này.
+  → (Giai đoạn C, chưa triển khai) model ML có thể POST /evidence/{id}/risk-score để gắn thêm
+    điểm rủi ro vào evidence record đã lưu — endpoint chừa sẵn, chưa có consumer thật.
 ```
 
 ### 8.6 Luồng cross-cloud (community → identity /verify)
@@ -485,15 +534,17 @@ crapi-community (AWS) cần verify token người dùng:
 | SVID scheme | `spiffe://ztlab.local/<cloud>/<service>` ; node alias `…/nodes/{aws,os}-k3s` |
 | X509 SVID TTL | 1h (JWT SVID 5m, CA 168h) |
 | OPA ext_authz path | AWS `zta/crapi/authz/allow` · OpenStack `zta/crapi/crosscloud/allow` |
-| OPA JWKS source | `keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs` |
-| Keycloak realm / clients | `ztlab` / `crapi-bff`, `crapi-bff-stepup` (public PKCE) |
+| OPA JWKS source | `keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/protocol/openid-connect/certs` (A1 — cross-cloud, trước là nội cụm `keycloak.identity.svc:8080`) |
+| Keycloak realm / clients | `ztlab` / `crapi-bff`, `crapi-bff-stepup` (public PKCE) — **chạy trên `ctx-openstack`, ns `identity` (A1)** |
 | Token audience (OPA kiểm) | `crapi-bff` |
 | crAPI JWT kid (bff mint) | `MKMZkDenUfuDF2byYowDj7tW5Ox6XG4Y1THTEGScRg8` (RS256, khoá `deploy/vendor/crapi-keys/jwks.json`) |
 | Namespace ứng dụng | `crapi` (thay `financial`) |
-| NodePort cross-cloud | identity 30090, postgres 30432 (os-k3s-master 192.168.101.11) |
+| NodePort cross-cloud | keycloak 30091 (A1), identity 30090, postgres 30432 (os-k3s-master 192.168.101.11) |
 | WireGuard | wg0 10.200.0.0/24, UDP 51820, keepalive 25, watchdog 60s |
 | Subnet DNS OpenStack | 1.1.1.1 / 1.0.0.1 |
-| Port-forward (open-admin-uis.sh) | crAPI/BFF :18081 · Keycloak :8180 · Grafana :3000 · Loki :13100 · SOAR :8091 · AI :18082 · Scorer :18092 · Prometheus :9090 · MailHog :8025 |
+| WAF (A2) | `owasp/modsecurity-crs` (ghim sha256), `SecRuleEngine=DetectionOnly`, PARANOIA=1, ANOMALY_INBOUND=5/OUTBOUND=4 |
+| Device CA / client-cert mTLS (A3) | ECDSA P-256, 10y; entrypoint `https://crapi.ztlab.local:18443` (Traefik, TLSOption `device-mtls`); posture ở `Subject OU=posture:<x>`; phát hành: `scripts/issue-device-cert.sh <id> <compliant\|non-compliant>` |
+| Port-forward (open-admin-uis.sh) | crAPI (WAF→BFF) :18081 · crAPI bypass BFF :18083 · crAPI Traefik mTLS thật :18443 · Keycloak :8180 · Grafana :3000 · Loki :13100 · Incident Analyzer :8091 · Prometheus :9090 · MailHog crAPI :8025 · MailHog SOC :8026 |
 | Sensitive actions (step-up) | POST `/workshop/api/shop/orders`, `…/return_order`, `/identity/api/v2/user/reset-password`, `…/change-email` |
 | Admin paths (chỉ crapi-admin) | `/identity/api/v2/admin`, `/workshop/api/management` |
 
@@ -505,17 +556,20 @@ crapi-community (AWS) cần verify token người dùng:
 
 - `bash scripts/health-check.sh` — kỳ vọng `FAIL=0` (WARN chấp nhận: `.env.ai missing`, remote SSH skipped).
 - `python3 tests/test_service_graph_consistency.py` — `2/2 PASS` (service-graph = nguồn sự thật).
-- `bash tests/crapi_run_all.sh` — 5 kịch bản tấn công, kỳ vọng `PASS=5 FAIL=0`; sau đó kiểm Grafana (Firing) + SOAR `/cases`.
+- `bash tests/crapi_run_all.sh` — 6 kịch bản tấn công (A3 thêm `crapi_step_up.sh`), kỳ vọng `PASS=6 FAIL=0`, chạy thật qua `https://crapi.ztlab.local:18443` (client cert `compliant`); sau đó kiểm Grafana (Firing) + email evidence bundle ở MailHog SOC (`:8026`) — **không** còn "SOAR `/cases`" (A4 đã bỏ endpoint đó).
+- **A5.2:** `SCENARIO=... TARGET_ENTITY=... bash tests/crapi_run_campaign.sh crapi_bola.sh` — chạy 1 kịch bản có gắn nhãn, ghi 1 dòng JSON vào `tests/runs.jsonl` (gitignored) để join với Loki sau này theo `(target_entity, [t_start,t_end])`.
 
 ### 10.2 Sự cố đã biết + cách xử lý
 
 | Triệu chứng | Nguyên nhân | Xử lý |
 |---|---|---|
-| `security-healthcheck` CronJob nhấp nháy `opa=000/critical` | k3s kube-router chậm cập nhật ipset cho pod Job mới mỗi phút; OPA thật sự khoẻ | Flake đã biết — không phải regression. (Nâng cấp: đổi CronJob → Deployment IP ổn định.) |
+| `security-healthcheck` CronJob nhấp nháy `opa=000/critical` | k3s kube-router chậm cập nhật ipset cho pod Job mới mỗi phút; OPA thật sự khoẻ | **ĐÃ FIX (2026-09-13):** `k8s/security-monitoring/healthcheck-cronjob.yaml` retry curl OPA 3 lần (5s/lần) trước khi báo critical thật. Verified 2 lần chạy liên tiếp `status=healthy opa=200`. |
 | Toàn bộ crapi 2-cloud **503**, `svid:null` trong access log | Uplink host `aio` (hotspot điện thoại) drop NAT'd UDP → DNS(8.8.8.8) + WireGuard chết → SPIRE agent không attest → SVID hết hạn → mТLS STRICT sập | **Runbook §10.3**. Đã hạ rủi ro: DNS→1.1.1.1, coredns-custom, wg-watchdog, spire-agent `IfNotPresent`. |
 | `bff → workshop` 502 `response_time=20000` | mТLS/SDS chưa settle sau restart (istio-proxy không tự tái lập SDS — Istio 1.22.3 + SPIRE 1.9.4) | `kubectl -n crapi rollout restart deploy` (thứ tự: identity OS → AWS). `deploy-crapi.sh::restart_workloads_for_sds` làm sẵn cuối deploy. |
-| Login Keycloak báo "username phải là email" | Đang ở form login GỐC của crapi-web SPA (không dùng được — BFF chặn `/identity/*` chưa có phiên) | Vào thẳng `http://localhost:18081/login` (form Keycloak). Username hoặc email đều được. |
+| `ensure-spire-entries.sh` timeout `error: timed out waiting for the condition` ở bước register SPIRE entries | Một `spire-agent` pod (thường OpenStack, node yếu/uplink hotspot) đôi khi cần hơn 180s để attest xong dù rollout vẫn tiến triển bình thường | **ĐÃ FIX (2026-09-13):** `wait_rollout()` retry lần 2 (tổng 2×180s) trước khi fail thật. |
+| Login Keycloak báo "username phải là email" | Đang ở form login GỐC của crapi-web SPA (không dùng được — BFF chặn `/identity/*` chưa có phiên) | Vào `https://crapi.ztlab.local:18443/login` (form Keycloak, cần client cert — §4.8) hoặc tunnel dev `http://localhost:18081/login` (bỏ qua Traefik, không cần cert). Username hoặc email đều được. |
 | `k8s-tunnel` chết giữa chừng | SSH qua bastion không ổn định / nhiều kết nối song song | `bash scripts/k8s-tunnel.sh down all && up all` |
+| BFF trả `posture:unknown, device_trust:suspicious` dù cert hợp lệ | (Đã fix, để lại làm tham khảo) `X-Forwarded-Tls-Client-Cert-Info` bị URL-encode, `_parse_cert_info` cũ split `;`/`=` literal nên không khớp gì | Đã sửa: `urllib.parse.unquote()` trước khi parse bằng regex `key="value"` (§4.8). |
 
 ### 10.3 Runbook khôi phục OpenStack (khi cross-cloud/mТLS 503)
 
@@ -544,16 +598,26 @@ kubectl --context ctx-aws       -n crapi rollout restart deploy/opa-server deplo
 
 ## 11. TRẠNG THÁI & VIỆC CÒN LẠI
 
-**Đã hoàn tất (branch `feat/crapi-target`, verified trên cụm 2-cloud 2026-09-10):**
-- Phase 1–5: crAPI Core 2-cloud + mТLS/SPIRE + BFF token-exchange + OPA 2-PDP + NetworkPolicy + dọn finance.
-- Phase 6: fresh `destroy` → `deploy-all.sh` — 7 điểm gãy đã sửa (SSH known_hosts, sync-app-images, cross-cloud-os rỗng, crapi-web mailhog, seed_db, open-admin-uis, **OpenStack uplink hotspot**).
-- Phase 7: 5 script tấn công `tests/crapi_*.sh` (PASS 5/5), alert rules crAPI, dashboard `crapi-attack-surface`, **e2e SOAR loop verified** (attack → Grafana Firing → SOAR case + playbook đúng).
+**Đã hoàn tất (branch `feat/kehoach-thaydoi`, verified trên cụm 2-cloud):**
+- crAPI Core 2-cloud + mТLS/SPIRE + BFF token-exchange + OPA 2-PDP + NetworkPolicy (migration finance→crAPI, xem `KET-QUA-CRAPI.md` cho log chi tiết từng phase).
+- **Giai đoạn A (`KEHOACH-THAYDOI-HETHONG.md`) — A1 đến A5.2, 100% xong, verify sống, đã commit (2026-09-13):**
+  - **A1** — Keycloak + keycloak-db + openldap chuyển sang OpenStack (§4.5).
+  - **A2** — WAF ModSecurity3+CRS DetectionOnly trước BFF; `bff` PeerAuthentication siết STRICT; Prometheus onboard vào mesh (§4.7, §4.2).
+  - **A3** — Device CA riêng + client-certificate mTLS thật, posture nhúng trong cert, HTTPS bắt buộc ở Traefik biên (§4.8). 6 bug hạ tầng thật tìm và sửa tận gốc khi verify sống (WAF Host-header/PassthroughCluster, Keycloak redirectUris không update cho client cũ, OIDC redirect scheme sai do WAF ghi đè X-Forwarded-Proto, cert-info URL-encoded chưa decode, thiếu `grafana-smtp-secret`, thiếu `public_path` cho OIDC bootstrap).
+  - **A4** — Gộp `soar-engine`+`ai-analyzer`+`security-scorer` thành `incident-analyzer`; bỏ hoàn toàn khả năng thực thi (§7.3).
+  - **A5.1** — xác nhận `source_principal`/`destination_principal` không bị rơi trong pipeline Loki; promote thành label riêng (§7.1).
+  - **A5.2** — `tests/crapi_run_campaign.sh`, gắn nhãn theo lần chạy offline, không tiêm marker vào traffic tấn công (§10.1).
+- Sự cố hạ tầng phát hiện + sửa tận gốc trong lúc làm Giai đoạn A (không thuộc kế hoạch, phát sinh khi verify sống): promtail hardcode `api_server` AWS làm service-discovery chết trên OpenStack; `security-healthcheck` CronJob flake `opa=000` do k3s netpol ipset lag; `ensure-spire-entries.sh` rollout-status timeout quá sớm trên agent chậm attest (§10.2).
 
-**Việc người dùng:**
-- `git add -A && git commit` branch `feat/crapi-target` (~30 file).
+**Việc còn lại (`KEHOACH-THAYDOI-HETHONG.md`):**
+- **"SỬA ĐỀ CƯƠNG (v9)"** — 4 điểm sửa câu chữ trong `DeCuongChiTiet_KLTN_ZTA_v8.docx` (không phải infra, việc viết của người dùng).
+- **Giai đoạn B (sinh dữ liệu) — CHƯA BẮT ĐẦU:** B1 load generator hành vi người dùng thật (chưa tồn tại), B2 `scripts/capture-session.sh` đánh dấu phiên thu thập hợp lệ (chưa tồn tại), B3 mở rộng 6 script tấn công hiện có lên ≥100 lần chạy tham số hoá + giữ riêng nhóm biến thể test-only (chưa làm), B4 đo latency tách overhead Zero-Trust khỏi độ trễ cross-cloud — `tests/perf_overhead.py`/`collect_metrics.py` tồn tại nhưng còn trỏ tên service app "finance" cũ, chưa sửa cho crAPI, chưa từng chạy thử.
+- **Giai đoạn C (ML)** — chưa bắt đầu, dự kiến chạy song song do thành viên khác nhóm phụ trách; endpoint `POST /evidence/{id}/risk-score` ở incident-analyzer đã chừa sẵn.
+
+**Việc người dùng (còn treo):**
 - Enroll OTP một lần cho `stepup-demo` qua trình duyệt (không tự động được).
 - (Tuỳ chọn) `terraform apply` rule SG `ztlab-sg-private` NodePort-from-OpenStack (cần AWS creds) — hiện dùng đường SNAT qua os-gateway nên không bắt buộc.
 - Cân nhắc nâng `default_x509_svid_ttl` 1h → 2–4h (giảm rủi ro sập dây chuyền khi SPIRE hiccup) — đánh đổi: cert sống lâu hơn.
 
 ---
-*Cập nhật: 2026-09-10. Nguồn: đọc trực tiếp repo `feat/crapi-target` + nghiệm thu trên cụm đang chạy.*
+*Cập nhật: 2026-09-13. Nguồn: đọc trực tiếp repo `feat/kehoach-thaydoi` (sau 6 commit A2-hoàn-tất/A3/A5.2/docs) + nghiệm thu trên cụm 2-cloud đang chạy.*
