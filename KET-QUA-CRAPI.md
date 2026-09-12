@@ -281,3 +281,69 @@ Dashboard:             "crAPI — Attack Surface & Zero-Trust Enforcement" load 
 `test_service_graph_consistency.py` → path crapi.
 
 **🛑 GATE 7 — HOÀN TẤT.**
+
+---
+
+## GIAI ĐOẠN A (`KEHOACH-THAYDOI-HETHONG.md`) — Rà soát hoàn thiện + 2 bug phát hiện (2026-09-12)
+
+**Bối cảnh:** branch `feat/kehoach-thaydoi` (base: tag `kehoach-base`). A1/A2/A3/A4/A5.1/A5.2
+đã build + live-verify trong các session trước. Session này rà soát độc lập lại toàn bộ
+A1→A5.2 đối chiếu trực tiếp code/manifest thật + live cluster (không dựa tóm tắt cũ):
+
+**Kết quả rà soát nội dung kỹ thuật: A1, A2, A3, A4, A5.1, A5.2 đều ✅ ĐÚNG theo văn bản kế hoạch**
+(bằng chứng chi tiết từng mục không log lại ở đây — xem lịch sử phiên; tất cả đã đối chiếu file
+thật, không phải chỉ tin cluster đang chạy đúng).
+
+**2 gap phát hiện thêm (không có trong các lần verify trước — lộ ra vì `crapi_brute_force.sh`
+chỉ WARN chứ không FAIL khi 0 dòng log tới Loki):**
+
+### Bug 1 — `scripts/open-admin-uis.sh:177` bind sai IP relay Loki
+Promtail OpenStack gửi log tới `172.10.10.1:13099` (đúng, xem `deploy-app.sh:719` comment —
+đây là interface br-exnat của máy deploy, route thật OpenStack dùng để tới máy này). Nhưng
+relay socat trong `open-admin-uis.sh` lại `bind=10.10.10.1` — sai interface (máy có cả 2 IP
+nên rất dễ lẫn). Hậu quả: log OpenStack (gồm Keycloak LOGIN_ERROR) không bao giờ tới Loki.
+**Đã sửa:** `bind=172.10.10.1`. Verify: `kubectl -n plg-stack logs promtail-<os-pod>` hết lỗi
+`connect: connection refused` tới `172.10.10.1:13099` ngay sau khi restart relay.
+
+### Bug 2 (nghiêm trọng hơn) — `k8s/plg-stack/promtail-daemonset.yaml` hardcode API server AWS cho CẢ 2 cluster
+File này áp y hệt lên cả `kaws apply` và `kos apply` (`deploy-app.sh:693,718`). Cả 4
+`kubernetes_sd_configs` (`kubernetes-pods`, `envoy-access-k8s`, `opa-decisions-k8s`,
+`waf-audit-k8s`) đều có `api_server: https://10.10.1.10:6443` (IP API server của AWS) hardcode.
+Trên OpenStack, mọi lần dò pod đều timeout (`dial tcp 10.10.1.10:6443: timed out`) —
+**Promtail OpenStack chưa từng dò/tail được bất kỳ pod nào** qua cơ chế k8s SD kể từ khi file
+này tồn tại (không riêng gì Keycloak/A1 — đây là bug tiền nhiệm, chỉ bị A1 làm lộ ra vì trước
+đó chưa có tín hiệu detection quan trọng nào phát sinh phía OpenStack).
+**Đã sửa:** bỏ hẳn `api_server`/`tls_config`/`authorization` khỏi cả 4 job → Promtail tự dùng
+in-cluster autoconfig (tự đúng theo cluster đang chạy, không cần biết IP).
+**Đã apply live cả 2 context + `rollout restart daemonset/promtail`** — pod mới xác nhận hết
+lỗi `10.10.1.10`, `targets` thấy được `identity`/`keycloak`.
+
+**⚠️ Side-effect CHƯA khắc phục xong (cần biết trước khi destroy/deploy tối nay):**
+`kubectl apply -f k8s/plg-stack/promtail-daemonset.yaml` lên context OpenStack đã RESET
+`LOKI_PUSH_URL`/`CLOUD_PROVIDER` của DaemonSet OpenStack về giá trị mặc định trong file
+(dành cho AWS: `http://loki.plg-stack.svc.cluster.local:3100/...`, `CLOUD_PROVIDER=aws`) —
+vì giá trị đúng cho OpenStack (`http://172.10.10.1:13099/...`, `CLOUD_PROVIDER=openstack`)
+chỉ được set BẰNG LỆNH IMPERATIVE `kos set env` ngay sau `kos apply` trong
+`deploy-app.sh:718-721`, không nằm trong manifest. Việc chạy `kubectl apply` tay (ngoài
+`deploy-app.sh`) làm mất bước đó. Lệnh khôi phục (nếu destroy/deploy tối nay KHÔNG chạy kịp
+để tự sửa lại — nếu chạy `deploy-all.sh`/`deploy-app.sh` đầy đủ thì bước 721 tự làm lại đúng,
+không cần chạy tay):
+```bash
+kubectl --context ctx-openstack set env daemonset/promtail -n plg-stack \
+  LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
+```
+Bị chính auto-mode classifier của phiên này chặn (không phải lỗi cluster) — user cần tự chạy.
+
+**TODO sau khi destroy+deploy-all.sh tối nay chạy xong:**
+1. Xác nhận `kubectl --context ctx-openstack -n plg-stack get daemonset promtail -o jsonpath='{.spec.template.spec.containers[0].env}'` có đúng `CLOUD_PROVIDER=openstack` + `LOKI_PUSH_URL` cross-cloud (không phải giá trị AWS mặc định).
+2. Chạy lại `bash tests/crapi_brute_force.sh` — kỳ vọng dòng `Keycloak LOGIN_ERROR trong 10 phút: N dòng → Loki` với **N ≥ 1** (trước 2 bug trên luôn là 0, script chỉ WARN nên PASS giả).
+3. Việc destroy+deploy-all.sh chạy sạch từ hạ tầng trống chính là phép verify Gate A1
+   (`terraform destroy`+`deploy-all.sh`) mà kế hoạch yêu cầu — nếu qua, coi Gate A1 + nguyên tắc
+   chung Giai đoạn A (verify bằng IaC, không phải live-patch) là ĐÃ ĐÓNG chính thức.
+4. Sau khi (1)+(2)+(3) pass: commit toàn bộ ~31 file đang uncommitted trên `feat/kehoach-thaydoi`
+   (`git status --short` tại thời điểm ghi chú này: 20 modified, 2 deleted, 5 untracked mới —
+   gồm cả 2 fix bug trong note này) + tag một commit làm mốc "đóng băng kiến trúc" theo đúng
+   yêu cầu kế hoạch trước khi bắt đầu Giai đoạn B.
+
+**🛑 Giai đoạn A: nội dung kỹ thuật đã đúng; còn 2 việc chặn "hoàn thiện" thật sự — (a) verify
+lại 2 bug trên sau fresh deploy, (b) commit+tag mốc. Chưa đóng gate chính thức.**
