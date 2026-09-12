@@ -6,6 +6,10 @@
 *.p12
 *.pfx
 .keys/
+# A3 device CA: private key + issued device certs/p12 are regenerated locally
+# (or restored from Vault, see scripts/deploy-security-stack.sh::provision_device_ca)
+# — never meant to live in git, per that function's own comment.
+deploy/vendor/device-ca/
 
 # Terraform state & plans (sensitive infra state)
 **/.terraform/
@@ -24,6 +28,7 @@ __pycache__/
 # Runtime artifacts
 logs/
 results/
+tests/runs.jsonl
 models/*.pkl
 models/*.keras
 models/*.npy
