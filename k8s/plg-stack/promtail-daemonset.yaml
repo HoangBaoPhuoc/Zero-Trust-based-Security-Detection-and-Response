@@ -47,14 +47,17 @@ data:
 
     scrape_configs:
 
+      # kubernetes_sd_configs below deliberately omit `api_server`/`tls_config`/
+      # `authorization` — this manifest is applied verbatim to BOTH clusters
+      # (deploy-app.sh kaws/kos apply). A hardcoded api_server IP here used to
+      # point at the AWS k3s master unconditionally, so on OpenStack every pod
+      # SD lookup silently failed (`dial tcp <aws-ip>:6443: timed out`, no pods
+      # ever discovered there) — omitting these fields makes promtail fall back
+      # to its standard in-cluster autoconfig, which resolves to whichever
+      # cluster the pod actually runs in.
       - job_name: kubernetes-pods
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
         relabel_configs:
@@ -92,11 +95,6 @@ data:
       - job_name: envoy-access-k8s
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
           - json:
@@ -158,11 +156,6 @@ data:
       - job_name: opa-decisions-k8s
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
           - json:
@@ -218,11 +211,6 @@ data:
       - job_name: waf-audit-k8s
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
           # ModSec audit lines are a JSON object with a top-level "transaction";
