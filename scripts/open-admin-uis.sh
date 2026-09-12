@@ -10,6 +10,9 @@
 #   Keycloak     → http://localhost:8180   (admin / ztlab-admin-2026)
 #   crAPI        → http://localhost:18081   (WAF→BFF — entry point; SPA + login OIDC)
 #   crAPI BFF bypass → http://localhost:18083   (bỏ qua WAF, debug)
+#   crAPI (Traefik mTLS) → https://crapi.ztlab.local:18443   (A3 — client-cert
+#     mTLS thật qua Traefik biên; dùng bởi tests/crapi_*.sh. Cert:
+#     scripts/issue-device-cert.sh <device-id> <compliant|non-compliant>)
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
 #   Incident Analyzer → http://localhost:8091   (evidence bundles — /evidence, /health)
@@ -107,6 +110,7 @@ show_status() {
     [8180]="Keycloak"
     [18081]="crAPI (WAF→BFF)"
     [18083]="crAPI BFF (bypass)"
+    [18443]="crAPI (Traefik mTLS)"
     [3000]="Grafana"
     [13100]="Loki"
     [8091]="Incident Analyzer"
@@ -114,7 +118,7 @@ show_status() {
     [8025]="MailHog (crAPI)"
     [8026]="MailHog (SOC)"
   )
-  for port in 8180 18081 18083 3000 13100 8091 9090 8025 8026; do
+  for port in 8180 18081 18083 18443 3000 13100 8091 9090 8025 8026; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -157,16 +161,24 @@ start_pf_daemon "Keycloak"            identity   keycloak          8180  8080  "
 # suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).
 start_pf_daemon "crAPI (WAF→BFF)"     crapi      waf              18081  8080
 start_pf_daemon "crAPI BFF (bypass)"  crapi      bff              18083  8080
+# A3 — cổng TLS thật của Traefik (entrypoint websecure, client-cert mTLS
+# RequireAndVerifyClientCert). kubectl port-forward chỉ chuyển tiếp TCP nên
+# TLS handshake vẫn diễn ra nguyên vẹn giữa curl/trình duyệt và Traefik.
+# Remote port PHẢI là spec.ports[].port của Service (443), không phải
+# targetPort container (8443) — kubectl port-forward svc/X không map theo targetPort.
+start_pf_daemon "crAPI (Traefik mTLS)" kube-system traefik        18443  443
 # PLG Stack
 start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
 start_pf_daemon "Loki"                plg-stack  loki             13100  3100
-# Loki proxy cho OpenStack promtail: 10.10.10.1:13099 → localhost:13100
-# OpenStack nodes không reach được localhost trực tiếp nên cần socat bridge
+# Loki proxy cho OpenStack promtail: 172.10.10.1:13099 → localhost:13100
+# OpenStack nodes không reach được localhost trực tiếp nên cần socat bridge.
+# 172.10.10.1 = deployer machine br-exnat interface (route thật OpenStack dùng để
+# tới máy này, xem deploy-app.sh:719) — PHẢI khớp, không phải 10.10.10.1 (interface khác).
 if ! ss -lnt | awk '{print $4}' | grep -Eq ":13099$"; then
   pkill -f "socat.*13099" 2>/dev/null || true
-  setsid socat TCP-LISTEN:13099,bind=10.10.10.1,fork,reuseaddr TCP:127.0.0.1:13100 &
+  setsid socat TCP-LISTEN:13099,bind=172.10.10.1,fork,reuseaddr TCP:127.0.0.1:13100 &
   echo $! > "$PID_DIR/loki-proxy.pid"
-  echo "[ OK ] Loki-proxy → 10.10.10.1:13099 → localhost:13100 (for OpenStack promtail)"
+  echo "[ OK ] Loki-proxy → 172.10.10.1:13099 → localhost:13100 (for OpenStack promtail)"
 fi
 start_pf_daemon "Incident Analyzer"   plg-stack  incident-analyzer 8091  8080
 # Monitoring

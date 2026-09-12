@@ -8,8 +8,12 @@ Vai trò (KE-HOACH-CRAPI.md C2b):
      nhúng trong ảnh crapi-identity) với `sub` = email user. Token này đi ở
      header `Authorization` cho hop Đông–Tây (crAPI cần). Token Keycloak đi
      ở `X-Access-Token` cho OPA kiểm (realm role + step-up `acr`).
-  3. Device-trust (phân tích User-Agent browser) + device-posture (posture
-     của chính bff) → header `X-Device-Trust` / `X-Device-Posture`.
+  3. Device-trust + device-posture (A3 KEHOACH-THAYDOI-HETHONG.md): Traefik ở
+     biên yêu cầu client certificate (Device CA, k8s/crapi/edge-tls.yaml) rồi
+     gắn header `X-Forwarded-Tls-Client-Cert-Info` — bff đọc cert đã verify để
+     suy ra device_id (SAN URI) + posture (Subject OU), chỉ tin khi
+     `X-Edge-Marker` (bí mật chia sẻ với Middleware biên) khớp `EDGE_MARKER` →
+     header `X-Device-Trust` / `X-Device-Posture` cho hop đi tiếp.
   4. Reverse-proxy: /identity /community /workshop → backend crAPI (có
      inject header). / , /static , /images ... → crapi-web (React tĩnh).
   5. Step-up: hành động nhạy cảm + `acr != high` → 401 step_up_required
@@ -111,10 +115,14 @@ SENSITIVE_ACTIONS = [
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 SESSION_COOKIE = "ztlab_bff_session"
 PKCE_COOKIE = "ztlab_bff_pkce"
-DEVICE_ID_COOKIE = "ztlab_bff_device"
 SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE", "3600"))
-DEVICE_ID_MAX_AGE = 365 * 24 * 3600
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
+
+# ── A3: device cert đã verify ở Traefik biên (device-mtls) ──────────────────
+EDGE_MARKER = os.getenv("EDGE_MARKER", "")
+_MARKER_HEADER = "x-edge-marker"
+_CERT_INFO_HEADER = "x-forwarded-tls-client-cert-info"
+_DEVICE_URI_PREFIX = "spiffe://ztlab.local/device/"
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis.crapi.svc.cluster.local:6379/0")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
@@ -155,8 +163,6 @@ async def _session_store_del(sid: str) -> None:
         pass
     _sessions.pop(sid, None)
 
-_SUSPICIOUS_UA_RE = re.compile(
-    r"curl|wget|python-requests|python-urllib|sqlmap|nmap|masscan|headless|phantomjs|scrapy|bot(?!ify)", re.I)
 _KC_PROXY_ALLOWED = ("/realms/", "/resources/", "/js/")
 _HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "te", "trailer", "upgrade",
                "proxy-authorization", "proxy-authenticate", "host", "content-length"}
@@ -244,36 +250,57 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
 
 
-def _parse_device_label(ua: str) -> str:
-    ua = ua or ""
-    osn = ("iOS" if re.search(r"iPhone|iPad", ua, re.I) else "Android" if re.search(r"Android", ua, re.I)
-           else "Windows" if re.search(r"Windows", ua, re.I) else "macOS" if re.search(r"Macintosh|Mac OS", ua, re.I)
-           else "Linux" if re.search(r"Linux", ua, re.I) else "Unknown")
-    br = ("Edge" if "Edg/" in ua else "Chrome" if "Chrome/" in ua else "Firefox" if "Firefox/" in ua
-          else "Safari" if "Safari/" in ua and "Chrome" not in ua else "unknown")
-    return f"{br}/{osn}"
+def _external_base(request: Request) -> str:
+    """request.base_url chỉ phản ánh Host/scheme của hop bff thấy — KHÔNG phải
+    URL bên ngoài client thật sự dùng. WAF (nginx) đứng giữa Traefik và bff
+    ghi đè X-Forwarded-Proto về scheme của chính nó (luôn http, vì TLS đã kết
+    thúc ở Traefik) nên header chuẩn này không tin được ở đây. X-Edge-Scheme
+    là header riêng do Middleware edge-marker gắn (k8s/crapi/edge-tls.yaml) —
+    nginx không biết tên này nên đi qua nguyên vẹn, giống X-Edge-Marker và
+    X-Forwarded-Tls-Client-Cert-Info. Thiếu scheme đúng thì OIDC redirect_uri
+    sai (http thay vì https), Keycloak/trình duyệt không quay lại được BFF."""
+    scheme = request.headers.get("x-edge-scheme") or request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.base_url.hostname
+    return f"{scheme}://{host}"
 
 
-async def _evaluate_device_trust(request: Request, username: str) -> dict:
-    device_id = request.cookies.get(DEVICE_ID_COOKIE) or secrets.token_urlsafe(24)
-    ua = request.headers.get("user-agent", "")
-    if _SUSPICIOUS_UA_RE.search(ua) or not ua:
-        trust = "suspicious"
-    else:
-        key = f"bff:known_devices:{username}"
-        try:
-            known = await redis_client.sismember(key, device_id)
-        except Exception:
-            known = False  # fail closed
-        if known:
-            trust = "trusted"
-        else:
-            trust = "new_device"
-            try:
-                await redis_client.sadd(key, device_id)
-            except Exception:
-                pass
-    return {"device_id": device_id, "device_trust": trust, "device_label": _parse_device_label(ua), "user_agent": ua}
+def _parse_cert_info(raw: str) -> dict[str, str]:
+    """Traefik X-Forwarded-Tls-Client-Cert-Info, URL-encoded (percent-encoded
+    `=`/`;`/`"` — must decode before parsing, otherwise every field silently
+    fails, no literal `=`/`;` survives). Format is `Field="value";Field2="v2"`
+    for the leaf cert, followed by `,Field="value"` (comma, no semicolon) for
+    each cert further up the chain — regex-matching `key="value"` pairs and
+    keeping only the first occurrence of each key naturally picks the leaf
+    cert's fields over the issuer's, regardless of the mixed `;`/`,` separators."""
+    raw = urllib.parse.unquote(raw)
+    fields: dict[str, str] = {}
+    for k, v in re.findall(r'(\w+)="([^"]*)"', raw):
+        fields.setdefault(k, v)
+    return fields
+
+
+def _evaluate_device_cert(request: Request) -> dict:
+    """A3 — device_id/posture từ client cert đã verify ở Traefik biên
+    (device-mtls, k8s/crapi/edge-tls.yaml). Chỉ tin X-Forwarded-Tls-Client-Cert-Info
+    khi X-Edge-Marker khớp EDGE_MARKER (RÀNG BUỘC #5 — pod trong cluster gọi
+    thẳng waf/bff, bỏ qua Traefik, không biết bí mật này nên không giả được)."""
+    marker = request.headers.get(_MARKER_HEADER, "")
+    cert_info = request.headers.get(_CERT_INFO_HEADER, "")
+    if not EDGE_MARKER or marker != EDGE_MARKER or not cert_info:
+        return {"device_id": None, "posture": "unknown", "device_trust": "suspicious"}
+
+    fields = _parse_cert_info(cert_info)
+    subject = fields.get("Subject", "")
+    san = fields.get("SAN", "")
+
+    m = re.search(r"OU=posture:([A-Za-z0-9_-]+)", subject)
+    posture = m.group(1) if m else "unknown"
+    device_id = san[len(_DEVICE_URI_PREFIX):] if san.startswith(_DEVICE_URI_PREFIX) else None
+    if not device_id:
+        return {"device_id": None, "posture": "unknown", "device_trust": "suspicious"}
+
+    device_trust = "trusted" if posture == "compliant" else "suspicious"
+    return {"device_id": device_id, "posture": posture, "device_trust": device_trust}
 
 
 async def _audit(event: str, **kw: Any) -> None:
@@ -348,7 +375,7 @@ async def health() -> dict:
 def _auth_redirect(request: Request, client_id: str, extra: dict | None = None) -> RedirectResponse:
     state = secrets.token_urlsafe(32)
     verifier, challenge = _pkce_pair()
-    base = str(request.base_url).rstrip("/")
+    base = _external_base(request)
     redirect_uri = base + "/auth/callback"
     tok = _sign({"state": state, "code_verifier": verifier, "redirect_uri": redirect_uri, "client_id": client_id})
     params = {
@@ -410,7 +437,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
     realm_roles = claims.get("realm_access", {}).get("roles", [])
     acr = claims.get("acr", "")
 
-    device = await _evaluate_device_trust(request, username)
+    device = _evaluate_device_cert(request)
     crapi_token = _mint_crapi_token(email, realm_roles)
 
     data = {
@@ -418,15 +445,15 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
         "access_token": access_token, "refresh_token": td.get("refresh_token", ""),
         "crapi_token": crapi_token, "crapi_token_exp": int(time.time()) + CRAPI_JWT_TTL,
         "device_id": device["device_id"], "device_trust": device["device_trust"],
+        "device_posture": device["posture"],
         "logged_in_at": time.time(),
     }
     resp = RedirectResponse("/", status_code=302)
     resp.delete_cookie(PKCE_COOKIE)
-    resp.set_cookie(DEVICE_ID_COOKIE, device["device_id"], max_age=DEVICE_ID_MAX_AGE,
-                    httponly=True, samesite="lax", secure=HTTPS_ENABLED)
     await _set_session(resp, data)
     await _audit("user_login", username=username, email=email, roles=realm_roles, acr=acr,
-                 device_trust=device["device_trust"], stepup=(client_id == KEYCLOAK_STEPUP_CLIENT_ID))
+                 device_id=device["device_id"], device_trust=device["device_trust"],
+                 device_posture=device["posture"], stepup=(client_id == KEYCLOAK_STEPUP_CLIENT_ID))
     return resp
 
 
@@ -461,7 +488,7 @@ async def kc_proxy(path: str, request: Request):
         await _audit("kc_proxy_error", path=path, error=str(exc))
         raise HTTPException(status_code=502, detail="Keycloak unavailable")
 
-    base = str(request.base_url).rstrip("/")
+    base = _external_base(request)
     kc_hosts = {h for h in (KC_EXTERNAL_HOST, urllib.parse.urlsplit(KEYCLOAK_PUBLIC_URL).hostname,
                             urllib.parse.urlsplit(KEYCLOAK_URL).hostname) if h}
     kc_re = re.compile(r"https?://(?:" + "|".join(re.escape(h) for h in kc_hosts) + r")(?::\d+)?")
@@ -493,8 +520,10 @@ async def _proxy(request: Request, base: str, upstream_path: str,
         target += "?" + request.url.query
     body = await request.body()
     fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
-    # client KHÔNG được tự đặt các header tin cậy
-    for h in ("authorization", "x-access-token", "x-device-trust", "x-device-posture"):
+    # client KHÔNG được tự đặt các header tin cậy (x-forwarded-tls-client-cert-info /
+    # x-edge-marker là tín hiệu nội bộ bff↔Traefik — không được lộ ra hop sau)
+    for h in ("authorization", "x-access-token", "x-device-trust", "x-device-posture",
+              _CERT_INFO_HEADER, _MARKER_HEADER):
         fwd.pop(h, None)
         fwd.pop(h.title(), None)
     if inject:
@@ -544,8 +573,8 @@ async def api_proxy(svc: str, path: str, request: Request):
     inject = {
         "authorization": f"Bearer {session['crapi_token']}",
         "x-access-token": session["access_token"],
-        "x-device-trust": session.get("device_trust", "new_device"),
-        "x-device-posture": DEVICE_POSTURE,
+        "x-device-trust": session.get("device_trust", "suspicious"),
+        "x-device-posture": session.get("device_posture", "unknown"),
         "x-forwarded-for": _client_ip(request),
     }
     resp = await _proxy(request, _BACKENDS[svc], full_path, inject)

@@ -184,6 +184,31 @@ public_path if {
   startswith(path, p)
 }
 public_path if { method == "GET"; startswith(path, "/identity/api/auth/jwks.json") }
+# BFF OIDC bootstrap (services/bff/main.py) — điểm vào DUY NHẤT của crAPI, phải
+# vào được TRƯỚC KHI có session/token. Áp cho cả hop Traefik→waf (A3 — không có
+# source_principal vì Traefik không trong mesh) lẫn waf→bff — thiếu rule này thì
+# public_path/internal_service_request đều fail (không SVID) và OPA chặn luôn
+# bước đăng nhập đầu tiên, trước khi có cơ hội kiểm token/device/RBAC.
+public_path if {
+  method in ["GET", "POST"]
+  some p in ["/auth/start", "/auth/callback", "/auth/logout", "/login", "/kc"]
+  startswith(path, p)
+}
+# waf's OWN inbound hop (Traefik -> waf) can NEVER have a SPIFFE source_principal
+# — Traefik sits outside the mesh by design, so internal_service_request/valid_svid
+# is structurally unreachable here regardless of path. Real authz for these
+# requests happens one hop later (waf -> bff, real mTLS SVID both sides) via
+# internal_service_request; this rule only lets waf itself pass the request on.
+# Gated on the same shared edge-marker secret Traefik stamps and BFF already
+# trusts (RÀNG BUỘC #5) so a pod calling waf directly (no marker) still can't
+# forge this — without it, every non-public_path request would 403 at waf
+# before ever reaching bff's real check.
+public_path if {
+  source_principal == ""
+  destination_principal == ""
+  headers["x-edge-marker"] == opa.runtime().env.EDGE_MARKER
+  opa.runtime().env.EDGE_MARKER != ""
+}
 # crapi-web static — bff → crapi-web GET
 public_path if {
   method in ["GET", "HEAD"]

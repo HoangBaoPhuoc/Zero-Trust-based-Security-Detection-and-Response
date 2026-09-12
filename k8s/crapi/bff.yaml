@@ -85,6 +85,12 @@ spec:
             - name: SESSION_SECRET
               valueFrom:
                 secretKeyRef: { name: bff-secret, key: session-secret }
+            # A3 — bí mật chia sẻ với Middleware edge-marker (k8s/crapi/edge-tls.yaml);
+            # BFF chỉ tin X-Forwarded-Tls-Client-Cert-Info khi X-Edge-Marker khớp giá
+            # trị này (chặn pod trong cluster gọi thẳng waf/bff và tự giả header cert).
+            - name: EDGE_MARKER
+              valueFrom:
+                secretKeyRef: { name: bff-edge, key: marker }
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 5
@@ -109,18 +115,22 @@ spec:
       port: 8080
       targetPort: 8080
 ---
-# bff là điểm vào browser (qua Traefik) — PERMISSIVE để traffic không-cert đi qua,
-# giống api-gateway/web-portal của finance app.
+# A2: bff đứng sau waf (Traefik -> waf -> bff, mọi hop trong mesh đều mTLS thật)
+# nên không còn cần nhận traffic không-cert nữa — siết STRICT. Traefik/waf's
+# ext_authz check (waf-opa-authz) vẫn cho untrusted-edge traffic qua tới waf;
+# hop waf->bff thật sự phải mTLS. Prometheus (job crapi-services-aws) scrape
+# /metrics trực tiếp bff:8080 nên phải có SVID riêng — xem
+# k8s/monitoring/prometheus.yaml + scripts/ensure-spire-entries.sh.
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
-  name: bff-permissive
+  name: bff-strict
   namespace: crapi
 spec:
   selector:
     matchLabels: { app: bff }
   mtls:
-    mode: PERMISSIVE
+    mode: STRICT
 ---
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
