@@ -131,16 +131,9 @@ Security groups OpenStack (`terraform/openstack/security_groups.tf`): `neutron-s
 - **2 SPIRE server** (mỗi cluster 1), datastore `sqlite3` trên **hostPath `/opt/spire/data/server`** pin vào node `spire-server=true` (`strategy: Recreate`). UpstreamAuthority = `disk` (root CA `spire/root-ca/ca.crt`, `ca_ttl = 168h`).
 - **SPIRE agent** = DaemonSet, `hostNetwork: true`, `dnsPolicy: ClusterFirstWithHostNet`. NodeAttestor `k8s_psat` (`cluster = "aws-k3s"` / `"os-k3s"`). Init container `wait-for-server` + `alias-socket-for-istio` (`ln -sfn agent.sock socket` — Istio SDS hardcode tên socket là `socket`). **`imagePullPolicy: IfNotPresent`** cả 3 container (tránh ImagePullBackOff khi node mất internet).
 - **SVID TTL:** `default_x509_svid_ttl = "1h"`, `default_jwt_svid_ttl = "5m"`.
-- **Scheme SPIFFE tuỳ biến (KHÔNG phải mặc định Istio):** `spiffe://ztlab.local/<cloud>/<service>`:
+- **Scheme SPIFFE tuỳ biến (KHÔNG phải mặc định Istio):** `spiffe://ztlab.local/<cloud>/<service>`. Danh sách đầy đủ (Phần 2, remediation 2026-09 — SINH TỰ ĐỘNG, không còn viết tay/hardcode): [`docs/GENERATED-SERVICE-GRAPH.md` §1](docs/GENERATED-SERVICE-GRAPH.md#1-danh-sách-spiffe-entry). Nguồn sự thật: `policy/service-graph-crapi.yaml` → `scripts/gen-spire-entries.py` → `scripts/spire-entries.generated.sh` (mà `scripts/ensure-spire-entries.sh` source, thay vì hardcode danh sách + số lượng kỳ vọng riêng như trước — 2 con số này từng lệch nhau mà gate deploy không phát hiện được).
 
-  | AWS (4) | OpenStack (1 + Job) |
-  |---|---|
-  | `spiffe://ztlab.local/aws/bff` | `spiffe://ztlab.local/openstack/crapi-identity` |
-  | `spiffe://ztlab.local/aws/crapi-web` | `spiffe://ztlab.local/openstack/crapi-seed` (Job seed) |
-  | `spiffe://ztlab.local/aws/crapi-community` | |
-  | `spiffe://ztlab.local/aws/crapi-workshop` | |
-
-  Node-alias: một entry `-node` parent vào `spire-server`, selector `k8s_psat:cluster:<x>` (mọi agent khớp, bất kể UUID) → workload entry parent vào alias `spiffe://ztlab.local/nodes/{aws,os}-k3s` thay vì UUID node. Hardcode trong **`scripts/ensure-spire-entries.sh`**, gọi vô điều kiện mỗi lần deploy.
+  Node-alias: một entry `-node` parent vào `spire-server`, selector `k8s_psat:cluster:<x>` (mọi agent khớp, bất kể UUID) → workload entry parent vào alias `spiffe://ztlab.local/nodes/{aws,os}-k3s` thay vì UUID node.
 - Vì scheme khác mặc định (`spiffe://<trustdomain>/ns/<ns>/sa/<sa>`), **mỗi Service cần một `DestinationRule` với `subjectAltNames` tường minh** (xem §4.2).
 
 ### 4.2 Istio service mesh
@@ -166,22 +159,9 @@ Security groups OpenStack (`terraform/openstack/security_groups.tf`): `neutron-s
 | ConfigMap | `opa-config` (per-cluster) + `opa-policies-crapi` (from-dir `opa/crapi-policies/`) | như AWS |
 
 **`service_acl` — nguồn sự thật duy nhất** (`policy/service-graph-crapi.yaml`):
-- Sinh ra `opa/crapi-policies/service_acl.rego` (package `zta.crapi.generated`) + `k8s/crapi/network-policies/{aws,os}-pod-segmentation.yaml` bằng `scripts/gen-rego-acl.py` + `scripts/gen-networkpolicy.py`.
-- Test `tests/test_service_graph_consistency.py` (2 bài): (1) chạy generator xong file không đổi; (2) mọi edge nghiệp vụ có mặt ở CẢ L7 (rego) lẫn L4 (netpol).
-- **Ma trận edge (L7 — qua OPA):**
-
-  | Nguồn (SPIFFE) | Đích | Method + path prefix |
-  |---|---|---|
-  | `aws/bff` | `openstack/crapi-identity` (cross) | GET/POST/PUT/DELETE `/identity/api`, GET `/identity/health_check` |
-  | `aws/bff` | `aws/crapi-community` | GET/POST `/community/api` |
-  | `aws/bff` | `aws/crapi-workshop` | GET/POST/PUT `/workshop/api` |
-  | `aws/bff` | `aws/crapi-web` | GET `/`, `/static`, `/images`, `/index.html`, `/favicon` |
-  | `aws/crapi-community` | `openstack/crapi-identity` (cross) | POST `/identity/api/auth/verify`, GET `/identity/health_check` |
-  | `aws/crapi-workshop` | `openstack/crapi-identity` (cross) | idem |
-
-  Mọi cặp KHÔNG có trong bảng (vd `crapi-community → crapi-workshop`) → OPA `internal_service_request` = false → **deny (403)** = chống lateral movement.
-
-- **Edge L4 thuần (không qua OPA service_acl):** `bff→redis:6379`, `community/workshop→mongodb:27017`, `community/workshop→postgresdb-openstack:30432` (cross), `crapi-identity→postgresdb:5432`, `crapi-identity→mailhog` (nội OpenStack), `*→opa:9191/8181`.
+- Sinh ra `opa/crapi-policies/service_acl.rego` (package `zta.crapi.generated`) + `k8s/crapi/network-policies/{aws,os}-{pod-segmentation,allow-list}.yaml` + `scripts/spire-entries.generated.sh` + `docs/GENERATED-SERVICE-GRAPH.md` bằng `scripts/gen-{rego-acl,networkpolicy,spire-entries,docs-tables}.py` (Phần 2, remediation 2026-09 — mở rộng từ bản gốc chỉ sinh 2 file đầu).
+- Test `tests/test_service_graph_consistency.py` (3 bài): (1) chạy TOÀN BỘ generator xong không file nào đổi; (2) mọi edge nghiệp vụ có mặt ở CẢ L7 (rego) lẫn L4 (netpol); (3) mọi workload tham gia edge L7 có entry SPIRE thật, không tự mâu thuẫn khai `spiffe: false`.
+- **Ma trận edge L7 + danh sách edge L4** (SINH TỰ ĐỘNG, không còn viết tay): [`docs/GENERATED-SERVICE-GRAPH.md` §2-3](docs/GENERATED-SERVICE-GRAPH.md#2-ma-trận-edge-l7-qua-opa-service_acl). Mọi cặp KHÔNG có trong ma trận L7 (vd `crapi-community → crapi-workshop`) → OPA `internal_service_request` = false → **deny (403)** = chống lateral movement.
 
 **`zta_crapi.rego` (AWS) — cấu trúc quyết định:**
 ```
