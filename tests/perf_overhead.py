@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
-"""ZTLab Performance Overhead Benchmark.
+"""ZTLab Performance Overhead Benchmark — crAPI (Phần 3.3, remediation 2026-09).
 
-    ⚠️  CHƯA CẬP NHẬT CHO crAPI (2026-09-10). Script còn tham chiếu Keycloak
-    client `api-gateway` + namespace `financial` của app cũ. Cần đổi sang luồng
-    login BFF (tests/lib/crapi_common.sh::crapi_login) + ns `crapi` trước khi chạy.
+Trước bản sửa này script này trỏ tới `api-gateway`/ns `financial` của app cũ
+(chưa từng chạy được với crAPI). Sửa lại cho đúng kiến trúc hiện tại: điểm
+vào DUY NHẤT là Istio IngressGateway + client-cert mТLS
+(scripts/issue-device-cert.sh, tests/lib/crapi_common.sh), phiên đăng nhập là
+cookie BFF (không phải Bearer token trực tiếp như api-gateway cũ) — login
+thật qua `tests/lib/crapi_common.sh::crapi_login` (subprocess bash, tái dùng
+logic OIDC/PKCE đã có thay vì viết lại bằng Python).
 
-Measures the latency overhead introduced by the Zero Trust security pipeline:
-  - Envoy sidecar TLS termination + mTLS
-  - OPA policy evaluation (ext_authz gRPC)
-  - Keycloak JWT verification
-
-Methodology:
-  1. Baseline  : N direct requests to a simple health endpoint (minimal security path)
-  2. Auth path : N requests to a protected endpoint with full JWT + OPA evaluation
-  3. Delta     : P50/P95/P99 overhead attributed to the security pipeline
+CHỈ LÀ CÔNG CỤ ĐO (không phải Giai đoạn B/B4) — đo kiểu health-vs-protected
+đơn giản để có SỐ THẬT lần đầu tiên; KHÔNG tách overhead Zero-Trust khỏi độ
+trễ cross-cloud (đó là B4 thật, có nhóm test-only riêng, ngoài phạm vi lần
+sửa này).
 
 Usage:
-  python3 tests/perf_overhead.py [--n 100] [--output results/perf_overhead.json]
+  python3 tests/perf_overhead.py [--n 50] [--output results/perf_overhead.json]
 
 Environment variables:
-  GW_URL    API Gateway base URL   (default: http://localhost:18080)
-  KC_URL    Keycloak base URL      (default: http://localhost:8180)
-  BENCH_N   Number of requests     (default: 50)
+  BFF_URL   Gateway/BFF base URL (default: https://crapi.ztlab.local:18444,
+            giống tests/lib/crapi_common.sh — cần scripts/open-admin-uis.sh
+            và Device CA client cert test-compliant đã issue).
+  BENCH_N   Number of requests (default: 50)
 """
 from __future__ import annotations
 
@@ -29,93 +29,57 @@ import argparse
 import json
 import os
 import statistics
+import subprocess
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
-GW_URL  = os.environ.get("GW_URL",  "http://localhost:18080").rstrip("/")
-KC_URL  = os.environ.get("KC_URL",  "http://localhost:8180").rstrip("/")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CA_DIR = REPO_ROOT / "deploy" / "vendor" / "device-ca"
+CRAPI_HOST = os.environ.get("CRAPI_HOST", "crapi.ztlab.local")
+BFF_URL = os.environ.get("BFF_URL", f"https://{CRAPI_HOST}:18444").rstrip("/")
 BENCH_N = int(os.environ.get("BENCH_N", "50"))
-
 OUTPUT_PATH = Path(os.environ.get("PERF_OUTPUT", "results/perf_overhead.json"))
 
+CLIENT_CERT = CA_DIR / "issued" / "test-compliant" / "device.crt"
+CLIENT_KEY = CA_DIR / "issued" / "test-compliant" / "device.key"
+CA_CERT = CA_DIR / "device-ca.crt"
 
-def _get(url: str, headers: dict | None = None, timeout: float = 10.0) -> tuple[int, float]:
-    req = urllib.request.Request(url, headers=headers or {})
+
+def _tls_args() -> list[str]:
+    return [
+        "--cacert", str(CA_CERT), "--cert", str(CLIENT_CERT), "--key", str(CLIENT_KEY),
+        "--resolve", f"{CRAPI_HOST}:{BFF_URL.rsplit(':', 1)[-1]}:127.0.0.1",
+    ]
+
+
+def _curl(url: str, cookie_jar: str | None = None, timeout: float = 10.0) -> tuple[int, float]:
+    cmd = ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", str(timeout), *_tls_args()]
+    if cookie_jar:
+        cmd += ["-b", cookie_jar]
+    cmd.append(url)
     t0 = time.perf_counter()
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            resp.read()
-            return resp.status, time.perf_counter() - t0
-    except urllib.error.HTTPError as exc:
-        return exc.code, time.perf_counter() - t0
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 2)
+        elapsed = time.perf_counter() - t0
+        code = int(out.stdout.strip() or "0")
+        return code, elapsed
     except Exception:
         return 0, time.perf_counter() - t0
 
 
-KC_ADMIN_PASS = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "ztlab-admin-2026")
-_api_gateway_secret_cache: str = ""
-
-
-def _api_gateway_client_secret() -> str:
-    # web-portal client has directAccessGrantsEnabled=false (Zero Trust hardening —
-    # browser PKCE flow only), so scripted token grants must use api-gateway instead,
-    # which requires its client secret fetched via the Keycloak admin API.
-    global _api_gateway_secret_cache
-    if _api_gateway_secret_cache:
-        return _api_gateway_secret_cache
-    data = urllib.parse.urlencode({
-        "grant_type": "password",
-        "client_id": "admin-cli",
-        "username": "admin",
-        "password": KC_ADMIN_PASS,
-    }).encode()
-    req = urllib.request.Request(
-        f"{KC_URL}/realms/master/protocol/openid-connect/token",
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
+def _crapi_login() -> str | None:
+    """Đăng nhập thật qua BFF OIDC/PKCE (tests/lib/crapi_common.sh::crapi_login),
+    trả về đường dẫn cookie-jar hoặc None nếu Keycloak không tới được."""
+    script = f'source "{REPO_ROOT}/tests/lib/crapi_common.sh"; crapi_login testuser01 "Test1234!"'
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            admin_token = json.loads(resp.read()).get("access_token", "")
-        if not admin_token:
-            return ""
-        req = urllib.request.Request(
-            f"{KC_URL}/admin/realms/ztlab/clients?clientId=api-gateway",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            clients = json.loads(resp.read())
-        _api_gateway_secret_cache = clients[0]["secret"] if clients else ""
+        out = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30)
+        jar = out.stdout.strip()
+        if out.returncode == 0 and jar and Path(jar).exists():
+            return jar
     except Exception:
-        return ""
-    return _api_gateway_secret_cache
-
-
-def _keycloak_token() -> str:
-    secret = _api_gateway_client_secret()
-    if not secret:
-        return ""
-    data = urllib.parse.urlencode({
-        "grant_type": "password",
-        "client_id": "api-gateway",
-        "client_secret": secret,
-        "username": "testuser01",
-        "password": "Test1234!",
-    }).encode()
-    req = urllib.request.Request(
-        f"{KC_URL}/realms/ztlab/protocol/openid-connect/token",
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read()).get("access_token", "")
-    except Exception:
-        return ""
+        pass
+    return None
 
 
 def percentile(data: list[float], p: float) -> float:
@@ -127,18 +91,18 @@ def percentile(data: list[float], p: float) -> float:
     return sorted_data[lo] + (sorted_data[hi] - sorted_data[lo]) * (k - lo)
 
 
-def run_benchmark(label: str, url: str, headers: dict | None, n: int) -> dict:
+def run_benchmark(label: str, url: str, cookie_jar: str | None, n: int) -> dict:
     latencies: list[float] = []
     errors = 0
     print(f"  [{label}] {n} requests to {url}")
     for i in range(n):
-        code, elapsed = _get(url, headers)
+        code, elapsed = _curl(url, cookie_jar)
         if code in (200, 401, 403):
             latencies.append(elapsed * 1000)  # ms
         else:
             errors += 1
         if (i + 1) % 10 == 0:
-            print(f"    ... {i+1}/{n} done", end="\r")
+            print(f"    ... {i + 1}/{n} done", end="\r")
         time.sleep(0.01)  # avoid self-DoS
     print()
     if not latencies:
@@ -146,87 +110,70 @@ def run_benchmark(label: str, url: str, headers: dict | None, n: int) -> dict:
     return {
         "n": len(latencies),
         "errors": errors,
-        "p50_ms":  round(percentile(latencies, 50), 2),
-        "p95_ms":  round(percentile(latencies, 95), 2),
-        "p99_ms":  round(percentile(latencies, 99), 2),
+        "p50_ms": round(percentile(latencies, 50), 2),
+        "p95_ms": round(percentile(latencies, 95), 2),
+        "p99_ms": round(percentile(latencies, 99), 2),
         "mean_ms": round(statistics.mean(latencies), 2),
-        "min_ms":  round(min(latencies), 2),
-        "max_ms":  round(max(latencies), 2),
+        "min_ms": round(min(latencies), 2),
+        "max_ms": round(max(latencies), 2),
         "stdev_ms": round(statistics.stdev(latencies), 2) if len(latencies) > 1 else 0.0,
     }
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ZTLab perf overhead benchmark")
+    parser = argparse.ArgumentParser(description="ZTLab perf overhead benchmark (crAPI)")
     parser.add_argument("--n", type=int, default=BENCH_N, help="requests per scenario")
     parser.add_argument("--output", default=str(OUTPUT_PATH), help="JSON output path")
     args = parser.parse_args()
     n = args.n
     output = Path(args.output)
 
-    print("ZTLab Performance Overhead Benchmark")
-    print(f"  GW_URL : {GW_URL}")
-    print(f"  KC_URL : {KC_URL}")
-    print(f"  N      : {n} requests per scenario")
+    print("ZTLab Performance Overhead Benchmark (crAPI)")
+    print(f"  BFF_URL : {BFF_URL}")
+    print(f"  N       : {n} requests per scenario")
     print()
 
-    # Verify gateway is reachable
-    code, _ = _get(f"{GW_URL}/health")
+    code, _ = _curl(f"{BFF_URL}/health")
     if code == 0:
-        print(f"ERROR: API Gateway unreachable at {GW_URL}", file=sys.stderr)
+        print(f"ERROR: Gateway/BFF unreachable at {BFF_URL} — chạy scripts/open-admin-uis.sh trước", file=sys.stderr)
         return 1
 
     results: dict = {
         "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "n_per_scenario": n,
+        "methodology_note": (
+            "Mỗi request là 1 tiến trình curl mới (TLS handshake mới hoàn toàn, "
+            "không reuse connection) — số đo bị chi phối bởi chi phí fork+TLS "
+            "handshake per-request, KHÔNG phải overhead Zero-Trust thuần. Đây là "
+            "công cụ đo lần đầu (Phần 3.3), không phải phép đo B4 thật (tách "
+            "overhead mТLS+OPA khỏi độ trễ cross-cloud bằng keep-alive/connection "
+            "pooling) — B4 thuộc Giai đoạn B, ngoài phạm vi lần sửa này."
+        ),
     }
 
-    # 1. Baseline: health endpoint — just Envoy passthrough, no JWT/OPA
-    print("[1/4] Baseline — health endpoint (Envoy passthrough only)")
-    results["baseline"] = run_benchmark("baseline", f"{GW_URL}/health", None, n)
+    print("[1/3] Baseline — /health (public_path, không qua RBAC/JWT)")
+    results["baseline"] = run_benchmark("baseline", f"{BFF_URL}/health", None, n)
 
-    # 2. No-auth request to protected endpoint — hits OPA → expect 401/403
-    print("[2/4] OPA-only overhead — protected endpoint, no JWT")
-    results["opa_only"] = run_benchmark("opa_only", f"{GW_URL}/accounts/ACC-1001", None, n)
+    print("[2/3] BFF-only overhead — protected endpoint, KHÔNG có session (401 tại BFF)")
+    results["no_session"] = run_benchmark("no_session", f"{BFF_URL}/workshop/api/shop/products", None, n)
 
-    # 3. Full auth path — JWT + Envoy mTLS + OPA
-    print("[3/4] Full auth path — JWT + Envoy mTLS + OPA")
-    token = _keycloak_token()
-    if token:
-        headers = {"Authorization": f"Bearer {token}"}
-        results["full_auth"] = run_benchmark("full_auth", f"{GW_URL}/accounts/ACC-1001", headers, n)
+    print("[3/3] Full auth path — session thật (Keycloak OIDC + mТLS + OPA)")
+    cookie_jar = _crapi_login()
+    if cookie_jar:
+        results["full_auth"] = run_benchmark(
+            "full_auth", f"{BFF_URL}/workshop/api/shop/products", cookie_jar, n)
+        Path(cookie_jar).unlink(missing_ok=True)
     else:
-        print("  WARNING: Keycloak unavailable, skipping full-auth benchmark")
-        results["full_auth"] = {"note": "skipped — Keycloak unavailable"}
+        print("  WARNING: Keycloak/BFF login không thành công, bỏ qua full-auth benchmark")
+        results["full_auth"] = {"note": "skipped — Keycloak/BFF login unavailable"}
 
-    # 4. Keycloak token issuance latency
-    print("[4/4] Keycloak token issuance latency")
-    kc_latencies: list[float] = []
-    for _ in range(min(n, 20)):
-        t0 = time.perf_counter()
-        tok = _keycloak_token()
-        elapsed = (time.perf_counter() - t0) * 1000
-        if tok:
-            kc_latencies.append(elapsed)
-        time.sleep(0.05)
-    if kc_latencies:
-        results["keycloak_token_issuance"] = {
-            "n": len(kc_latencies),
-            "p50_ms":  round(percentile(kc_latencies, 50), 2),
-            "p95_ms":  round(percentile(kc_latencies, 95), 2),
-            "mean_ms": round(statistics.mean(kc_latencies), 2),
-        }
-    else:
-        results["keycloak_token_issuance"] = {"note": "skipped — Keycloak unavailable"}
-
-    # Compute overhead delta
     baseline = results["baseline"]
     full_auth = results["full_auth"]
     if "p50_ms" in baseline and "p50_ms" in full_auth:
         results["overhead_delta"] = {
-            "p50_ms":  round(full_auth["p50_ms"]  - baseline["p50_ms"],  2),
-            "p95_ms":  round(full_auth["p95_ms"]  - baseline["p95_ms"],  2),
-            "p99_ms":  round(full_auth["p99_ms"]  - baseline["p99_ms"],  2),
+            "p50_ms": round(full_auth["p50_ms"] - baseline["p50_ms"], 2),
+            "p95_ms": round(full_auth["p95_ms"] - baseline["p95_ms"], 2),
+            "p99_ms": round(full_auth["p99_ms"] - baseline["p99_ms"], 2),
             "mean_ms": round(full_auth["mean_ms"] - baseline["mean_ms"], 2),
             "overhead_pct_p50": round(
                 (full_auth["p50_ms"] - baseline["p50_ms"]) / full_auth["p50_ms"] * 100, 1
@@ -237,24 +184,23 @@ def main() -> int:
     output.write_text(json.dumps(results, indent=2))
     print(f"\nResults written to {output}")
 
-    # Summary table
-    print("\n=== PERFORMANCE OVERHEAD SUMMARY ===")
+    print("\n=== PERFORMANCE OVERHEAD SUMMARY (crAPI) ===")
     b = results.get("baseline", {})
-    o = results.get("opa_only", {})
+    ns = results.get("no_session", {})
     f = results.get("full_auth", {})
     d = results.get("overhead_delta", {})
 
     def row(label: str, data: dict) -> None:
         if "p50_ms" in data:
-            print(f"  {label:<30} P50={data['p50_ms']:>7.1f}ms  P95={data['p95_ms']:>7.1f}ms  P99={data.get('p99_ms',0):>7.1f}ms  mean={data['mean_ms']:>7.1f}ms")
+            print(f"  {label:<32} P50={data['p50_ms']:>7.1f}ms  P95={data['p95_ms']:>7.1f}ms  P99={data.get('p99_ms', 0):>7.1f}ms  mean={data['mean_ms']:>7.1f}ms")
         elif "note" in data:
-            print(f"  {label:<30} {data['note']}")
+            print(f"  {label:<32} {data['note']}")
 
-    row("Baseline (health only)",     b)
-    row("OPA-only (no JWT)",          o)
-    row("Full ZT (JWT+Envoy+OPA)",    f)
+    row("Baseline (health only)", b)
+    row("BFF-only (no session, 401)", ns)
+    row("Full ZT (session+mTLS+OPA)", f)
     if d:
-        print(f"  {'Security overhead (delta)':<30} P50=+{d['p50_ms']:>6.1f}ms  P95=+{d['p95_ms']:>6.1f}ms  ({d.get('overhead_pct_p50',0):.1f}% of request)")
+        print(f"  {'Security overhead (delta)':<32} P50=+{d['p50_ms']:>6.1f}ms  P95=+{d['p95_ms']:>6.1f}ms  ({d.get('overhead_pct_p50', 0):.1f}% of request)")
 
     return 0
 

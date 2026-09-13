@@ -633,7 +633,24 @@ EOF
   kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault write auth/kubernetes/role/incident-analyzer bound_service_account_names=incident-analyzer bound_service_account_namespaces=plg-stack policies=incident-analyzer ttl=1h" >/dev/null
   kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv put secret/smtp-secret password='${SMTP_PASS:-}'" >/dev/null
 
-  ok "Vault ready: unsealed, kubernetes auth configured, smtp-secret seeded"
+  # Phần 3.2 (remediation 2026-09) — grafana-smtp-secret VÀ crapi-jwt-key
+  # (§4.9 KEHOACH-THAYDOI-HETHONG.md nhận xét đang là k8s Secret trần) nay có
+  # Vault làm nguồn sự thật: seed 1 lần nếu Vault chưa có, sau đó LUÔN đọc lại
+  # từ Vault (giữ nguyên qua các lần deploy) thay vì phụ thuộc biến môi trường
+  # deploy-time hay file vendor cục bộ mỗi lần. k8s Secret vẫn là cơ chế phân
+  # phối runtime cho pod (Grafana/bff/crapi-identity không đổi cách đọc) —
+  # đây là nơi Vault trở thành nguồn thật, không phải thêm 1 bản sao vô nghĩa.
+  kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv get -format=json secret/grafana-smtp >/dev/null 2>&1" \
+    || kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv put secret/grafana-smtp password='${SMTP_PASS:-}'" >/dev/null
+  GRAFANA_SMTP_PASSWORD="$(kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv get -field=password secret/grafana-smtp" 2>/dev/null)"
+  export GRAFANA_SMTP_PASSWORD
+
+  local crapi_jwt_key_file="$REPO_ROOT/deploy/vendor/crapi-keys/jwks.json"
+  if [[ -f "$crapi_jwt_key_file" ]] && ! kaws exec -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv get -format=json secret/crapi-jwt-key >/dev/null 2>&1"; then
+    kaws exec -i -n vault vault-0 -- sh -c "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv put secret/crapi-jwt-key jwks=-" < "$crapi_jwt_key_file" >/dev/null
+  fi
+
+  ok "Vault ready: unsealed, kubernetes auth configured, smtp-secret + grafana-smtp + crapi-jwt-key seeded"
 }
 
 provision_grafana_configmaps() {
@@ -663,6 +680,7 @@ provision_grafana_configmaps() {
     --from-file=privilege-escalation-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/privilege-escalation-alert.yml" \
     --from-file=incident-analyzer-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/incident-analyzer-alert.yml" \
     --from-file=security-control-plane-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/security-control-plane-alert.yml" \
+    --from-file=mesh-integrity-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/mesh-integrity-alert.yml" \
     --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
 }
 
@@ -679,11 +697,13 @@ deploy_observability_response() {
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/loki.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack loki 180s
 
-  # grafana.yaml's GF_SMTP_PASSWORD reads this secret directly (unrelated to
-  # Vault's smtp-secret KV, which is incident-analyzer's own latent capability).
-  # Without it Grafana CreateContainerConfigError-loops forever.
+  # Phần 3.2 (remediation 2026-09): giá trị lấy từ Vault (secret/grafana-smtp,
+  # seed ở deploy_vault_and_seed_secrets phía trên) — không còn phụ thuộc
+  # biến môi trường deploy-time trần. k8s Secret vẫn là cơ chế phân phối cho
+  # grafana.yaml's GF_SMTP_PASSWORD (không đổi cách Grafana đọc). Thiếu nó
+  # Grafana CreateContainerConfigError-loops forever.
   kaws create secret generic grafana-smtp-secret -n plg-stack \
-    --from-literal=password="${SMTP_PASS:-}" \
+    --from-literal=password="${GRAFANA_SMTP_PASSWORD:-}" \
     --dry-run=client -o yaml | kaws apply -f -
 
   provision_grafana_configmaps
