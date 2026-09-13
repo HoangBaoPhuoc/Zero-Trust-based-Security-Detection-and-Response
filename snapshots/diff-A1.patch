@@ -1,0 +1,580 @@
+diff --git a/k8s/crapi/bff.yaml b/k8s/crapi/bff.yaml
+index e9fa9dd1..0bbb59fa 100644
+--- a/k8s/crapi/bff.yaml
++++ b/k8s/crapi/bff.yaml
+@@ -51,8 +51,10 @@ spec:
+           env:
+             - name: CLOUD_PROVIDER
+               value: "aws"
++            # A1: Keycloak trên OpenStack — BFF proxy /kc/* + token/authorize qua
++            # selectorless Service cross-cloud (k8s/crapi/cross-cloud-aws.yaml).
+             - name: KEYCLOAK_URL
+-              value: "http://keycloak.identity.svc.cluster.local:8080"
++              value: "http://keycloak-openstack.crapi.svc.cluster.local:30091"
+             - name: KEYCLOAK_PUBLIC_URL
+               value: "http://keycloak.ztlab.local:8180"
+             - name: KC_EXTERNAL_HOST
+diff --git a/k8s/crapi/cross-cloud-aws.yaml b/k8s/crapi/cross-cloud-aws.yaml
+index 4892a4a8..0d6b6172 100644
+--- a/k8s/crapi/cross-cloud-aws.yaml
++++ b/k8s/crapi/cross-cloud-aws.yaml
+@@ -7,6 +7,8 @@
+ #                                                     ISTIO_MUTUAL → mТLS SPIRE)
+ #   postgresdb-openstack     → OS k3s-master :30432  (TCP 5432, KHÔNG DR — plain
+ #                                                     TCP mã hoá bởi WireGuard)
++#   keycloak-openstack       → OS k3s-master :30091  (HTTP, DR mode DISABLE —
++#                                                     Keycloak không sidecar; A1)
+ # ── Áp trên cluster OpenStack ───────────────────────────────────────────────
+ #   mailhog-aws              → AWS k3s-worker-1 :31025 (SMTP, KHÔNG DR)
+ #
+@@ -89,3 +91,41 @@ spec:
+     tls:
+       mode: DISABLE
+ ---
++# A1 — Keycloak trên OpenStack. BFF (/kc/* proxy + token/authorize) và OPA AWS
++# (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này. Keycloak không có
++# sidecar → DR mode DISABLE (istio-proxy client đi plaintext, WireGuard mã hoá).
++apiVersion: v1
++kind: Service
++metadata:
++  name: keycloak-openstack
++  namespace: crapi
++spec:
++  ports:
++    - name: http
++      port: 30091
++      protocol: TCP
++---
++apiVersion: v1
++kind: Endpoints
++metadata:
++  name: keycloak-openstack
++  namespace: crapi
++subsets:
++  - addresses:
++      - ip: 192.168.101.11
++    ports:
++      - name: http
++        port: 30091
++        protocol: TCP
++---
++apiVersion: networking.istio.io/v1
++kind: DestinationRule
++metadata:
++  name: keycloak-openstack-plaintext
++  namespace: crapi
++spec:
++  host: keycloak-openstack.crapi.svc.cluster.local
++  trafficPolicy:
++    tls:
++      mode: DISABLE
++---
+diff --git a/k8s/crapi/network-policies/aws-allow-list.yaml b/k8s/crapi/network-policies/aws-allow-list.yaml
+index 5b8ae202..0f08b53c 100644
+--- a/k8s/crapi/network-policies/aws-allow-list.yaml
++++ b/k8s/crapi/network-policies/aws-allow-list.yaml
+@@ -63,12 +63,8 @@ spec:
+         - { port: 6379, protocol: TCP }
+         - { port: 27017, protocol: TCP }
+         - { port: 15006, protocol: TCP }
+-    # bff → Keycloak (identity ns) :8080
+-    - to:
+-        - namespaceSelector:
+-            matchLabels: { kubernetes.io/metadata.name: identity }
+-      ports:
+-        - { port: 8080, protocol: TCP }
++    # A1: Keycloak chuyển sang OpenStack — bff/opa → Keycloak nay đi cross-cloud
++    # (ipBlock 192.168.101.0/24:30091 bên dưới), không còn hop tới ns identity AWS.
+     # bff audit + (tương lai) log → Loki (plg-stack) :3100
+     - to:
+         - namespaceSelector:
+@@ -76,12 +72,13 @@ spec:
+       ports:
+         - { port: 3100, protocol: TCP }
+     # Cross-cloud: AWS crapi → OpenStack NodePort qua WireGuard
+-    #   30090 = crapi-identity, 30432 = postgresdb
++    #   30090 = crapi-identity, 30432 = postgresdb, 30091 = keycloak (A1)
+     - to:
+         - ipBlock: { cidr: 192.168.101.0/24 }
+       ports:
+         - { port: 30090, protocol: TCP }
+         - { port: 30432, protocol: TCP }
++        - { port: 30091, protocol: TCP }
+     # istio-proxy sidecar → istiod (CA + xDS) :15012
+     - to:
+         - namespaceSelector:
+diff --git a/k8s/identity/ingress-os.yaml b/k8s/identity/ingress-os.yaml
+new file mode 100644
+index 00000000..3be126a5
+--- /dev/null
++++ b/k8s/identity/ingress-os.yaml
+@@ -0,0 +1,33 @@
++# A1 — Keycloak chạy trên cụm OpenStack. Traefik IngressRoute cho Keycloak UI
++# (keycloak.ztlab.local + localhost) nay nằm ở cụm OpenStack, không phải AWS.
++# Áp bằng: kubectl --context ctx-openstack apply -f k8s/identity/ingress-os.yaml
++---
++apiVersion: traefik.io/v1alpha1
++kind: IngressRoute
++metadata:
++  name: keycloak
++  namespace: identity
++spec:
++  entryPoints:
++  - web
++  routes:
++  - match: Host(`keycloak.ztlab.local`)
++    kind: Rule
++    services:
++    - name: keycloak
++      port: 8080
++---
++apiVersion: traefik.io/v1alpha1
++kind: IngressRoute
++metadata:
++  name: keycloak-localhost
++  namespace: identity
++spec:
++  entryPoints:
++  - web
++  routes:
++  - match: Host(`localhost`)
++    kind: Rule
++    services:
++    - name: keycloak
++      port: 8080
+diff --git a/k8s/ingress.yaml b/k8s/ingress.yaml
+index 381ee60f..acfd7c10 100644
+--- a/k8s/ingress.yaml
++++ b/k8s/ingress.yaml
+@@ -16,36 +16,8 @@ spec:
+     services:
+     - name: grafana
+       port: 3000
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: IngressRoute
+-metadata:
+-  name: keycloak
+-  namespace: identity
+-spec:
+-  entryPoints:
+-  - web
+-  routes:
+-  - match: Host(`keycloak.ztlab.local`)
+-    kind: Rule
+-    services:
+-    - name: keycloak
+-      port: 8080
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: IngressRoute
+-metadata:
+-  name: keycloak-localhost
+-  namespace: identity
+-spec:
+-  entryPoints:
+-  - web
+-  routes:
+-  - match: Host(`localhost`)
+-    kind: Rule
+-    services:
+-    - name: keycloak
+-      port: 8080
++# A1: Keycloak IngressRoutes moved to the OpenStack cluster — see
++# k8s/identity/ingress-os.yaml (Keycloak Service no longer exists on AWS).
+ ---
+ apiVersion: traefik.io/v1alpha1
+ kind: IngressRoute
+diff --git a/k8s/keycloak/service.yaml b/k8s/keycloak/service.yaml
+index 5c01d9db..aa38de6d 100644
+--- a/k8s/keycloak/service.yaml
++++ b/k8s/keycloak/service.yaml
+@@ -1,3 +1,7 @@
++# A1 — Keycloak now runs on the OpenStack cluster (Nghị định 53: dữ liệu định
++# danh người dùng trong nước). NodePort 30091 để OPA/BFF (AWS, ns crapi) gọi
++# cross-cloud qua selectorless Service keycloak-openstack (k8s/crapi/cross-cloud-aws.yaml)
++# → os-k3s-master:30091 → WireGuard. Mẫu crapi-identity:30090.
+ apiVersion: v1
+ kind: Service
+ metadata:
+@@ -6,10 +10,11 @@ metadata:
+   labels:
+     app: keycloak
+ spec:
+-  type: ClusterIP
++  type: NodePort
+   selector:
+     app: keycloak
+   ports:
+     - name: http
+       port: 8080
+       targetPort: 8080
++      nodePort: 30091
+diff --git a/opa/crapi-policies/zta_crapi.rego b/opa/crapi-policies/zta_crapi.rego
+index f567addc..dd03e63e 100644
+--- a/opa/crapi-policies/zta_crapi.rego
++++ b/opa/crapi-policies/zta_crapi.rego
+@@ -39,9 +39,13 @@ bearer_token := t if {
+   t := substring(raw, 7, -1)
+ }
+ 
++# A1: Keycloak moved to OpenStack — OPA (AWS) reaches it via the cross-cloud
++# selectorless Service keycloak-openstack:30091 (→ os-k3s-master NodePort → WG).
++# Only the AWS PDP (zta/crapi/authz/allow) evaluates this; the OpenStack PDP
++# (crosscloud) never does, so the name not resolving there is harmless.
+ jwks_response := http.send({
+   "method": "GET",
+-  "url": "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/openid-connect/certs",
++  "url": "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/protocol/openid-connect/certs",
+   "force_cache": true,
+   "force_cache_duration_seconds": 300,
+   "raise_error": false,
+@@ -49,7 +53,7 @@ jwks_response := http.send({
+ 
+ discovery_response := http.send({
+   "method": "GET",
+-  "url": "http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/.well-known/openid-configuration",
++  "url": "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/.well-known/openid-configuration",
+   "force_cache": true,
+   "force_cache_duration_seconds": 300,
+   "raise_error": false,
+diff --git a/policy/service-graph-crapi.yaml b/policy/service-graph-crapi.yaml
+index 6293110f..bb6e67ca 100644
+--- a/policy/service-graph-crapi.yaml
++++ b/policy/service-graph-crapi.yaml
+@@ -25,6 +25,9 @@ workloads:
+   openstack/crapi-identity: { cluster: openstack, namespace: crapi, service_account: crapi-identity }
+   openstack/postgresdb:     { cluster: openstack, namespace: crapi, app_label: postgresdb, spiffe: false }
+   openstack/opa:            { cluster: openstack, namespace: crapi, app_label: opa, spiffe: false }
++  # A1 — Keycloak + keycloak-db chuyển sang OpenStack (ns identity). Không sidecar,
++  # không qua OPA service_acl; AWS gọi cross-cloud tới NodePort 30091.
++  openstack/keycloak:       { cluster: openstack, namespace: identity, app_label: keycloak, spiffe: false }
+ 
+ edges:
+   # ── Biên: Traefik → WAF (ModSecurity/CRS DetectionOnly) → bff ─────────────
+@@ -100,6 +103,11 @@ edges:
+   - { from: openstack/crapi-identity, to: openstack/postgresdb, l4_only: true, l4_ports: [5432] }
+   # identity → mailhog (AWS) SMTP, cross-cloud
+   - { from: openstack/crapi-identity, to: aws/mailhog, l4_only: true, cross_cluster: true, l4_ports: [31025] }
++  # A1 — bff (/kc proxy + token) và opa AWS (JWKS + OIDC discovery qua http.send)
++  # → Keycloak OpenStack, cross-cloud NodePort 30091 qua WireGuard. L4 thuần,
++  # không qua OPA service_acl (Keycloak không phải hop mesh).
++  - { from: aws/bff, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
++  - { from: aws/opa, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
+ 
+   # ── OPA ext_authz — mọi workload nghiệp vụ trong cluster đó ─────────────
+   - { from: aws/bff,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+diff --git a/scripts/deploy-app.sh b/scripts/deploy-app.sh
+index b0e9c0fe..3e75d071 100755
+--- a/scripts/deploy-app.sh
++++ b/scripts/deploy-app.sh
+@@ -83,6 +83,13 @@ kos() {
+   kubectl --context "$OS_CONTEXT" "$@"
+ }
+ 
++# A1: Keycloak (+ keycloak-db, openldap) chạy trên cụm OpenStack (Nghị định 53).
++# Mọi bước thao tác Keycloak Admin API / manifest identity dùng context này.
++KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
++kkc() {
++  kubectl --context "$KEYCLOAK_CONTEXT" "$@"
++}
++
+ verify_context() {
+   local ctx="$1"
+   kubectl --context "$ctx" get nodes --request-timeout=10s >/dev/null 2>&1 \
+@@ -246,23 +253,23 @@ deploy_openldap_and_federation() {
+     return
+   fi
+ 
+-  kaws apply -f "$REPO_ROOT/k8s/identity/openldap.yaml"
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod -l app=openldap -n identity-directory --timeout=90s
+-  kaws apply -f "$REPO_ROOT/k8s/identity/openldap-seed-job.yaml"
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=complete job/openldap-seed -n identity-directory --timeout=60s || true
++  kkc apply -f "$REPO_ROOT/k8s/identity/openldap.yaml"
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod -l app=openldap -n identity-directory --timeout=90s
++  kkc apply -f "$REPO_ROOT/k8s/identity/openldap-seed-job.yaml"
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=complete job/openldap-seed -n identity-directory --timeout=60s || true
+ 
+   local admin_pass
+-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
++  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
+ 
+   # Component idempotency: realm-config.json also declares this LDAP provider
+   # for a FRESH Keycloak import, but Keycloak's --import-realm only runs on
+   # first boot of a realm — it will not retrofit this component onto an
+   # already-imported realm. Register it live via Admin API too so it exists
+   # even when Keycloak itself wasn't redeployed this run.
+-  kaws delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kaws run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
++  kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
++  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
+ import urllib.request, json, urllib.parse, urllib.error
+ 
+ tok_data = urllib.parse.urlencode({'grant_type':'password','client_id':'admin-cli','username':'admin','password':'$admin_pass'}).encode()
+@@ -296,7 +303,7 @@ else:
+     urllib.request.urlopen(req)
+     print('ldap-directory component created')
+ " || warn "OpenLDAP Keycloak federation setup failed (non-fatal — demo/illustration component)"
+-  kubectl --context "$AWS_CONTEXT" delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+ 
+   ok "OpenLDAP deployed, seeded, and registered as Keycloak User Federation (READ_ONLY, demo directory — not a real corporate LDAP)"
+ }
+@@ -309,7 +316,7 @@ deploy_audience_mapper() {
+   fi
+ 
+   local admin_pass
+-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
++  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
+ 
+   # Same idempotency caveat as deploy_openldap_and_federation: realm-config.json
+   # now declares this mapper for a FRESH import, but --import-realm won't
+@@ -317,10 +324,10 @@ deploy_audience_mapper() {
+   # this exact mapper was added by hand via Admin API in a previous session,
+   # then silently lost on the next from-scratch deploy-all.sh because it lived
+   # nowhere else). Register it live too so every deploy ends up with it.
+-  kaws delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kaws run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
++  kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
++  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+ 
+ tok_data = urllib.parse.urlencode({'grant_type':'password','client_id':'admin-cli','username':'admin','password':'$admin_pass'}).encode()
+@@ -353,7 +360,7 @@ for client_id in ('crapi-bff',):
+     urllib.request.urlopen(req)
+     print(client_id, '-> aud-crapi-bff mapper created')
+ " || warn "Keycloak Audience mapper setup failed (non-fatal — but T-1.4 audience check degrades to a no-op without it, see KET-QUA-KIEM-TRA.md)"
+-  kubectl --context "$AWS_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+ 
+   ok "Keycloak Audience mapper ensured on crapi-bff client"
+ }
+@@ -366,17 +373,17 @@ deploy_stepup_flow() {
+   fi
+ 
+   local admin_pass
+-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
++  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' | base64 -d)"
+ 
+   # Same idempotency caveat as deploy_audience_mapper/deploy_openldap_and_federation:
+   # client "crapi-bff-stepup" comes from realm-config.json on fresh --import-realm,
+   # but the authentication flow it needs to bind to does NOT — it was hand-built via
+   # Admin API in a prior session and lost on the next from-scratch deploy (see
+   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
+-  kaws delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kaws run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
++  kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
++  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+ 
+ KC = 'http://keycloak.identity.svc.cluster.local:8080'
+@@ -479,7 +486,7 @@ else:
+           'credentials': [{'type': 'password', 'value': 'StepupDemo123!', 'temporary': False}]})
+     print('stepup-demo user created (requiredActions=CONFIGURE_TOTP, needs one interactive login to enroll real OTP)')
+ " || warn "Keycloak browser-stepup flow setup failed (non-fatal — but T-4.2 step-up OTP degrades to no-op without it, see VIEC-CON-TON-DONG.md item 1)"
+-  kubectl --context "$AWS_CONTEXT" delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+ 
+   ok "Keycloak browser-stepup flow ensured, bound to crapi-bff-stepup client"
+ }
+@@ -503,14 +510,14 @@ deploy_aws_saml_federation() {
+   # kubectl run --rm's own "pod ... deleted" status line can land on stdout
+   # and corrupt a captured file — use a plain pod + exec + explicit delete
+   # instead of --rm to keep the captured metadata byte-exact.
+-  kaws delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kaws run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --command -- sh -c "sleep 30" >/dev/null
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
+-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
+-  kaws delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
++  kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
++  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --command -- sh -c "sleep 30" >/dev/null
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
++  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
++  kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+ 
+   if ! python3 -c "import xml.dom.minidom; xml.dom.minidom.parse('$meta_file')" 2>/dev/null; then
+-    warn "Keycloak SAML metadata unreachable or invalid (is Keycloak Running? check: kubectl --context $AWS_CONTEXT get pods -n identity) — skipping AWS SAML federation, non-fatal"
++    warn "Keycloak SAML metadata unreachable or invalid (is Keycloak Running? check: kubectl --context $KEYCLOAK_CONTEXT get pods -n identity) — skipping AWS SAML federation, non-fatal"
+     rm -f "$meta_file"
+     return
+   fi
+@@ -544,7 +551,7 @@ keycloak_admin_password() {
+   fi
+ 
+   local encoded
+-  encoded="$(kaws -n identity get secret keycloak-secret -o jsonpath='{.data.admin-password}' 2>/dev/null || true)"
++  encoded="$(kkc -n identity get secret keycloak-secret -o jsonpath='{.data.admin-password}' 2>/dev/null || true)"
+   if [[ -n "$encoded" ]]; then
+     printf '%s' "$encoded" | base64 -d
+     return
+diff --git a/scripts/deploy-crapi.sh b/scripts/deploy-crapi.sh
+index bbbe7aaf..458bf4ca 100755
+--- a/scripts/deploy-crapi.sh
++++ b/scripts/deploy-crapi.sh
+@@ -30,6 +30,9 @@ step() { echo -e "\n${BLUE}══════ $* ══════${NC}"; }
+ 
+ kaws() { kubectl --context "$AWS_CONTEXT" "$@"; }
+ kos()  { kubectl --context "$OS_CONTEXT" "$@"; }
++# A1: Keycloak trên cụm OpenStack — bước Admin API dùng context này.
++KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
++kkc()  { kubectl --context "$KEYCLOAK_CONTEXT" "$@"; }
+ 
+ # kubectl apply chỉ khi manifest có ít nhất 1 object. Bỏ qua file toàn comment
+ # (vd cross-cloud-os.yaml khi mailhog nằm cùng cluster identity → không có hop
+@@ -111,12 +114,12 @@ configure_crapi_keycloak() {
+   # realm-config.json khai báo sẵn cho FRESH import; --import-realm KHÔNG
+   # retrofit lên realm đã import → đăng ký live luôn (mẫu deploy_audience_mapper).
+   local admin_pass
+-  admin_pass="$(kaws get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
++  admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
+   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
+-  kaws delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kaws run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+-  kubectl --context "$AWS_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
++  kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
++  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
++  kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+ KC='http://keycloak.identity.svc.cluster.local:8080'; REALM='ztlab'
+ def call(method, path, body=None):
+@@ -162,7 +165,7 @@ for uname,rs in ROLE_ADD.items():
+     print('user',uname,'+',rs)
+ print('crapi keycloak config OK')
+ " || warn "cấu hình Keycloak crapi lỗi (non-fatal — login bff sẽ hỏng cho tới khi sửa)"
+-  kaws delete pod kc-crapi-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
++  kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+   ok "Keycloak crapi roles/clients ensured"
+ }
+ 
+diff --git a/scripts/deploy-security-stack.sh b/scripts/deploy-security-stack.sh
+index 956334a1..a1ef2c78 100755
+--- a/scripts/deploy-security-stack.sh
++++ b/scripts/deploy-security-stack.sh
+@@ -92,8 +92,11 @@ random_secret() {
+   openssl rand -base64 32 2>/dev/null || date +%s%N
+ }
+ 
++# A1: Keycloak (+ keycloak-db, openldap) chạy trên cụm OpenStack — Nghị định 53.
++KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
++
+ ensure_keycloak_secret() {
+-  if kubectl --context $AWS_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
++  if kubectl --context $KEYCLOAK_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
+     log_info "Keycloak secret already exists"
+     return
+   fi
+@@ -102,10 +105,10 @@ ensure_keycloak_secret() {
+   admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(random_secret)}"
+   postgres_password="${KEYCLOAK_DB_PASSWORD:-$(random_secret)}"
+ 
+-  kubectl --context $AWS_CONTEXT -n identity create secret generic keycloak-secret \
++  kubectl --context $KEYCLOAK_CONTEXT -n identity create secret generic keycloak-secret \
+     --from-literal=admin-password="$admin_password" \
+     --from-literal=postgres-password="$postgres_password"
+-  log_info "Created keycloak-secret from environment/random values"
++  log_info "Created keycloak-secret from environment/random values (ctx=$KEYCLOAK_CONTEXT)"
+ }
+ 
+ deploy_step_1_namespaces() {
+@@ -122,16 +125,16 @@ deploy_step_1_namespaces() {
+ }
+ 
+ deploy_step_2_keycloak() {
+-  log_step "2. Deploy Keycloak (AWS only)"
++  log_step "2. Deploy Keycloak (OpenStack — A1, Nghị định 53)"
+ 
+   log_info "Creating Keycloak secrets..."
+   ensure_keycloak_secret
+ 
+   log_info "Deploying Keycloak PostgreSQL..."
+-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
++  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
+ 
+   log_info "Keycloak DB deployment initiated (waiting up to 60s - in lab it may timeout, that's OK)..."
+-  kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
++  kubectl --context $KEYCLOAK_CONTEXT wait --for=condition=Ready pod \
+     -l app=keycloak-db -n identity --timeout=60s 2>/dev/null || {
+     log_info "DB pod still starting (node may be recovering - this is normal in lab environment)"
+   }
+@@ -144,23 +147,26 @@ deploy_step_2_keycloak() {
+   # remembered to edit both. Generate the ConfigMap from the file directly so
+   # there is exactly one place to edit.
+   log_info "Deploying Keycloak realm config..."
+-  kubectl --context $AWS_CONTEXT -n identity create configmap keycloak-realm-config \
++  kubectl --context $KEYCLOAK_CONTEXT -n identity create configmap keycloak-realm-config \
+     --from-file=realm-config.json="$REPO_ROOT/k8s/keycloak/realm-config.json" \
+-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
++    --dry-run=client -o yaml | kubectl --context $KEYCLOAK_CONTEXT apply -f -
+ 
+-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
+-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
++  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
++  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
++  # A1: Keycloak UI ingress theo Keycloak — chuyển sang cụm OpenStack.
++  [[ -f "$REPO_ROOT/k8s/identity/ingress-os.yaml" ]] && \
++    kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/ingress-os.yaml"
+ 
+   log_info "Keycloak deployment initiated (can take 5-10 minutes on first startup with DB setup)"
+   log_info "Note: Keycloak is not a blocking dependency for SPIRE/OPA, so we proceed with deployment"
+   log_info "To wait for Keycloak readiness manually:"
+-  log_info "  kubectl --context ctx-aws wait --for=condition=Ready pod -l app=keycloak -n identity --timeout=600s"
++  log_info "  kubectl --context $KEYCLOAK_CONTEXT wait --for=condition=Ready pod -l app=keycloak -n identity --timeout=600s"
+   
+   # Don't block on Keycloak startup in lab environment
+   # kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
+   #   -l app=keycloak -n identity --timeout=${TIMEOUT_KEYCLOAK}s || {
+   #   log_error "Keycloak Pod failed to start within ${TIMEOUT_KEYCLOAK}s. Checking logs for details..."
+-  #   kubectl --context $AWS_CONTEXT logs -l app=keycloak -n identity --tail=50
++  #   kubectl --context $KEYCLOAK_CONTEXT logs -l app=keycloak -n identity --tail=50
+   #   exit 1
+   # }
+ 
+@@ -367,8 +373,8 @@ verify_deployment() {
+   kubectl --context $AWS_CONTEXT get ns
+ 
+   log_info ""
+-  log_info "Keycloak pods on AWS:"
+-  kubectl --context $AWS_CONTEXT get pods -n identity
++  log_info "Keycloak pods on OpenStack (A1):"
++  kubectl --context $KEYCLOAK_CONTEXT get pods -n identity
+ 
+   log_info ""
+   log_info "SPIRE pods on AWS:"
+@@ -393,7 +399,7 @@ verify_deployment() {
+   log_info ""
+ 
+   log_step "6.1 Readiness checks"
+-  check_rollout "$AWS_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
++  check_rollout "$KEYCLOAK_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
+   check_rollout "$AWS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
+   check_daemonset_ready "$AWS_CONTEXT" "spire" "spire-agent" "true"
+   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
+diff --git a/scripts/open-admin-uis.sh b/scripts/open-admin-uis.sh
+index 2224cfa8..c03f4e4e 100755
+--- a/scripts/open-admin-uis.sh
++++ b/scripts/open-admin-uis.sh
+@@ -150,8 +150,8 @@ echo "=== ZTLab — Mở port-forwards (auto-restart daemons) ==="
+ echo "Yêu cầu: K8s tunnel đang chạy (bash scripts/k8s-tunnel.sh up aws)"
+ echo ""
+ 
+-# Identity
+-start_pf_daemon "Keycloak"            identity   keycloak          8180  8080
++# Identity — A1: Keycloak nay ở cụm OpenStack
++start_pf_daemon "Keycloak"            identity   keycloak          8180  8080  "$OS_CONTEXT"
+ # crAPI (ứng dụng mục tiêu) — điểm vào là WAF (ModSecurity/CRS DetectionOnly, A2)
+ # đứng trước BFF. Cổng 18081 khớp redirectUri client crapi-bff. WAF proxy trong
+ # suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).

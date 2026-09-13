@@ -107,6 +107,23 @@ lần deploy kế tiếp. **Xử lý ở Phần 1.2** (đưa vào mesh, KHÔNG d
   chứng sống cho chính vấn đề Nguyên nhân 2 (nguồn sự thật chỉ phủ một nửa: ai đó sửa netpol khi
   cần, nhưng bảng mô tả trong tài liệu không ai cập nhật theo). **Xử lý ở Phần 2.3.**
 
+## Trạng thái cuối (sau Phần 1, 2026-09-13)
+
+Nhóm (c) đã đóng hết theo source code (chưa verify sống hết — xem ràng buộc dưới):
+- (c)-1 Traefik→waf: **THÁO HẲN đường Traefik**, thay bằng Istio IngressGateway
+  (`spiffe://ztlab.local/aws/edge-gateway`) → waf, mТLS thật, qua OPA thật (edge
+  `aws/edge-gateway -> aws/waf`). **Verify sống đầy đủ trên AWS** (3 kịch bản
+  cert + xác nhận X-Edge-Marker/EDGE_MARKER xoá sạch khỏi codebase).
+- (c)-2/(c)-3 bff/opa → keycloak: DestinationRule đổi DISABLE → ISTIO_MUTUAL,
+  opa (2 cluster) nay có sidecar. **Verify sống cơ chế sidecar+SPIRE trên AWS**
+  (áp dụng y hệt cho opa) nhưng **CHƯA verify được hop thật opa→keycloak** (cần
+  OpenStack).
+- (c)-4 5 pod bootstrap Admin API: đưa vào mesh bằng ServiceAccount
+  `kc-admin-setup` riêng. **CHƯA verify sống** (cần OpenStack).
+
+Không còn hop nào cố ý ở nhóm (c) theo source; nhóm (b) (L4 dữ liệu) giữ nguyên,
+liệt kê đầy đủ ở trên.
+
 ## Ràng buộc môi trường lúc thực hiện remediation này
 Cụm OpenStack (`172.10.10.191`, os-gateway) không truy cập được trong suốt phiên làm việc này
 ("No route to host" cả ping lẫn SSH) — sự cố hạ tầng đã biết trước (uplink hotspot điện thoại
