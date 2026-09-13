@@ -1,21 +1,27 @@
 """Kiểm tra policy/service-graph-crapi.yaml là nguồn sự thật duy nhất thật sự
-cho phân đoạn service-to-service của crAPI (L7 + L4).
+cho phân đoạn service-to-service của crAPI (L7 + L4 + danh tính SPIFFE).
 
-Hai bài test:
-1. File sinh ra (opa/crapi-policies/service_acl.rego,
-   k8s/crapi/network-policies/{aws,os}-pod-segmentation.yaml) khớp CHÍNH XÁC
-   với những gì generator sinh ra từ service-graph-crapi.yaml ngay lúc này —
-   nếu ai đó sửa tay 1 trong 2 phía (graph hoặc file generated) mà quên chạy
-   lại generator, test này FAIL ("chạy generator -> git diff không đổi").
+Bài test (Phần 2, remediation 2026-09 mở rộng từ bản gốc 2 bài):
+1. TOÀN BỘ artifact sinh ra (opa/crapi-policies/service_acl.rego,
+   k8s/crapi/network-policies/{aws,os}-{pod-segmentation,allow-list}.yaml,
+   scripts/spire-entries.generated.sh) khớp CHÍNH XÁC với những gì generator
+   sinh ra từ service-graph-crapi.yaml ngay lúc này — nếu ai đó sửa tay 1
+   trong 2 phía (graph hoặc file generated) mà quên chạy lại generator, test
+   này FAIL ("chạy generator -> git diff không đổi").
 2. Mọi edge nghiệp vụ (không phải l4_only, không phải cross_cluster) khai báo
    trong service-graph-crapi.yaml phải xuất hiện Ở CẢ HAI file sinh ra (L7 và
    L4) — không có cặp nào chỉ được khai báo ở 1 tầng mà quên tầng kia.
+3. Mọi workload cần danh tính mesh (spiffe != false) phải có mặt trong
+   scripts/spire-entries.generated.sh; mọi workload xuất hiện là from/to của
+   1 edge KHÔNG l4_only (tức tham gia service_acl L7 — cần OPA kiểm SVID
+   thật) không được khai `spiffe: false` — nếu không thì rego sinh ra sẽ đòi
+   `valid_svid` cho một workload không hề có SVID, tự khoá chết chính nó.
 
 LƯU Ý (đọc trước khi diễn giải test #2 là "L4 thực sự chặn"): test này chỉ
-xác nhận tính nhất quán giữa 2 FILE KHAI BÁO, không xác nhận enforcement thật
-ở hạ tầng. Trên k3s/kube-router đang dùng, NetworkPolicy sinh ra từ đây KHÔNG
-được enforce cho traffic có Istio sidecar — L7 (OPA, service_acl.rego) mới là
-lớp đang chặn thật (xem KET-QUA-CRAPI.md PHASE 4).
+xác nhận tính nhất quán giữa các FILE KHAI BÁO, không xác nhận enforcement
+thật ở hạ tầng. Trên k3s/kube-router đang dùng, NetworkPolicy sinh ra từ đây
+KHÔNG được enforce cho traffic có Istio sidecar — L7 (OPA, service_acl.rego)
+mới là lớp đang chặn thật (xem KET-QUA-CRAPI.md PHASE 4).
 
 Chạy: python3 -m pytest tests/test_service_graph_consistency.py -v
       (hoặc: python3 tests/test_service_graph_consistency.py)
@@ -31,6 +37,9 @@ GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
 REGO_OUT = REPO_ROOT / "opa" / "crapi-policies" / "service_acl.rego"
 NETPOL_AWS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "aws-pod-segmentation.yaml"
 NETPOL_OS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "os-pod-segmentation.yaml"
+ALLOWLIST_AWS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "aws-allow-list.yaml"
+ALLOWLIST_OS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "os-allow-list.yaml"
+SPIRE_ENTRIES = REPO_ROOT / "scripts" / "spire-entries.generated.sh"
 
 
 def _run_generator(script: str) -> None:
@@ -42,15 +51,19 @@ def _run_generator(script: str) -> None:
 
 
 def test_generated_files_match_source_of_truth():
-    """Chạy generator xong, nội dung file generated không đổi."""
+    """Chạy generator xong, nội dung MỌI file generated không đổi."""
     before = {
         REGO_OUT: REGO_OUT.read_text(),
         NETPOL_AWS: NETPOL_AWS.read_text(),
         NETPOL_OS: NETPOL_OS.read_text(),
+        ALLOWLIST_AWS: ALLOWLIST_AWS.read_text(),
+        ALLOWLIST_OS: ALLOWLIST_OS.read_text(),
+        SPIRE_ENTRIES: SPIRE_ENTRIES.read_text(),
     }
 
     _run_generator("gen-rego-acl.py")
     _run_generator("gen-networkpolicy.py")
+    _run_generator("gen-spire-entries.py")
 
     for path, old_content in before.items():
         new_content = path.read_text()
@@ -118,8 +131,59 @@ def test_every_business_edge_present_in_both_layers():
     assert not missing_l7, f"Thiếu ở service_acl.rego (L7): {missing_l7}"
 
 
+def _spire_registered_ids(graph: dict) -> set[str]:
+    text = SPIRE_ENTRIES.read_text()
+    ids = set()
+    for line in text.splitlines():
+        line = line.strip().strip('"')
+        if line.startswith(f'spiffe://{graph["trust_domain"]}/'):
+            ids.add(line.split("|")[0])
+    return ids
+
+
+def test_every_l7_workload_has_spire_entry_and_real_spiffe():
+    """Mọi workload tham gia edge L7 (không l4_only — tức OPA sẽ đòi valid_svid
+    cho nó) phải (a) có mặt trong scripts/spire-entries.generated.sh và (b)
+    KHÔNG được khai `spiffe: false` trong service-graph-crapi.yaml — 2 điều
+    kiện này lệch nhau nghĩa là một workload được rego yêu cầu SVID thật
+    nhưng SPIRE không hề cấp, hoặc graph tự mâu thuẫn (spiffe:false nhưng vẫn
+    đứng vai from/to của 1 edge L7)."""
+    graph = yaml.safe_load(GRAPH_FILE.read_text())
+    spire_ids = _spire_registered_ids(graph)
+    trust_domain = graph["trust_domain"]
+
+    l7_workloads = set()
+    for edge in graph["edges"]:
+        if edge.get("l4_only"):
+            continue
+        l7_workloads.add(edge["from"])
+        l7_workloads.add(edge["to"])
+
+    missing_spire = []
+    marked_no_spiffe = []
+    for w in sorted(l7_workloads):
+        spiffe_id = f"spiffe://{trust_domain}/{w}"
+        if graph["workloads"][w].get("spiffe") is False:
+            marked_no_spiffe.append(w)
+        if spiffe_id not in spire_ids:
+            missing_spire.append(w)
+
+    assert not marked_no_spiffe, (
+        f"Workload tham gia edge L7 (OPA đòi valid_svid) nhưng khai `spiffe: false`: "
+        f"{marked_no_spiffe} — service-graph-crapi.yaml tự mâu thuẫn."
+    )
+    assert not missing_spire, (
+        f"Workload tham gia edge L7 nhưng KHÔNG có entry trong "
+        f"scripts/spire-entries.generated.sh: {missing_spire} — chạy "
+        f"python3 scripts/gen-spire-entries.py rồi kiểm lại workloads: có "
+        f"'service_account' hay chưa."
+    )
+
+
 if __name__ == "__main__":
     test_generated_files_match_source_of_truth()
     print("test_generated_files_match_source_of_truth: PASS")
     test_every_business_edge_present_in_both_layers()
     print("test_every_business_edge_present_in_both_layers: PASS")
+    test_every_l7_workload_has_spire_entry_and_real_spiffe()
+    print("test_every_l7_workload_has_spire_entry_and_real_spiffe: PASS")

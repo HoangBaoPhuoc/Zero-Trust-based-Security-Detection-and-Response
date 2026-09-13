@@ -146,6 +146,15 @@ spec:
     - from:
         - podSelector:
             matchLabels:
+              app: waf
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
               app: crapi-web
       ports:
         - port: 9191

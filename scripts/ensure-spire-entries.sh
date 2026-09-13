@@ -24,9 +24,16 @@
 
 set -e
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
 OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 TIMEOUT_WAIT="${TIMEOUT_WAIT:-180}"
+
+# Danh sách workload + số lượng kỳ vọng — sinh từ policy/service-graph-crapi.yaml
+# (scripts/gen-spire-entries.py, Phần 2 remediation 2026-09). KHÔNG hardcode ở
+# đây nữa — sửa graph rồi chạy lại generator, đừng sửa file .generated.sh.
+# shellcheck source=/dev/null
+source "$ROOT_DIR/scripts/spire-entries.generated.sh"
 
 log_info()  { echo "[SPIRE-ENTRIES] $*"; }
 log_error() { echo "[SPIRE-ENTRIES][ERROR] $*" >&2; }
@@ -52,6 +59,17 @@ register_spire_entry() {
   _spire_entry_create "$ctx" \
     -spiffeID "$spiffe_id" -parentID "$parent_id" \
     -selector "k8s:ns:${ns}" -selector "k8s:sa:${sa}" -ttl 3600
+}
+
+# Đăng ký toàn bộ workload của một cluster từ mảng "<spiffe_id>:<ns>:<sa>" sinh
+# bởi gen-spire-entries.py (xem spire-entries.generated.sh).
+register_spire_entries_from_generated() {
+  local ctx="$1" parent="$2"; shift 2
+  local entry spiffe_id ns sa
+  for entry in "$@"; do
+    IFS='|' read -r spiffe_id ns sa <<<"$entry"
+    register_spire_entry "$ctx" "$spiffe_id" "$parent" "$ns" "$sa"
+  done
 }
 
 register_node_alias() {
@@ -104,25 +122,20 @@ log_info "Registering node aliases..."
 register_node_alias "$AWS_CONTEXT" "$AWS_PARENT" "aws-k3s"
 register_node_alias "$OS_CONTEXT" "$OS_PARENT" "os-k3s"
 
-# crAPI target app (ns crapi) — KE-HOACH-CRAPI.md §2. SA-based selector.
+# crAPI target app — danh sách + số lượng kỳ vọng đều sinh từ
+# policy/service-graph-crapi.yaml (scripts/gen-spire-entries.py). SA-based selector.
 log_info "Registering crAPI workload SVID entries..."
-register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/waf" "$AWS_PARENT" crapi waf
-register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/bff" "$AWS_PARENT" crapi bff
-register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-web" "$AWS_PARENT" crapi crapi-web
-register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-community" "$AWS_PARENT" crapi crapi-community
-register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/crapi-workshop" "$AWS_PARENT" crapi crapi-workshop
-# A2: bff PeerAuthentication STRICT — Prometheus scrapes bff:8080/metrics directly,
-# needs its own SVID or that scrape target goes down (k8s/monitoring/prometheus.yaml).
-register_spire_entry "$AWS_CONTEXT" "spiffe://ztlab.local/aws/prometheus" "$AWS_PARENT" monitoring prometheus
-register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-identity" "$OS_PARENT" crapi crapi-identity
-register_spire_entry "$OS_CONTEXT" "spiffe://ztlab.local/openstack/crapi-seed" "$OS_PARENT" crapi crapi-seed
+register_spire_entries_from_generated "$AWS_CONTEXT" "$AWS_PARENT" "${AWS_SPIRE_WORKLOADS[@]}"
+register_spire_entries_from_generated "$OS_CONTEXT" "$OS_PARENT" "${OPENSTACK_SPIRE_WORKLOADS[@]}"
 
-# Deploy-time gate. crAPI: AWS 5 (waf+bff+web+community+workshop) + OS 2
-# (identity+seed). Entry idempotent — an toàn khi pod chưa có.
+# Deploy-time gate. Entry idempotent — an toàn khi pod chưa có. Số lượng kỳ
+# vọng đến từ CÙNG file generated ở trên nên không thể lệch với danh sách vừa
+# đăng ký (trước bản sửa Phần 2: comment/log/check gate là 3 con số hardcode
+# khác nhau, từng lệch nhau mà không ai nhận ra vì gate vẫn pass tình cờ).
 aws_count=$(count_entries_matching "$AWS_CONTEXT" "spiffe://ztlab.local/aws/")
 os_count=$(count_entries_matching "$OS_CONTEXT" "spiffe://ztlab.local/openstack/")
-log_info "Verified entries present: AWS=$aws_count (expect 6), OpenStack=$os_count (expect 2)"
-if [ "$aws_count" -lt 5 ] || [ "$os_count" -lt 2 ]; then
+log_info "Verified entries present: AWS=$aws_count (expect $AWS_EXPECTED_COUNT), OpenStack=$os_count (expect $OPENSTACK_EXPECTED_COUNT)"
+if [ "$aws_count" -lt "$AWS_EXPECTED_COUNT" ] || [ "$os_count" -lt "$OPENSTACK_EXPECTED_COUNT" ]; then
   log_error "SPIRE registration entries missing after registration attempt — spire-server datastore may be empty/corrupted. Check 'kubectl -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry show -socketPath /tmp/spire-server/private/api.sock' on both clusters."
   exit 1
 fi

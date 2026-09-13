@@ -12,6 +12,14 @@
 
 trust_domain: ztlab.local
 
+# Bảng cluster — dùng để sinh danh sách SPIRE entry theo đúng kubeconfig context
+# và để sinh ipBlock cross-cloud trong netpol baseline (Phần 2, remediation
+# 2026-09). "node_parent" khớp entry alias sinh bởi scripts/ensure-spire-entries.sh
+# (register_node_alias) — không đổi tuỳ tiện, mọi workload entry parent vào đây.
+clusters:
+  aws:       { context: ctx-aws,       node_parent: "spiffe://ztlab.local/nodes/aws-k3s",  private_cidr: 10.10.1.0/24 }
+  openstack: { context: ctx-openstack, node_parent: "spiffe://ztlab.local/nodes/os-k3s",   private_cidr: 192.168.101.0/24 }
+
 workloads:
   aws/waf:              { cluster: aws, namespace: crapi, service_account: waf }
   aws/bff:              { cluster: aws, namespace: crapi, service_account: bff }
@@ -28,6 +36,13 @@ workloads:
   # A1 — Keycloak + keycloak-db chuyển sang OpenStack (ns identity). Không sidecar,
   # không qua OPA service_acl; AWS gọi cross-cloud tới NodePort 30091.
   openstack/keycloak:       { cluster: openstack, namespace: identity, app_label: keycloak, spiffe: false }
+  # spire_only: cần entry SPIRE (workload có sidecar, cần SVID) nhưng KHÔNG tham
+  # gia edges/service_acl/pod-segmentation — không phải hop nghiệp vụ, chỉ cần
+  # danh tính. aws/prometheus: scrape nhiều target qua Prometheus Operator/manual
+  # target, không mô hình hoá như 1 edge cố định. openstack/crapi-seed: Job seed
+  # 1 lần, không có "địa chỉ ổn định" để làm nguồn/đích edge.
+  aws/prometheus:       { cluster: aws,       namespace: monitoring, service_account: prometheus, spire_only: true }
+  openstack/crapi-seed: { cluster: openstack, namespace: crapi,      service_account: crapi-seed,  spire_only: true }
 
 edges:
   # ── Biên: Traefik → WAF (ModSecurity/CRS DetectionOnly) → bff ─────────────
@@ -49,6 +64,7 @@ edges:
   - from: aws/bff
     to: openstack/crapi-identity
     cross_cluster: true
+    l4_ports: [30090]
     rules:
       - { method: GET,    paths: ["/identity/api", "/identity/health_check"] }
       - { method: POST,   paths: ["/identity/api"] }
@@ -80,6 +96,7 @@ edges:
   - from: aws/crapi-community
     to: openstack/crapi-identity
     cross_cluster: true
+    l4_ports: [30090]
     rules:
       - { method: POST, paths: ["/identity/api/auth/verify"] }
       - { method: GET,  paths: ["/identity/health_check"] }
@@ -87,6 +104,7 @@ edges:
   - from: aws/crapi-workshop
     to: openstack/crapi-identity
     cross_cluster: true
+    l4_ports: [30090]
     rules:
       - { method: POST, paths: ["/identity/api/auth/verify"] }
       - { method: GET,  paths: ["/identity/health_check"] }
@@ -111,7 +129,72 @@ edges:
 
   # ── OPA ext_authz — mọi workload nghiệp vụ trong cluster đó ─────────────
   - { from: aws/bff,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+  - { from: aws/waf,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
   - { from: aws/crapi-web,       to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
   - { from: aws/crapi-community, to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
   - { from: aws/crapi-workshop,  to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
   - { from: openstack/crapi-identity, to: openstack/opa, l4_only: true, l4_ports: [9191, 8181] }
+
+# ── Netpol baseline (Phần 2, remediation 2026-09) ───────────────────────────
+# Phần "hạ tầng thuần" của {aws,os}-allow-list.yaml (Traefik ingress, Prometheus
+# scrape, healthcheck cronjob, DNS, Loki, istiod) không phải edge service-to-
+# service nên giữ khai báo tĩnh ở đây (schema gần giống NetworkPolicy gốc, sinh
+# gần như nguyên văn). Phần ipBlock cross-cloud (hay trôi nhất — chính là bug
+# Keycloak A1 đã xảy ra) được TÍNH ra từ các edge `cross_cluster: true` ở trên,
+# KHÔNG khai tay ở đây nữa — generator gộp l4_ports của mọi edge cross_cluster
+# theo hướng (cluster nguồn -> cluster đích) rồi phát ipBlock egress tương ứng.
+netpol_baseline:
+  aws:
+    ingress:
+      - from_ns: kube-system
+        ports: [8080, 15006]
+        comment: "Traefik (kube-system) -> waf :8080 (A2 edge) -> bff :8080"
+      - from_ns: monitoring
+        ports: [8080, 15006, 8181]
+        comment: "Prometheus scrape"
+      - from_ns: spire
+        ports: [8181]
+        comment: "security-healthcheck CronJob -> opa :8181"
+      - from_ns: crapi
+        ports: []
+        comment: "noi bo ns crapi (podSelector {} nen bat ky pod crapi -> pod crapi)"
+    egress:
+      - to_ns: kube-system
+        ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+        comment: DNS
+      - to_ns: crapi
+        ports: [80, 8000, 8087, 8181, 9191, 6379, 27017, 15006]
+        comment: "noi bo crapi (app + DB + opa + mTLS)"
+      - to_ns: plg-stack
+        ports: [3100]
+        comment: "bff audit -> Loki"
+      - to_ns: istio-system
+        ports: [15012]
+        comment: "istio-proxy -> istiod (CA + xDS)"
+  openstack:
+    ingress:
+      - from_cidrs: [10.10.1.0/24, 10.10.0.0/24, 10.200.0.0/24, 10.42.0.0/16, 192.168.101.0/24]
+        ports: [8080, 5432, 15006, 8181]
+        comment: "cross-cloud AWS k3s nodes + pod CIDR -> identity/postgres NodePort"
+      - from_ns: monitoring
+        ports: [8080, 15006]
+        comment: "Prometheus scrape"
+      - from_ns: spire
+        ports: [8181]
+        comment: "security-healthcheck -> opa"
+      - from_ns: crapi
+        ports: []
+        comment: "noi bo ns crapi"
+    egress:
+      - to_ns: kube-system
+        ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
+        comment: DNS
+      - to_ns: crapi
+        ports: [5432, 1025, 8025, 8181, 9191, 15006]
+        comment: "identity -> postgresdb/mailhog/opa noi bo"
+      - to_ns: istio-system
+        ports: [15012]
+        comment: "istio-proxy -> istiod"
+      - to_cidrs: ["10.10.10.1/32", "172.10.10.1/32"]
+        ports: [13099]
+        comment: "Loki relay bridge (deployer socat)"
