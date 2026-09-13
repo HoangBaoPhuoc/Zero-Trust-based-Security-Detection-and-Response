@@ -1,5 +1,17 @@
-# NetworkPolicy L4 baseline — ns crapi, cluster OpenStack. Mẫu
-# k8s/financial/network-policies/os-allow-list.yaml.
+# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
+# (netpol_baseline: + edge cross_cluster). Sinh lại: python3 scripts/gen-networkpolicy.py
+#
+# 2 phần: (1) hạ tầng thuần (Traefik/Prometheus/healthcheck/DNS/istiod/Loki) —
+# khai tĩnh trong netpol_baseline: của service-graph, không phải edge service-
+# to-service. (2) ipBlock cross-cloud — TÍNH RA từ mọi edge cross_cluster: true
+# (gộp l4_ports theo cặp cluster nguồn->đích) để không còn trôi khi một
+# workload đổi cloud (đúng bug đã xảy ra với Keycloak ở A1).
+#
+# LƯU Ý (như pod-segmentation): NetworkPolicy này hiện KHÔNG được kube-router
+# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — L7 (OPA
+# service_acl) là lớp phân đoạn thật. File này đúng về khai báo/ý định + có
+# hiệu lực cho path không-sidecar (opa:8181, DNS, cross-cloud ipBlock).
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -10,9 +22,7 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   ingress:
-    # Cross-cloud: AWS k3s nodes + pod CIDR (kube-proxy SNAT cho NodePort
-    # cross-node) → crapi-identity :8080 (NodePort 30090 DNAT về 8080) +
-    # postgresdb :5432 (NodePort 30432). 15006 = Istio mТLS inbound.
+    # cross-cloud AWS k3s nodes + pod CIDR -> identity/postgres NodePort
     - from:
         - ipBlock: { cidr: 10.10.1.0/24 }
         - ipBlock: { cidr: 10.10.0.0/24 }
@@ -24,31 +34,32 @@ spec:
         - { port: 5432, protocol: TCP }
         - { port: 15006, protocol: TCP }
         - { port: 8181, protocol: TCP }
-    # Prometheus (monitoring)
+    # Prometheus scrape
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: monitoring }
       ports:
         - { port: 8080, protocol: TCP }
         - { port: 15006, protocol: TCP }
-    # security-healthcheck (spire ns) → opa :8181
+    # security-healthcheck -> opa
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: spire }
       ports:
         - { port: 8181, protocol: TCP }
-    # nội bộ ns crapi
+    # noi bo ns crapi
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: crapi }
   egress:
+    # DNS
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: kube-system }
       ports:
         - { port: 53, protocol: UDP }
         - { port: 53, protocol: TCP }
-    # nội bộ: identity → postgresdb :5432, → mailhog :1025 (SMTP), → opa :9191/:8181
+    # identity -> postgresdb/mailhog/opa noi bo
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: crapi }
@@ -59,15 +70,20 @@ spec:
         - { port: 8181, protocol: TCP }
         - { port: 9191, protocol: TCP }
         - { port: 15006, protocol: TCP }
-    # istio-proxy → istiod :15012
+    # istio-proxy -> istiod
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: istio-system }
       ports:
         - { port: 15012, protocol: TCP }
-    # Loki relay cross-cluster (deployer bridge, như finance)
+    # Loki relay bridge (deployer socat)
     - to:
         - ipBlock: { cidr: 10.10.10.1/32 }
         - ipBlock: { cidr: 172.10.10.1/32 }
       ports:
         - { port: 13099, protocol: TCP }
+    # cross-cloud -> aws (openstack/crapi-identity->aws/mailhog)
+    - to:
+        - ipBlock: { cidr: 10.10.1.0/24 }
+      ports:
+        - { port: 31025, protocol: TCP }

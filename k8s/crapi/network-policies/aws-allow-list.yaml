@@ -1,10 +1,17 @@
-# NetworkPolicy L4 baseline — ns crapi, cluster AWS. Mẫu
-# k8s/financial/network-policies/aws-allow-list.yaml.
+# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
+# (netpol_baseline: + edge cross_cluster). Sinh lại: python3 scripts/gen-networkpolicy.py
 #
-# LƯU Ý (như finance): k3s embedded netpol controller KHÔNG enforce đầy đủ cho
-# traffic đi qua Istio sidecar trên hạ tầng này — lớp phân đoạn THẬT đang chạy
-# là L7 (opa/crapi-policies/service_acl). File này đúng về khai báo/ý định +
-# enforce được cho path không-sidecar (opa:8181, DNS, cross-cloud ipBlock).
+# 2 phần: (1) hạ tầng thuần (Traefik/Prometheus/healthcheck/DNS/istiod/Loki) —
+# khai tĩnh trong netpol_baseline: của service-graph, không phải edge service-
+# to-service. (2) ipBlock cross-cloud — TÍNH RA từ mọi edge cross_cluster: true
+# (gộp l4_ports theo cặp cluster nguồn->đích) để không còn trôi khi một
+# workload đổi cloud (đúng bug đã xảy ra với Keycloak ở A1).
+#
+# LƯU Ý (như pod-segmentation): NetworkPolicy này hiện KHÔNG được kube-router
+# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — L7 (OPA
+# service_acl) là lớp phân đoạn thật. File này đúng về khai báo/ý định + có
+# hiệu lực cho path không-sidecar (opa:8181, DNS, cross-cloud ipBlock).
+
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -15,14 +22,14 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   ingress:
-    # Traefik (kube-system) → waf :8080 (A2 edge) → bff :8080
+    # Traefik (kube-system) -> waf :8080 (A2 edge) -> bff :8080
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: kube-system }
       ports:
         - { port: 8080, protocol: TCP }
         - { port: 15006, protocol: TCP }
-    # Prometheus (monitoring) scrape
+    # Prometheus scrape
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: monitoring }
@@ -30,15 +37,13 @@ spec:
         - { port: 8080, protocol: TCP }
         - { port: 15006, protocol: TCP }
         - { port: 8181, protocol: TCP }
-    # security-healthcheck CronJob (spire ns) → opa :8181
+    # security-healthcheck CronJob -> opa :8181
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: spire }
       ports:
         - { port: 8181, protocol: TCP }
-    # (A4: dropped plg-stack → redis:6379 — soar-engine/security-scorer removed;
-    # incident-analyzer reads only from Loki.)
-    # nội bộ ns crapi (podSelector {} nghĩa là bất kỳ pod crapi → pod crapi)
+    # noi bo ns crapi (podSelector {} nen bat ky pod crapi -> pod crapi)
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: crapi }
@@ -50,7 +55,7 @@ spec:
       ports:
         - { port: 53, protocol: UDP }
         - { port: 53, protocol: TCP }
-    # nội bộ crapi (8087/8000/80 app, 5432/27017/6379 DB, 9191/8181 opa, 15006 mТLS)
+    # noi bo crapi (app + DB + opa + mTLS)
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: crapi }
@@ -63,25 +68,22 @@ spec:
         - { port: 6379, protocol: TCP }
         - { port: 27017, protocol: TCP }
         - { port: 15006, protocol: TCP }
-    # A1: Keycloak chuyển sang OpenStack — bff/opa → Keycloak nay đi cross-cloud
-    # (ipBlock 192.168.101.0/24:30091 bên dưới), không còn hop tới ns identity AWS.
-    # bff audit + (tương lai) log → Loki (plg-stack) :3100
+    # bff audit -> Loki
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: plg-stack }
       ports:
         - { port: 3100, protocol: TCP }
-    # Cross-cloud: AWS crapi → OpenStack NodePort qua WireGuard
-    #   30090 = crapi-identity, 30432 = postgresdb, 30091 = keycloak (A1)
-    - to:
-        - ipBlock: { cidr: 192.168.101.0/24 }
-      ports:
-        - { port: 30090, protocol: TCP }
-        - { port: 30432, protocol: TCP }
-        - { port: 30091, protocol: TCP }
-    # istio-proxy sidecar → istiod (CA + xDS) :15012
+    # istio-proxy -> istiod (CA + xDS)
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: istio-system }
       ports:
         - { port: 15012, protocol: TCP }
+    # cross-cloud -> openstack (aws/bff->openstack/crapi-identity, aws/bff->openstack/keycloak, aws/crapi-community->openstack/crapi-identity, aws/crapi-community->openstack/postgresdb, aws/crapi-workshop->openstack/crapi-identity, aws/crapi-workshop->openstack/postgresdb, aws/opa->openstack/keycloak)
+    - to:
+        - ipBlock: { cidr: 192.168.101.0/24 }
+      ports:
+        - { port: 30090, protocol: TCP }
+        - { port: 30091, protocol: TCP }
+        - { port: 30432, protocol: TCP }
