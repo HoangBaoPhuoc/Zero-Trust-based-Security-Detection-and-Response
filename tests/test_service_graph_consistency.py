@@ -40,6 +40,7 @@ NETPOL_OS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "os-pod-segmentat
 ALLOWLIST_AWS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "aws-allow-list.yaml"
 ALLOWLIST_OS = REPO_ROOT / "k8s" / "crapi" / "network-policies" / "os-allow-list.yaml"
 SPIRE_ENTRIES = REPO_ROOT / "scripts" / "spire-entries.generated.sh"
+DOCS_TABLES = REPO_ROOT / "docs" / "GENERATED-SERVICE-GRAPH.md"
 
 
 def _run_generator(script: str) -> None:
@@ -59,11 +60,13 @@ def test_generated_files_match_source_of_truth():
         ALLOWLIST_AWS: ALLOWLIST_AWS.read_text(),
         ALLOWLIST_OS: ALLOWLIST_OS.read_text(),
         SPIRE_ENTRIES: SPIRE_ENTRIES.read_text(),
+        DOCS_TABLES: DOCS_TABLES.read_text(),
     }
 
     _run_generator("gen-rego-acl.py")
     _run_generator("gen-networkpolicy.py")
     _run_generator("gen-spire-entries.py")
+    _run_generator("gen-docs-tables.py")
 
     for path, old_content in before.items():
         new_content = path.read_text()
