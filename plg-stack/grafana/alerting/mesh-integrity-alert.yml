@@ -1,0 +1,59 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: mesh-integrity
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: mesh-integrity-svid-missing
+        title: "Mesh Integrity — request tới crapi không có SVID (khả năng bỏ qua mТLS/OPA)"
+        for: 1m
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'sum(count_over_time({job="envoy-access", namespace="crapi"} | json | method != "" | svid = "" [5m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        # Phần 3.1 (remediation 2026-09) — A3 phát hiện bug WAF Host-header
+        # (waf.yaml, "BUG FOUND during A3") khiến request rơi vào
+        # PassthroughCluster: bỏ qua HOÀN TOÀN mТLS + OPA (không SVID, không
+        # source_principal) MÀ KHÔNG sinh ra một dòng decision log nào — nhìn
+        # y hệt hệ thống đang khoẻ (chỉ dashboard panel "SVID present vs
+        # svid:null" ở crapi-attack-surface.json ghi nhận, chưa có ALERT).
+        # Verify sống 2026-09-13: tái hiện lại bug này tạm thời (revert
+        # waf-proxy-backend-conf về `proxy_set_header Host $host`) sinh đúng
+        # log envoy-access {method:"GET", svid:null, upstream:"<ClusterIP>"}
+        # VÀ xác nhận zero decision log nào khớp trace_id đó — LogQL trên bắt
+        # đúng biểu hiện, KHÔNG cần chờ có entry trong opa-decisions (vì bug
+        # thật sự thì không hề có entry đó).
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "Có request HTTP thật tới workload ns crapi mà không mang SVID — nghi ngờ mТLS/OPA bị bỏ qua (vd PassthroughCluster do Host header sai)"
+          description: |
+            KHÔNG phải dấu hiệu bị tấn công thành công — đây là lỗ hổng CƠ CHẾ GÁC
+            (mТLS/OPA có thể đã bị bỏ qua hoàn toàn cho các request này, và vì vậy
+            KHÔNG có quyết định OPA nào được ghi lại để đối chiếu).
+            Kiểm tra ngay (Loki, job=envoy-access, namespace=crapi, svid rỗng):
+              logcli query '{job="envoy-access", namespace="crapi"} | json | method != "" | svid = ""' --since=10m
+            Nghi vấn thường gặp: DestinationRule bị bỏ qua do Envoy route theo
+            Host/:authority không khớp alias nào (rơi vào allow_any/PassthroughCluster
+            — xem k8s/crapi/waf.yaml "BUG FOUND during A3" cho một ví dụ thật đã xảy ra).
+            recommended_response: kiểm cấu hình proxy (Host header, DestinationRule,
+            AuthorizationPolicy) của workload xuất hiện trong log trên; KHÔNG tự động
+            xử lý gì trên cụm.
+          recommended_response: "Kiểm cấu hình proxy (Host header/DestinationRule/AuthorizationPolicy) của workload trong log — không có hành động tự động nào."
+        labels:
+          severity: critical
+          category: infrastructure
+          component: mesh-integrity

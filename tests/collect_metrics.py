@@ -1,9 +1,20 @@
 #!/usr/bin/env python3
 """ZTLab Security Metrics Collector.
 
-    ⚠️  CHƯA CẬP NHẬT CHO crAPI (2026-09-10). Script còn tham chiếu Keycloak
-    client `api-gateway` + namespace `financial` của app cũ. Cần đổi sang luồng
-    login BFF (tests/lib/crapi_common.sh::crapi_login) + ns `crapi` trước khi chạy.
+    ⚠️  VẪN CHƯA CHẠY ĐƯỢC VỚI crAPI (kiểm lại 2026-09-13, Phần 3.3 remediation).
+    Khác với tests/perf_overhead.py (đã sửa xong, chạy được) — script NÀY không
+    chỉ cần đổi tên. Nó gọi thẳng API của `ai-analyzer`/`soar-engine`
+    (`/analyze`, `/pending`, `/pending/{id}/approve`) để đo MTTR bằng cách TỰ
+    APPROVE một playbook — nhưng A4 (KEHOACH-THAYDOI-HETHONG.md) đã XOÁ HẲN
+    3 service đó và gộp thành `incident-analyzer` với API hoàn toàn khác
+    (`/grafana-webhook`, `/evidence`, `/evidence/{id}/risk-score`) và — quan
+    trọng hơn — KHÔNG còn khái niệm "approve playbook" nữa (A4: không có hành
+    động thực thi tự động nào). MTTR như định nghĩa cũ ("thời gian từ AI verdict
+    tới SOAR playbook thực thi") không còn ý nghĩa trong kiến trúc hiện tại.
+    Cần THIẾT KẾ LẠI (không phải sửa tên) trước khi chạy: MTTD có thể đo qua
+    thời điểm evidence bundle xuất hiện ở incident-analyzer; MTTR nên bỏ hẳn
+    hoặc định nghĩa lại thành "thời gian tới khi admin nhận được email bằng
+    chứng". Chưa làm trong lần sửa này — xem BAOCAO-SUA-GOC-2026-09-13.md.
 
 Measures four key security performance indicators:
   MTTD  — Mean Time To Detect     (seconds from attack log injection to AI verdict)
