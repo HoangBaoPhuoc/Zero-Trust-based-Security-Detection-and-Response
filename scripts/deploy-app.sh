@@ -273,7 +273,7 @@ deploy_openldap_and_federation() {
   # already-imported realm. Register it live via Admin API too so it exists
   # even when Keycloak itself wasn't redeployed this run.
   kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
 import urllib.request, json, urllib.parse, urllib.error
@@ -331,7 +331,7 @@ deploy_audience_mapper() {
   # then silently lost on the next from-scratch deploy-all.sh because it lived
   # nowhere else). Register it live too so every deploy ends up with it.
   kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
 import urllib.request, json, urllib.parse
@@ -387,7 +387,7 @@ deploy_stepup_flow() {
   # Admin API in a prior session and lost on the next from-scratch deploy (see
   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
   kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
 import urllib.request, json, urllib.parse
@@ -517,7 +517,7 @@ deploy_aws_saml_federation() {
   # and corrupt a captured file — use a plain pod + exec + explicit delete
   # instead of --rm to keep the captured metadata byte-exact.
   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --command -- sh -c "sleep 30" >/dev/null
+  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 30" >/dev/null
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true

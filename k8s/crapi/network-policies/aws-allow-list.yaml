@@ -22,10 +22,17 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   ingress:
-    # Traefik (kube-system) -> waf :8080 (A2 edge) -> bff :8080
+    # Traefik (kube-system) -> waf :8080 (bien CU, giu song song toi khi bien MOI verify xong - Phan 1.3)
     - from:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { port: 8080, protocol: TCP }
+        - { port: 15006, protocol: TCP }
+    # Istio IngressGateway (istio-system) -> waf :8080 (bien MOI, Phan 1.3) - xac nhan song 2026-09-13: thieu rule nay lam ECONNREFUSED tu gateway pod, kube-router THAT SU enforce netpol namespace-scoped cho traffic nay (khac mo ta chung 'khong enforce cho sidecar' trong tai lieu - do la ve L7/rule khac, khong phai default-deny theo namespace)
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-system }
       ports:
         - { port: 8080, protocol: TCP }
         - { port: 15006, protocol: TCP }

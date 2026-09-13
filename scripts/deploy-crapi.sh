@@ -117,7 +117,7 @@ configure_crapi_keycloak() {
   admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
   kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
 import urllib.request, json, urllib.parse
@@ -140,11 +140,14 @@ for name,desc in [('crapi-user','crAPI user'),('crapi-mechanic','crAPI mechanic'
     if name not in roles:
         call('POST','/admin/realms/%s/roles'%REALM,{'name':name,'description':desc}); print('role +',name)
 
-# A3: điểm vào HTTPS/mTLS (Traefik websecure) thay cổng HTTP cũ (8080/18081) —
-# giữ luôn các entry HTTP cũ cho tương thích ngược debug (bff bypass :18083 vẫn
-# HTTP). 18443 = tunnel dev (scripts/open-admin-uis.sh); production/NodePort đi
-# qua cổng 443 mặc định nên không cần khai báo cổng riêng.
-REDIR=['https://crapi.ztlab.local/*','https://crapi.ztlab.local:18443/*','http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
+# Phần 1.3 (remediation 2026-09): điểm vào HTTPS/mTLS nay là Istio
+# IngressGateway (không còn Traefik websecure — xem k8s/crapi/edge-gateway.yaml)
+# — giữ luôn các entry HTTP cũ cho tương thích ngược debug (bff bypass :18081/
+# :18083 vẫn HTTP, xem KIEM-KE-HOP.md Phần 1.4 — các cổng này đòi hỏi kubeconfig
+# của cụm, không phải đường vào Zero-Trust cho thiết bị thật). 18444 = tunnel
+# dev cho Gateway (scripts/open-admin-uis.sh); production/NodePort đi qua cổng
+# 8443 mặc định nên không cần khai báo cổng riêng.
+REDIR=['https://crapi.ztlab.local/*','https://crapi.ztlab.local:18444/*','http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
 for cid in ('crapi-bff','crapi-bff-stepup'):
     ex=call('GET','/admin/realms/%s/clients?clientId=%s'%(REALM,cid)) or []
     if ex:
@@ -185,7 +188,6 @@ deploy_bff() {
   step "BFF (edge PEP + Keycloak) + WAF (ModSecurity/CRS DetectionOnly)"
   kaws apply -f "$CRAPI_DIR/bff.yaml"
   [[ -f "$CRAPI_DIR/waf.yaml" ]] && kaws apply -f "$CRAPI_DIR/waf.yaml"
-  kaws apply -f "$CRAPI_DIR/ingress-aws.yaml"
   kos apply -f "$CRAPI_DIR/ingress-os.yaml"
   wait_rollout "$AWS_CONTEXT" crapi deployment/bff 240s
   [[ -f "$CRAPI_DIR/waf.yaml" ]] && wait_rollout "$AWS_CONTEXT" crapi deployment/waf 240s
@@ -224,7 +226,13 @@ deploy_mesh_policies() {
   step "Istio mesh policies (PeerAuth + DestinationRule + AuthorizationPolicy→OPA)"
   kaws apply -f "$CRAPI_DIR/istio-policies.yaml"
   kos  apply -f "$CRAPI_DIR/istio-policies.yaml"
-  ok "istio-policies"
+  # Phần 1.3 (remediation 2026-09) — biên vào mesh thật, thay Traefik->waf.
+  # Cần chạy SAU reinstall_istio_for_crapi_provider (istio-ingressgateway đã
+  # tồn tại, đọc secret edge-gateway-tls do provision_device_ca tạo).
+  kaws apply -f "$CRAPI_DIR/edge-gateway.yaml"
+  kaws apply -f "$REPO_ROOT/k8s/istio/edge-gateway-cert-header.yaml"
+  kaws apply -f "$CRAPI_DIR/waf-strip-forged-cert-header.yaml"
+  ok "istio-policies + edge-gateway"
 }
 
 register_spire() {

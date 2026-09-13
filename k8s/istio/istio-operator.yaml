@@ -59,3 +59,50 @@ spec:
         envoyExtAuthzGrpc:
           service: opa-service.crapi.svc.cluster.local
           port: "9191"
+  # Phần 1.3 (remediation 2026-09) — biên vào mesh thật (thay Traefik->waf,
+  # hop chưa bao giờ có source_principal — xem KIEM-KE-HOP.md nhóm (c)-1).
+  # Chỉ bật trên AWS (nơi crAPI expose ra ngoài); OpenStack không cần
+  # ingressgateway crAPI. Service type ClusterIP — lab không có cloud LB,
+  # truy cập qua kubectl port-forward giống mọi UI khác (scripts/open-admin-uis.sh),
+  # cổng MỚI (8443) độc lập với Traefik :18443 hiện có (chạy song song, xem A3
+  # cũ + Phần 1.3 mới trong KEHOACH-THAYDOI-HETHONG.md — không tháo đường cũ
+  # trước khi đường mới verify xong cả 3 kịch bản cert).
+  components:
+    ingressGateways:
+      - name: istio-ingressgateway
+        namespace: istio-system
+        enabled: true
+        label:
+          app: istio-ingressgateway
+          istio: ingressgateway
+        k8s:
+          service:
+            type: ClusterIP
+            ports:
+              - name: https-device-mtls
+                port: 8443
+                targetPort: 8443
+          # Gateway pod nhận SPIFFE thật từ SPIRE, giống mọi workload khác
+          # (bff/waf) — nhưng KHÔNG đi qua sidecar-injection webhook (gateway
+          # pod render trực tiếp từ chart ingressGateways, không phải pod app
+          # được inject) nên `sidecar.istio.io/userVolume` annotation (dùng
+          # được cho bff/waf) KHÔNG có tác dụng ở đây — verify sống 2026-09-13:
+          # thiếu overlay này, istio-proxy log "Workload SDS socket not found.
+          # Starting Istio SDS Server" (rơi về cert tự ký của istiod, KHÔNG
+          # phải SPIRE) dù có podAnnotations. Dùng k8s.overlays (strategic
+          # patch vào chính Deployment) để mount đúng socket path.
+          podAnnotations:
+            spiffe.io/spiffeid: "spiffe://ztlab.local/aws/edge-gateway"
+          overlays:
+            - apiVersion: apps/v1
+              kind: Deployment
+              name: istio-ingressgateway
+              patches:
+                - path: spec.template.spec.volumes[100]
+                  value:
+                    name: spire-workload-socket
+                    hostPath: { path: /run/spire/sockets/agent.sock, type: Socket }
+                - path: spec.template.spec.containers.[name:istio-proxy].volumeMounts[100]
+                  value:
+                    name: spire-workload-socket
+                    mountPath: /var/run/secrets/workload-spiffe-uds/socket

@@ -194,21 +194,14 @@ public_path if {
   some p in ["/auth/start", "/auth/callback", "/auth/logout", "/login", "/kc"]
   startswith(path, p)
 }
-# waf's OWN inbound hop (Traefik -> waf) can NEVER have a SPIFFE source_principal
-# — Traefik sits outside the mesh by design, so internal_service_request/valid_svid
-# is structurally unreachable here regardless of path. Real authz for these
-# requests happens one hop later (waf -> bff, real mTLS SVID both sides) via
-# internal_service_request; this rule only lets waf itself pass the request on.
-# Gated on the same shared edge-marker secret Traefik stamps and BFF already
-# trusts (RÀNG BUỘC #5) so a pod calling waf directly (no marker) still can't
-# forge this — without it, every non-public_path request would 403 at waf
-# before ever reaching bff's real check.
-public_path if {
-  source_principal == ""
-  destination_principal == ""
-  headers["x-edge-marker"] == opa.runtime().env.EDGE_MARKER
-  opa.runtime().env.EDGE_MARKER != ""
-}
+# Phần 1.3 (remediation 2026-09) — biên Traefik→waf (không SPIFFE, dựa vào
+# X-Edge-Marker) đã bị THÁO BỎ. Biên mới là Istio IngressGateway
+# (spiffe://ztlab.local/aws/edge-gateway, k8s/crapi/edge-gateway.yaml) →
+# waf, hop này có source_principal THẬT và được service_acl (generated)
+# cho phép qua edge `aws/edge-gateway -> aws/waf` — internal_service_request
+# ở dưới xử lý hop này như mọi hop mТLS khác, không cần rule public_path
+# riêng nào nữa. (Không còn X-Edge-Marker/EDGE_MARKER ở đâu trong codebase.)
+
 # crapi-web static — bff → crapi-web GET
 public_path if {
   method in ["GET", "HEAD"]

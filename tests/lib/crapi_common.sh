@@ -16,13 +16,14 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$LIB_DIR/../.." && pwd)"
 CA_DIR="$REPO_ROOT/deploy/vendor/device-ca"
 
-# A3 (KEHOACH-THAYDOI-HETHONG.md): điểm vào crAPI nay là Traefik biên với
-# client-cert mTLS bắt buộc (k8s/crapi/edge-tls.yaml) — không còn cổng HTTP
-# trần. Tunnel BFF_URL trỏ thẳng svc/traefik (entrypoint websecure, xem
-# scripts/open-admin-uis.sh "crAPI (Traefik mTLS)"), --resolve để SNI/Host
-# khớp Host(`crapi.ztlab.local`) dù cổng cục bộ khác nhau.
+# Phần 1.3 (remediation 2026-09): điểm vào crAPI nay là Istio IngressGateway
+# biên với client-cert mTLS bắt buộc (k8s/crapi/edge-gateway.yaml) — không
+# còn Traefik/cổng HTTP trần. Tunnel BFF_URL trỏ thẳng
+# svc/istio-ingressgateway (xem scripts/open-admin-uis.sh "crAPI (Gateway
+# mTLS)"), --resolve để SNI/Host khớp Host(`crapi.ztlab.local`) dù cổng cục
+# bộ khác nhau.
 CRAPI_HOST="${CRAPI_HOST:-crapi.ztlab.local}"
-BFF_URL="${BFF_URL:-https://$CRAPI_HOST:18443}"
+BFF_URL="${BFF_URL:-https://$CRAPI_HOST:18444}"
 _BFF_TUNNEL_PORT="${BFF_URL##*:}"
 KUBE_AWS="${KUBE_AWS:-ctx-aws}"
 KUBE_OS="${KUBE_OS:-ctx-openstack}"
@@ -57,7 +58,7 @@ log()  { printf '[%s] %s\n'       "$_SC" "$*"; }
 pass() { printf '[%s] PASS: %s\n' "$_SC" "$*"; }
 fail() { printf '[%s] FAIL: %s\n' "$_SC" "$*" >&2; exit 1; }
 
-# preflight: Device CA fixtures + BFF reachable qua Traefik mTLS
+# preflight: Device CA fixtures + BFF reachable qua Istio Gateway mTLS
 crapi_preflight() {
   _ensure_device_cert test-compliant compliant
   _ensure_device_cert test-noncompliant non-compliant

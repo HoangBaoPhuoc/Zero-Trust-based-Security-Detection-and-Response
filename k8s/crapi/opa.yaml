@@ -28,7 +28,22 @@ spec:
     metadata:
       labels: { app: opa }
       annotations:
-        sidecar.istio.io/inject: "false"
+        # Phần 1.2 (remediation 2026-09, BẪY 2 KEHOACH-THAYDOI-HETHONG.md):
+        # opa-server AWS gọi Keycloak (JWKS + OIDC discovery, http.send) —
+        # hop này giờ cần SVID thật (opa/crapi-policies/crosscloud_crapi.rego
+        # "Keycloak guard" kiểm valid_svid). Bật sidecar để CÓ danh tính cho
+        # EGRESS này. Không đặt spiffe.io/spiffeid cố định ở đây (khác
+        # bff/waf) vì file này DÙNG CHUNG cho cả 2 cluster — SPIFFE ID khác
+        # nhau (aws/opa vs openstack/opa) tuỳ context áp; SPIRE match theo
+        # k8s:ns/k8s:sa selector (scripts/ensure-spire-entries.sh), không
+        # phải theo annotation này (annotation ở bff/waf chỉ có giá trị tài
+        # liệu hoá, không có tác dụng chức năng — verify sống Phần 1.3).
+        # opa-service-plaintext DestinationRule + PeerAuthentication PERMISSIVE
+        # dưới đây GIỮ NGUYÊN hành vi INBOUND (mọi caller ext_authz hiện tại
+        # vẫn plaintext, không phá vỡ chuỗi PDP đang chạy) — chỉ EGRESS của
+        # opa (tới Keycloak, DestinationRule riêng phía AWS) mới đổi sang mТLS.
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
       serviceAccountName: opa
       containers:
@@ -41,18 +56,6 @@ spec:
             - "--config-file=/etc/opa/opa-config.yaml"
             - "--ignore=.*"
             - "/policies"
-          env:
-            # A3/A2: same shared secret Traefik's edge-marker Middleware stamps
-            # onto every request (k8s/crapi/edge-tls.yaml) and BFF checks
-            # (services/bff/main.py) — zta_crapi.rego reads it via opa.runtime()
-            # to recognize waf's OWN inbound hop (Traefik has no SPIFFE SVID,
-            # so it can never pass valid_svid) as genuinely from the trusted
-            # edge, not a pod calling waf/bff directly to fake the header.
-            # Secret is AWS-only (edge only exists there) — optional so the
-            # OpenStack opa-server (crosscloud_crapi.rego, unrelated) still starts.
-            - name: EDGE_MARKER
-              valueFrom:
-                secretKeyRef: { name: bff-edge, key: marker, optional: true }
           ports:
             - { name: http, containerPort: 8181 }
             - { name: grpc-authz, containerPort: 9191 }
@@ -100,8 +103,9 @@ spec:
     - { name: http, port: 8181, targetPort: 8181 }
     - { name: grpc-authz, port: 9191, targetPort: 9191 }
 ---
-# opa-service không có sidecar → client istio-proxy phải đi plaintext tới nó
-# (như opa-service-plaintext của finance).
+# opa-service KHÔNG chấp nhận mТLS ở chiều INBOUND (client istio-proxy phải
+# đi plaintext tới nó, như trước Phần 1.2) — chỉ EGRESS của opa (Phần 1.2,
+# tới Keycloak) mới có SVID thật.
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
@@ -112,3 +116,21 @@ spec:
   trafficPolicy:
     tls:
       mode: DISABLE
+---
+# Phần 1.2: opa-server nay có sidecar (egress tới Keycloak) nhưng INBOUND
+# (ext_authz gRPC/HTTP từ bff/waf/crapi-web/community/workshop/identity) phải
+# GIỮ NGUYÊN plaintext — nếu không override, ns default STRICT sẽ áp cho
+# opa's inbound và làm gãy toàn bộ PDP (mọi caller đang cấu hình DestinationRule
+# DISABLE cho host này, gửi plaintext, sẽ bị STRICT từ chối → fail-closed 503
+# toàn hệ thống). PERMISSIVE ở đây chấp nhận CẢ plaintext (mọi caller hiện tại,
+# không đổi) lẫn mТLS (nếu tương lai có caller khác chọn mã hoá hop này).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: opa-permissive
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: opa }
+  mtls:
+    mode: PERMISSIVE

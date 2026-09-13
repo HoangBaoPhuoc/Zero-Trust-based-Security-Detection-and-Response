@@ -22,6 +22,10 @@ clusters:
 
 workloads:
   aws/waf:              { cluster: aws, namespace: crapi, service_account: waf }
+  # Phần 1.3 — biên vào mesh thật (Istio IngressGateway, k8s/istio/istio-operator.yaml
+  # components.ingressGateways), thay hop Traefik->waf (không sidecar, đã chứng
+  # minh trong KIEM-KE-HOP.md là KHÔNG hề có source_principal/enforcement).
+  aws/edge-gateway:     { cluster: aws, namespace: istio-system, service_account: istio-ingressgateway-service-account }
   aws/bff:              { cluster: aws, namespace: crapi, service_account: bff }
   aws/crapi-web:        { cluster: aws, namespace: crapi, service_account: crapi-web }
   aws/crapi-community:  { cluster: aws, namespace: crapi, service_account: crapi-community }
@@ -29,13 +33,31 @@ workloads:
   aws/mongodb:          { cluster: aws, namespace: crapi, app_label: mongodb, spiffe: false }
   aws/redis:            { cluster: aws, namespace: crapi, app_label: redis, spiffe: false }
   aws/mailhog:          { cluster: aws, namespace: crapi, app_label: mailhog, spiffe: false }
-  aws/opa:              { cluster: aws, namespace: crapi, app_label: opa, spiffe: false }
+  # Phần 1.2 (remediation 2026-09, BẪY 2): opa (cả 2 cluster) nay có sidecar +
+  # SVID thật — cần cho egress aws/opa -> openstack/keycloak (JWKS/OIDC
+  # discovery qua OPA). service_account (không phải app_label) vì giờ nó CÓ
+  # tham gia edge L7 (test_every_l7_workload_has_spire_entry_and_real_spiffe
+  # đòi hỏi service_account để sinh entry SPIRE). Inbound (ext_authz từ mọi
+  # workload khác) GIỮ NGUYÊN plaintext — xem k8s/crapi/opa.yaml opa-permissive.
+  aws/opa:              { cluster: aws, namespace: crapi, service_account: opa }
   openstack/crapi-identity: { cluster: openstack, namespace: crapi, service_account: crapi-identity }
   openstack/postgresdb:     { cluster: openstack, namespace: crapi, app_label: postgresdb, spiffe: false }
-  openstack/opa:            { cluster: openstack, namespace: crapi, app_label: opa, spiffe: false }
-  # A1 — Keycloak + keycloak-db chuyển sang OpenStack (ns identity). Không sidecar,
-  # không qua OPA service_acl; AWS gọi cross-cloud tới NodePort 30091.
-  openstack/keycloak:       { cluster: openstack, namespace: identity, app_label: keycloak, spiffe: false }
+  openstack/opa:            { cluster: openstack, namespace: crapi, service_account: opa }
+  # Phần 1.2 (remediation 2026-09) — Keycloak (ns identity, OpenStack) vào mesh
+  # thật: sidecar + SPIFFE riêng, không còn `spiffe: false`/DestinationRule
+  # DISABLE. Trước bản sửa này hop bff/opa(AWS) -> Keycloak đi HTTP trần qua
+  # WireGuard, không SPIFFE, không qua OPA — đúng nhóm (c) trong KIEM-KE-HOP.md.
+  openstack/keycloak: { cluster: openstack, namespace: identity, service_account: keycloak }
+  # Bootstrap Keycloak Admin API (BẪY 1, Phần 1.2): 5 pod tạm (kc-crapi-setup,
+  # kc-ldap-federation-setup, kc-audience-mapper-setup, kc-stepup-flow-setup,
+  # kc-saml-meta — scripts/deploy-crapi.sh + deploy-app.sh) chạy Admin API
+  # calls tới Keycloak để cấu hình realm/client/role. Trước bản sửa này chạy
+  # HOÀN TOÀN ngoài mesh. Quyết định: đưa vào mesh (ServiceAccount riêng,
+  # cùng ns identity nên tự động có sidecar khi ns bật istio-injection) thay
+  # vì mở PERMISSIVE cho Keycloak — giữ Keycloak STRICT tuyệt đối, không có
+  # ngoại lệ plaintext nào. Danh tính build-time, không phải runtime user-
+  # facing, nên cho phép full path (giống waf/edge-gateway -> bff).
+  openstack/kc-admin-setup: { cluster: openstack, namespace: identity, service_account: kc-admin-setup }
   # spire_only: cần entry SPIRE (workload có sidecar, cần SVID) nhưng KHÔNG tham
   # gia edges/service_acl/pod-segmentation — không phải hop nghiệp vụ, chỉ cần
   # danh tính. aws/prometheus: scrape nhiều target qua Prometheus Operator/manual
@@ -45,9 +67,25 @@ workloads:
   openstack/crapi-seed: { cluster: openstack, namespace: crapi,      service_account: crapi-seed,  spire_only: true }
 
 edges:
-  # ── Biên: Traefik → WAF (ModSecurity/CRS DetectionOnly) → bff ─────────────
-  # WAF là proxy tin cậy đứng trước bff; mọi method/path đi qua. CRS chỉ ghi
-  # nhận (DetectionOnly), không đổi quyết định OPA ở hop này.
+  # ── Biên MỚI (Phần 1.3): Istio IngressGateway → WAF ───────────────────────
+  # Gateway có sidecar/SPIFFE thật (spiffe://ztlab.local/aws/edge-gateway),
+  # verify client cert thiết bị bằng Device CA ở tầng TLS (Gateway resource,
+  # k8s/crapi/edge-gateway.yaml) — không còn cần X-Edge-Marker để "tin" hop
+  # này vì bản thân hop này giờ có source_principal thật, qua OPA thật.
+  - from: aws/edge-gateway
+    to: aws/waf
+    rules:
+      - { method: GET,     paths: ["/"] }
+      - { method: POST,    paths: ["/"] }
+      - { method: PUT,     paths: ["/"] }
+      - { method: DELETE,  paths: ["/"] }
+      - { method: PATCH,   paths: ["/"] }
+      - { method: HEAD,    paths: ["/"] }
+      - { method: OPTIONS, paths: ["/"] }
+    l4_ports: [8080, 15006]
+
+  # ── WAF → bff (không đổi bởi Phần 1.3 — waf vẫn là proxy đứng giữa Gateway
+  # và bff, chỉ có nguồn NHẬN vào waf đổi từ Traefik sang edge-gateway ở trên).
   - from: aws/waf
     to: aws/bff
     rules:
@@ -121,11 +159,36 @@ edges:
   - { from: openstack/crapi-identity, to: openstack/postgresdb, l4_only: true, l4_ports: [5432] }
   # identity → mailhog (AWS) SMTP, cross-cloud
   - { from: openstack/crapi-identity, to: aws/mailhog, l4_only: true, cross_cluster: true, l4_ports: [31025] }
-  # A1 — bff (/kc proxy + token) và opa AWS (JWKS + OIDC discovery qua http.send)
-  # → Keycloak OpenStack, cross-cloud NodePort 30091 qua WireGuard. L4 thuần,
-  # không qua OPA service_acl (Keycloak không phải hop mesh).
-  - { from: aws/bff, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
-  - { from: aws/opa, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
+  # Phần 1.2 — bff (/kc proxy + token, paths giữ đúng _KC_PROXY_ALLOWED trong
+  # services/bff/main.py) và opa AWS (JWKS + OIDC discovery qua http.send) →
+  # Keycloak OpenStack, cross-cloud NodePort 30091 qua WireGuard. Nay qua OPA
+  # thật (crosscloud_crapi.rego "Keycloak guard") như mọi hop khác — không
+  # còn L4 thuần.
+  - from: aws/bff
+    to: openstack/keycloak
+    cross_cluster: true
+    l4_ports: [30091]
+    rules:
+      - { method: GET,  paths: ["/realms", "/resources", "/js"] }
+      - { method: POST, paths: ["/realms"] }
+  - from: aws/opa
+    to: openstack/keycloak
+    cross_cluster: true
+    l4_ports: [30091]
+    rules:
+      - { method: GET, paths: ["/realms"] }
+  # BẪY 1 — bootstrap Admin API (xem workloads: openstack/kc-admin-setup ở
+  # trên). Danh tính build-time đã cầm sẵn mật khẩu admin Keycloak qua Secret,
+  # gate theo path không thêm giá trị an toàn thật (khác bff/opa — không có
+  # credential thật) nên cho full path, giống waf/edge-gateway → bff.
+  - from: openstack/kc-admin-setup
+    to: openstack/keycloak
+    l4_ports: [8080, 15006]
+    rules:
+      - { method: GET,    paths: ["/"] }
+      - { method: POST,   paths: ["/"] }
+      - { method: PUT,    paths: ["/"] }
+      - { method: DELETE, paths: ["/"] }
 
   # ── OPA ext_authz — mọi workload nghiệp vụ trong cluster đó ─────────────
   - { from: aws/bff,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
@@ -148,7 +211,10 @@ netpol_baseline:
     ingress:
       - from_ns: kube-system
         ports: [8080, 15006]
-        comment: "Traefik (kube-system) -> waf :8080 (A2 edge) -> bff :8080"
+        comment: "Traefik (kube-system) -> waf :8080 (bien CU, giu song song toi khi bien MOI verify xong - Phan 1.3)"
+      - from_ns: istio-system
+        ports: [8080, 15006]
+        comment: "Istio IngressGateway (istio-system) -> waf :8080 (bien MOI, Phan 1.3) - xac nhan song 2026-09-13: thieu rule nay lam ECONNREFUSED tu gateway pod, kube-router THAT SU enforce netpol namespace-scoped cho traffic nay (khac mo ta chung 'khong enforce cho sidecar' trong tai lieu - do la ve L7/rule khac, khong phai default-deny theo namespace)"
       - from_ns: monitoring
         ports: [8080, 15006, 8181]
         comment: "Prometheus scrape"

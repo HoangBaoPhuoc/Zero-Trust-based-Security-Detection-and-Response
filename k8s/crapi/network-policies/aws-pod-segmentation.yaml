@@ -199,3 +199,25 @@ spec:
       ports:
         - port: 6379
           protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-waf
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: waf
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: istio-ingressgateway-service-account
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP

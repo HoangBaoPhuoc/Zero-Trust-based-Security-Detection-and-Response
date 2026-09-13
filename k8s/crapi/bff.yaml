@@ -85,12 +85,6 @@ spec:
             - name: SESSION_SECRET
               valueFrom:
                 secretKeyRef: { name: bff-secret, key: session-secret }
-            # A3 — bí mật chia sẻ với Middleware edge-marker (k8s/crapi/edge-tls.yaml);
-            # BFF chỉ tin X-Forwarded-Tls-Client-Cert-Info khi X-Edge-Marker khớp giá
-            # trị này (chặn pod trong cluster gọi thẳng waf/bff và tự giả header cert).
-            - name: EDGE_MARKER
-              valueFrom:
-                secretKeyRef: { name: bff-edge, key: marker }
           readinessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 5
