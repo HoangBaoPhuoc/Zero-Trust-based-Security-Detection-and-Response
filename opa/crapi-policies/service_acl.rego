@@ -26,6 +26,10 @@ service_acl := {
     "spiffe://ztlab.local/aws/crapi-web": {
       "GET": ["/", "/static", "/images", "/index.html", "/favicon"],
     },
+    "spiffe://ztlab.local/openstack/keycloak": {
+      "GET": ["/realms", "/resources", "/js"],
+      "POST": ["/realms"],
+    },
   },
   "spiffe://ztlab.local/aws/crapi-community": {
     "spiffe://ztlab.local/openstack/crapi-identity": {
@@ -39,6 +43,22 @@ service_acl := {
       "GET": ["/identity/health_check"],
     },
   },
+  "spiffe://ztlab.local/aws/edge-gateway": {
+    "spiffe://ztlab.local/aws/waf": {
+      "GET": ["/"],
+      "POST": ["/"],
+      "PUT": ["/"],
+      "DELETE": ["/"],
+      "PATCH": ["/"],
+      "HEAD": ["/"],
+      "OPTIONS": ["/"],
+    },
+  },
+  "spiffe://ztlab.local/aws/opa": {
+    "spiffe://ztlab.local/openstack/keycloak": {
+      "GET": ["/realms"],
+    },
+  },
   "spiffe://ztlab.local/aws/waf": {
     "spiffe://ztlab.local/aws/bff": {
       "GET": ["/"],
@@ -48,6 +68,14 @@ service_acl := {
       "PATCH": ["/"],
       "HEAD": ["/"],
       "OPTIONS": ["/"],
+    },
+  },
+  "spiffe://ztlab.local/openstack/kc-admin-setup": {
+    "spiffe://ztlab.local/openstack/keycloak": {
+      "GET": ["/"],
+      "POST": ["/"],
+      "PUT": ["/"],
+      "DELETE": ["/"],
     },
   },
 }

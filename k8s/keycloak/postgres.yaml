@@ -26,6 +26,13 @@ spec:
     metadata:
       labels:
         app: keycloak-db
+      annotations:
+        # Ns identity nay bật istio-injection=enabled (Phần 1.2, cho Keycloak) —
+        # keycloak-db là hop L4 dữ liệu thuần (nhóm (b), KIEM-KE-HOP.md), cố ý
+        # KHÔNG vào mesh, giống postgresdb/mongodb/redis. Không tắt annotation
+        # này thì mọi pod trong ns tự động bị tiêm sidecar, cần SPIRE entry
+        # riêng mới lên Ready — không cần thiết cho một CSDL nội bộ.
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: postgres

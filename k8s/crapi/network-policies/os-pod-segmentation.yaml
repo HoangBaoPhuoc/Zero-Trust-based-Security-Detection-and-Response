@@ -10,6 +10,28 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: os-pod-keycloak
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kc-admin-setup
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: os-pod-opa
   namespace: crapi
 spec:

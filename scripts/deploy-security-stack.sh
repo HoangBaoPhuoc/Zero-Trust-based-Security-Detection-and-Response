@@ -130,6 +130,17 @@ deploy_step_2_keycloak() {
   log_info "Creating Keycloak secrets..."
   ensure_keycloak_secret
 
+  # Phần 1.2 (remediation 2026-09, BẪY 1) — ServiceAccount riêng cho 5 pod
+  # bootstrap Admin API (kc-crapi-setup, kc-ldap-federation-setup,
+  # kc-audience-mapper-setup, kc-stepup-flow-setup, kc-saml-meta —
+  # scripts/deploy-crapi.sh + deploy-app.sh). Trước bản sửa này chạy hoàn
+  # toàn ngoài mesh (default ServiceAccount, không sidecar). Ns identity đã
+  # bật istio-injection=enabled nên các pod này tự động có sidecar khi dùng
+  # SA này — cần entry SPIRE riêng (scripts/spire-entries.generated.sh,
+  # sinh từ policy/service-graph-crapi.yaml) để sidecar lên Ready.
+  kubectl --context $KEYCLOAK_CONTEXT -n identity create serviceaccount kc-admin-setup \
+    --dry-run=client -o yaml | kubectl --context $KEYCLOAK_CONTEXT apply -f -
+
   log_info "Deploying Keycloak PostgreSQL..."
   kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
 
@@ -153,6 +164,13 @@ deploy_step_2_keycloak() {
 
   kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
   kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
+  # Phần 1.2 (remediation 2026-09) — PeerAuth STRICT + DestinationRule +
+  # AuthorizationPolicy→OPA cho Keycloak. An toàn áp sớm (trước khi SPIRE
+  # entry tồn tại ở bước 3.3 dưới): probe kubelet luôn đi qua cổng trạng thái
+  # riêng của istio-proxy, không bị STRICT chặn; sidecar tự settle khi entry
+  # xuất hiện, giống mọi workload khác trong bản sửa này (đã verify sống
+  # trên AWS — xem BAOCAO-SUA-GOC).
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/keycloak-mesh-policies.yaml"
   # A1: Keycloak UI ingress theo Keycloak — chuyển sang cụm OpenStack.
   [[ -f "$REPO_ROOT/k8s/identity/ingress-os.yaml" ]] && \
     kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/ingress-os.yaml"
@@ -256,31 +274,25 @@ provision_device_ca() {
     rm -f "$ca_dir/edge.csr"
   fi
 
-  # k8s Secrets (ns crapi, cụm AWS — nơi Traefik phục vụ IngressRoute crapi-bff):
-  #   device-ca-cert : cert public (Traefik TLSOption clientAuth caFiles + BFF verify)
-  #   crapi-edge-tls  : server cert cho HTTPS entrypoint
+  # k8s Secrets (cụm AWS):
+  #   device-ca-cert  (ns crapi)        : cert public (BFF không dùng trực tiếp
+  #                                       nữa từ Phần 1.3, giữ cho issue-device-cert.sh
+  #                                       và tương thích ngược script cũ)
+  #   edge-gateway-tls (ns istio-system): server cert + Device CA — Gateway
+  #                                       resource (k8s/crapi/edge-gateway.yaml,
+  #                                       Phần 1.3) đọc secret này qua
+  #                                       credentialName để làm TLS server cert
+  #                                       VÀ verify client cert (mode: MUTUAL).
+  #                                       Secret phải nằm ns của gateway workload
+  #                                       (istio-system), không phải ns Gateway CR.
   kubectl --context "$AWS_CONTEXT" -n crapi create secret generic device-ca-cert \
     --from-file=tls.ca="$ca_dir/device-ca.crt" \
     --from-file=ca.crt="$ca_dir/device-ca.crt" \
     --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
-  kubectl --context "$AWS_CONTEXT" -n crapi create secret tls crapi-edge-tls \
-    --cert="$ca_dir/edge.crt" --key="$ca_dir/edge.key" \
+  kubectl --context "$AWS_CONTEXT" -n istio-system create secret generic edge-gateway-tls \
+    --from-file=tls.crt="$ca_dir/edge.crt" --from-file=tls.key="$ca_dir/edge.key" \
+    --from-file=ca.crt="$ca_dir/device-ca.crt" \
     --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
-
-  # Edge marker: BFF chỉ tin header cert khi request mang marker này (do middleware
-  # Traefik gắn) — "chỉ chấp nhận giá trị do reverse proxy ở biên gắn vào" (RÀNG BUỘC #5).
-  local marker
-  if kubectl --context "$AWS_CONTEXT" -n crapi get secret bff-edge >/dev/null 2>&1; then
-    marker="$(kubectl --context "$AWS_CONTEXT" -n crapi get secret bff-edge -o jsonpath='{.data.marker}' | base64 -d)"
-  else
-    marker="$(openssl rand -hex 24)"
-    kubectl --context "$AWS_CONTEXT" -n crapi create secret generic bff-edge \
-      --from-literal=marker="$marker" \
-      --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
-  fi
-  # Render edge-tls.yaml (Traefik TLSOption + Middlewares + HTTPS IngressRoute)
-  sed "s/__EDGE_MARKER__/${marker}/g" "$REPO_ROOT/k8s/crapi/edge-tls.yaml" \
-    | kubectl --context "$AWS_CONTEXT" apply -f -
 
   chmod 600 "$ca_dir"/*.key
   log_info "Device CA + edge cert ready. Client certs: scripts/issue-device-cert.sh <user> <compliant|non-compliant>"

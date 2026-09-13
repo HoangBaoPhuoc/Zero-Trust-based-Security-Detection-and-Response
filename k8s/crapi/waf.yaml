@@ -150,18 +150,24 @@ spec:
   ports:
     - { name: http, port: 8080, targetPort: http }
 ---
-# waf receives plain HTTP from Traefik (not in the mesh) → PERMISSIVE.
-# Its outbound hop to bff is ISTIO_MUTUAL (bff-custom-san DestinationRule).
+# Phần 1.3 (remediation 2026-09): Traefik (không sidecar, plaintext) đã bị
+# THÁO khỏi đường vào crAPI — biên nay là Istio IngressGateway (mТLS thật,
+# spiffe://ztlab.local/aws/edge-gateway). waf không còn lý do nhận plaintext
+# nữa nên siết về STRICT (đã cải thiện phụ đáng giá: hệ quả trực tiếp là mọi
+# EnvoyFilter/AuthorizationPolicy gắn vào waf's inbound giờ áp dụng cho MỌI
+# request — trước đây, PERMISSIVE khiến các filter đó không hề chạy cho
+# traffic plaintext, xem KIEM-KE-HOP.md nhóm (c)-1: waf-opa-authz CHƯA BAO
+# GIỜ được gọi khi waf còn PERMISSIVE).
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
-  name: waf-permissive
+  name: waf-strict
   namespace: crapi
 spec:
   selector:
     matchLabels: { app: waf }
   mtls:
-    mode: PERMISSIVE
+    mode: STRICT
 ---
 apiVersion: networking.istio.io/v1
 kind: DestinationRule

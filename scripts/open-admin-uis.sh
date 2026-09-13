@@ -8,11 +8,17 @@
 #
 # UI sau khi bật:
 #   Keycloak     → http://localhost:8180   (admin / ztlab-admin-2026)
-#   crAPI        → http://localhost:18081   (WAF→BFF — entry point; SPA + login OIDC)
-#   crAPI BFF bypass → http://localhost:18083   (bỏ qua WAF, debug)
-#   crAPI (Traefik mTLS) → https://crapi.ztlab.local:18443   (A3 — client-cert
-#     mTLS thật qua Traefik biên; dùng bởi tests/crapi_*.sh. Cert:
+#   crAPI (Gateway mTLS) → https://crapi.ztlab.local:18444   (Phần 1.3 — client-cert
+#     mТLS thật qua Istio IngressGateway biên; ĐƯỜNG VÀO ZERO-TRUST DUY NHẤT
+#     cho thiết bị thật, dùng bởi tests/crapi_*.sh. Cert:
 #     scripts/issue-device-cert.sh <device-id> <compliant|non-compliant>)
+#   crAPI (WAF, debug) → http://localhost:18081   (bỏ qua Gateway+TLS+mТLS+OPA
+#     HOÀN TOÀN — không chỉ "bỏ qua WAF". `kubectl port-forward` tunnel thẳng
+#     vào network namespace của pod, không đi qua iptables redirect của Istio
+#     sidecar (đã verify sống 2026-09-13: vẫn 200 dù waf đã STRICT) — cổng này
+#     đòi kubeconfig của cụm, tương đương quyền `kubectl exec`, KHÔNG phải một
+#     đường vào thứ hai cho thiết bị/người dùng thật. Xem KIEM-KE-HOP.md Phần 1.4.
+#   crAPI BFF bypass (debug) → http://localhost:18083   (idem — bỏ qua cả WAF/CRS)
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
 #   Incident Analyzer → http://localhost:8091   (evidence bundles — /evidence, /health)
@@ -108,9 +114,9 @@ show_status() {
   echo "=== ZTLab — Port-forward status ==="
   declare -A PORT_NAMES=(
     [8180]="Keycloak"
-    [18081]="crAPI (WAF→BFF)"
-    [18083]="crAPI BFF (bypass)"
-    [18443]="crAPI (Traefik mTLS)"
+    [18081]="crAPI (WAF, debug — bo qua TLS/OPA)"
+    [18083]="crAPI BFF (bypass, debug)"
+    [18444]="crAPI (Gateway mTLS)"
     [3000]="Grafana"
     [13100]="Loki"
     [8091]="Incident Analyzer"
@@ -118,7 +124,7 @@ show_status() {
     [8025]="MailHog (crAPI)"
     [8026]="MailHog (SOC)"
   )
-  for port in 8180 18081 18083 18443 3000 13100 8091 9090 8025 8026; do
+  for port in 8180 18081 18083 18444 3000 13100 8091 9090 8025 8026; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -159,14 +165,15 @@ start_pf_daemon "Keycloak"            identity   keycloak          8180  8080  "
 # crAPI (ứng dụng mục tiêu) — điểm vào là WAF (ModSecurity/CRS DetectionOnly, A2)
 # đứng trước BFF. Cổng 18081 khớp redirectUri client crapi-bff. WAF proxy trong
 # suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).
-start_pf_daemon "crAPI (WAF→BFF)"     crapi      waf              18081  8080
-start_pf_daemon "crAPI BFF (bypass)"  crapi      bff              18083  8080
-# A3 — cổng TLS thật của Traefik (entrypoint websecure, client-cert mTLS
-# RequireAndVerifyClientCert). kubectl port-forward chỉ chuyển tiếp TCP nên
-# TLS handshake vẫn diễn ra nguyên vẹn giữa curl/trình duyệt và Traefik.
-# Remote port PHẢI là spec.ports[].port của Service (443), không phải
-# targetPort container (8443) — kubectl port-forward svc/X không map theo targetPort.
-start_pf_daemon "crAPI (Traefik mTLS)" kube-system traefik        18443  443
+start_pf_daemon "crAPI (WAF, debug — bo qua TLS/OPA)" crapi waf 18081 8080
+start_pf_daemon "crAPI BFF (bypass, debug)" crapi bff 18083 8080
+# Phần 1.3 — cổng TLS thật của Istio IngressGateway (client-cert mTLS
+# RequireAndVerifyClientCert bằng Device CA, k8s/crapi/edge-gateway.yaml).
+# kubectl port-forward chỉ chuyển tiếp TCP nên TLS handshake vẫn diễn ra
+# nguyên vẹn giữa curl/trình duyệt và Gateway — ĐÂY LÀ đường vào Zero-Trust
+# duy nhất cho thiết bị thật (khác :18081/:18083 ở trên, vốn bỏ qua TLS/OPA
+# hoàn toàn vì lý do kubectl port-forward, không phải vì thiết kế Gateway).
+start_pf_daemon "crAPI (Gateway mTLS)" istio-system istio-ingressgateway 18444 8443
 # PLG Stack
 start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
 start_pf_daemon "Loki"                plg-stack  loki             13100  3100

@@ -1,0 +1,56 @@
+# Phần 1.3 (remediation 2026-09) — chặn giả mạo header x-device-cert-info.
+#
+# Header đó chỉ đáng tin khi do CHÍNH Gateway biên (spiffe://ztlab.local/aws/
+# edge-gateway, k8s/istio/edge-gateway-cert-header.yaml) gắn — nhưng vì nó là
+# header ứng dụng bình thường (không phải tên đặc biệt Envoy), MỘT KHI đã lọt
+# qua waf's nginx, không có gì phân biệt được "Gateway gắn thật" với "client
+# tự gửi thẳng qua đường Traefik cũ hoặc một bypass port bất kỳ (:18081...)".
+# Nếu không chặn ở đây, RÀNG BUỘC #5 (chỉ tin giá trị do biên gắn) bị phá vỡ
+# y hệt lỗi mà X-Edge-Marker từng cố (và thất bại — xem KIEM-KE-HOP.md) sửa.
+#
+# Chỗ DUY NHẤT còn phân biệt được 2 nguồn là mТLS peer identity của CHÍNH hop
+# vào waf (waf's OWN inbound listener) — Gateway gọi bằng SPIFFE thật, Traefik/
+# bất kỳ bypass nào khác thì không (plaintext, source_principal rỗng) hoặc là
+# SPIFFE khác. Lọc ở SIDECAR_INBOUND của waf, TRƯỚC khi request tới nginx:
+# peer là đúng aws/edge-gateway thì giữ nguyên header, không thì xoá sạch.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: waf-strip-forged-device-cert-header
+  namespace: crapi
+spec:
+  workloadSelector:
+    labels:
+      app: waf
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: SIDECAR_INBOUND
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+            inlineCode: |
+              function envoy_on_request(request_handle)
+                local trusted = false
+                local ssl = request_handle:connection():ssl()
+                if ssl ~= nil then
+                  local uris = ssl:uriSanPeerCertificate()
+                  if uris ~= nil then
+                    for _, u in ipairs(uris) do
+                      if u == "spiffe://ztlab.local/aws/edge-gateway" then
+                        trusted = true
+                      end
+                    end
+                  end
+                end
+                if not trusted then
+                  request_handle:headers():remove("x-device-cert-info")
+                end
+              end

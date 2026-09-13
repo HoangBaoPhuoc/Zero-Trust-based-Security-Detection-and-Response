@@ -91,9 +91,11 @@ spec:
     tls:
       mode: DISABLE
 ---
-# A1 — Keycloak trên OpenStack. BFF (/kc/* proxy + token/authorize) và OPA AWS
-# (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này. Keycloak không có
-# sidecar → DR mode DISABLE (istio-proxy client đi plaintext, WireGuard mã hoá).
+# Phần 1.2 (remediation 2026-09) — Keycloak trên OpenStack nay CÓ sidecar
+# (k8s/keycloak/deployment.yaml). BFF (/kc/* proxy + token/authorize) và OPA
+# AWS (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này qua mТLS thật
+# — cùng mẫu chính xác với crapi-identity-openstack-mtls ở trên (đã verify
+# sống nhiều lần).
 apiVersion: v1
 kind: Service
 metadata:
@@ -121,11 +123,13 @@ subsets:
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
-  name: keycloak-openstack-plaintext
+  name: keycloak-openstack-mtls
   namespace: crapi
 spec:
   host: keycloak-openstack.crapi.svc.cluster.local
   trafficPolicy:
     tls:
-      mode: DISABLE
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/keycloak"
 ---
