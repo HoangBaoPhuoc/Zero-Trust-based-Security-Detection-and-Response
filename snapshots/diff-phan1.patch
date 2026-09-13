@@ -1,0 +1,1397 @@
+diff --git a/k8s/crapi/bff.yaml b/k8s/crapi/bff.yaml
+index db1c55be..0af14887 100644
+--- a/k8s/crapi/bff.yaml
++++ b/k8s/crapi/bff.yaml
+@@ -85,12 +85,6 @@ spec:
+             - name: SESSION_SECRET
+               valueFrom:
+                 secretKeyRef: { name: bff-secret, key: session-secret }
+-            # A3 — bí mật chia sẻ với Middleware edge-marker (k8s/crapi/edge-tls.yaml);
+-            # BFF chỉ tin X-Forwarded-Tls-Client-Cert-Info khi X-Edge-Marker khớp giá
+-            # trị này (chặn pod trong cluster gọi thẳng waf/bff và tự giả header cert).
+-            - name: EDGE_MARKER
+-              valueFrom:
+-                secretKeyRef: { name: bff-edge, key: marker }
+           readinessProbe:
+             httpGet: { path: /health, port: http }
+             initialDelaySeconds: 5
+diff --git a/k8s/crapi/cross-cloud-aws.yaml b/k8s/crapi/cross-cloud-aws.yaml
+index 0d6b6172..0a3821f8 100644
+--- a/k8s/crapi/cross-cloud-aws.yaml
++++ b/k8s/crapi/cross-cloud-aws.yaml
+@@ -91,9 +91,11 @@ spec:
+     tls:
+       mode: DISABLE
+ ---
+-# A1 — Keycloak trên OpenStack. BFF (/kc/* proxy + token/authorize) và OPA AWS
+-# (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này. Keycloak không có
+-# sidecar → DR mode DISABLE (istio-proxy client đi plaintext, WireGuard mã hoá).
++# Phần 1.2 (remediation 2026-09) — Keycloak trên OpenStack nay CÓ sidecar
++# (k8s/keycloak/deployment.yaml). BFF (/kc/* proxy + token/authorize) và OPA
++# AWS (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này qua mТLS thật
++# — cùng mẫu chính xác với crapi-identity-openstack-mtls ở trên (đã verify
++# sống nhiều lần).
+ apiVersion: v1
+ kind: Service
+ metadata:
+@@ -121,11 +123,13 @@ subsets:
+ apiVersion: networking.istio.io/v1
+ kind: DestinationRule
+ metadata:
+-  name: keycloak-openstack-plaintext
++  name: keycloak-openstack-mtls
+   namespace: crapi
+ spec:
+   host: keycloak-openstack.crapi.svc.cluster.local
+   trafficPolicy:
+     tls:
+-      mode: DISABLE
++      mode: ISTIO_MUTUAL
++      subjectAltNames:
++        - "spiffe://ztlab.local/openstack/keycloak"
+ ---
+diff --git a/k8s/crapi/edge-gateway.yaml b/k8s/crapi/edge-gateway.yaml
+new file mode 100644
+index 00000000..fee66057
+--- /dev/null
++++ b/k8s/crapi/edge-gateway.yaml
+@@ -0,0 +1,55 @@
++# Phần 1.3 (KEHOACH-THAYDOI-HETHONG.md remediation, 2026-09) — biên vào mesh
++# thật, thay Traefik->waf. Traefik không sidecar nên hop đó không bao giờ có
++# source_principal; cơ chế bù X-Edge-Marker đã CHỨNG MINH (KIEM-KE-HOP.md
++# nhóm (c)-1, verify sống 2026-09-13 qua Loki) là không hề được Envoy gọi tới
++# — dead code, hop không có enforcement nào ở tầng mesh/PDP.
++#
++# Thay bằng Istio IngressGateway (k8s/istio/istio-operator.yaml
++# components.ingressGateways) — pod này có sidecar SPIRE thật
++# (spiffe://ztlab.local/aws/edge-gateway, xem overlay mount socket trong
++# istio-operator.yaml), tự verify TLS client certificate (Device CA) ở tầng
++# Gateway (tls.mode: MUTUAL), rồi gọi waf qua mТLS SPIFFE thật — hop này giờ
++# có source_principal thật, qua OPA thật (edge aws/edge-gateway -> aws/waf
++# trong policy/service-graph-crapi.yaml), không cần X-Edge-Marker nữa.
++#
++# CHẠY SONG SONG với Traefik :18443 (KHÔNG xoá đường cũ) cho tới khi cả 3
++# kịch bản certificate verify xong trên cổng MỚI 8443. Sau đó mới xoá:
++# k8s/crapi/edge-tls.yaml (đường Traefik cũ), X-Edge-Marker (Middleware +
++# EDGE_MARKER env + rego branch + BFF _evaluate_device_cert marker check).
++---
++apiVersion: networking.istio.io/v1
++kind: Gateway
++metadata:
++  name: crapi-edge-gateway
++  namespace: crapi
++spec:
++  selector:
++    istio: ingressgateway
++  servers:
++    - port:
++        number: 8443
++        name: https-device-mtls
++        protocol: HTTPS
++      hosts:
++        - "crapi.ztlab.local"
++      tls:
++        mode: MUTUAL
++        credentialName: edge-gateway-tls
++        minProtocolVersion: TLSV1_2
++---
++apiVersion: networking.istio.io/v1
++kind: VirtualService
++metadata:
++  name: crapi-edge-gateway
++  namespace: crapi
++spec:
++  hosts:
++    - "crapi.ztlab.local"
++  gateways:
++    - crapi-edge-gateway
++  http:
++    - route:
++        - destination:
++            host: waf.crapi.svc.cluster.local
++            port:
++              number: 8080
+diff --git a/k8s/crapi/edge-tls.yaml b/k8s/crapi/edge-tls.yaml
+deleted file mode 100644
+index 9a1df073..00000000
+--- a/k8s/crapi/edge-tls.yaml
++++ /dev/null
+@@ -1,82 +0,0 @@
+-# A3 (KEHOACH-THAYDOI-HETHONG.md) — Traefik biên: TLS + client-cert mTLS bằng
+-# Device CA (tách bạch device identity ≠ workload identity — không dùng chung
+-# spire/root-ca). Traefik verify cert của thiết bị rồi gắn header
+-# X-Forwarded-Tls-Client-Cert-Info (Subject CN/OU, SAN) — BFF
+-# (services/bff/main.py: _evaluate_device_cert) đọc header này để suy ra
+-# device_id (SAN URI spiffe://ztlab.local/device/<id>) và posture (Subject
+-# OU=posture:<compliant|non-compliant>). Cert phát hành bằng
+-# scripts/issue-device-cert.sh.
+-#
+-# Middleware edge-marker gắn __EDGE_MARKER__ (bí mật secret bff-edge, do
+-# scripts/deploy-security-stack.sh sinh ngẫu nhiên) vào MỌI request đi qua
+-# Traefik — BFF chỉ tin X-Forwarded-Tls-Client-Cert-Info khi marker khớp, để
+-# chặn trường hợp một pod trong cluster gọi thẳng waf/bff (bỏ qua Traefik) và
+-# tự giả header cert (RÀNG BUỘC #5: chỉ chấp nhận giá trị do reverse proxy ở
+-# biên gắn vào).
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: TLSOption
+-metadata:
+-  name: device-mtls
+-  namespace: crapi
+-spec:
+-  minVersion: VersionTLS12
+-  clientAuth:
+-    secretNames:
+-      - device-ca-cert
+-    clientAuthType: RequireAndVerifyClientCert
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: Middleware
+-metadata:
+-  name: pass-client-cert
+-  namespace: crapi
+-spec:
+-  passTLSClientCert:
+-    info:
+-      sans: true
+-      subject:
+-        commonName: true
+-        organizationalUnit: true
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: Middleware
+-metadata:
+-  name: edge-marker
+-  namespace: crapi
+-spec:
+-  headers:
+-    customRequestHeaders:
+-      X-Edge-Marker: "__EDGE_MARKER__"
+-      # WAF (nginx/ModSecurity) rewrites the standard X-Forwarded-Proto to its
+-      # own (plain-HTTP) scheme when it proxies on to bff, so bff can never
+-      # trust that header for building external redirect_uri/OAuth URLs. This
+-      # route only ever serves websecure (HTTPS) — X-Edge-Scheme is a custom
+-      # header name nginx doesn't recognize/touch, so it survives untouched,
+-      # same as X-Edge-Marker and X-Forwarded-Tls-Client-Cert-Info already do.
+-      X-Edge-Scheme: "https"
+----
+-# HTTPS entrypoint duy nhất cho crapi.ztlab.local — thay route HTTP cũ
+-# (k8s/crapi/ingress-aws.yaml, nay redirect sang https). Không TLS/không cert
+-# hợp lệ/cert do CA khác ký → handshake fail ở tầng Traefik, KHÔNG tới được waf/bff.
+-apiVersion: traefik.io/v1alpha1
+-kind: IngressRoute
+-metadata:
+-  name: crapi-bff-mtls
+-  namespace: crapi
+-spec:
+-  entryPoints: [websecure]
+-  routes:
+-    - match: Host(`crapi.ztlab.local`)
+-      kind: Rule
+-      middlewares:
+-        - name: pass-client-cert
+-        - name: edge-marker
+-      services:
+-        - name: waf
+-          port: 8080
+-  tls:
+-    secretName: crapi-edge-tls
+-    options:
+-      name: device-mtls
+-      namespace: crapi
+diff --git a/k8s/crapi/ingress-aws.yaml b/k8s/crapi/ingress-aws.yaml
+deleted file mode 100644
+index 4f9df95e..00000000
+--- a/k8s/crapi/ingress-aws.yaml
++++ /dev/null
+@@ -1,31 +0,0 @@
+-# Traefik IngressRoute (cluster AWS) — cổng HTTP cũ của crAPI.
+-# A3 (KEHOACH-THAYDOI-HETHONG.md): client-cert mTLS đòi TLS, nên cổng HTTP này
+-# giờ chỉ redirect sang HTTPS (k8s/crapi/edge-tls.yaml — entryPoint websecure,
+-# TLSOption device-mtls). KHÔNG còn proxy thẳng tới waf ở đây — nếu vẫn còn thì
+-# cert mTLS bị bỏ qua được bằng cách gọi thẳng cổng 80.
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: Middleware
+-metadata:
+-  name: crapi-https-redirect
+-  namespace: crapi
+-spec:
+-  redirectScheme:
+-    scheme: https
+-    permanent: true
+----
+-apiVersion: traefik.io/v1alpha1
+-kind: IngressRoute
+-metadata:
+-  name: crapi-bff
+-  namespace: crapi
+-spec:
+-  entryPoints: [web]
+-  routes:
+-    - match: Host(`crapi.ztlab.local`)
+-      kind: Rule
+-      middlewares:
+-        - name: crapi-https-redirect
+-      services:
+-        - name: waf
+-          port: 8080
+diff --git a/k8s/crapi/network-policies/aws-allow-list.yaml b/k8s/crapi/network-policies/aws-allow-list.yaml
+index 27d7e084..80a9a88a 100644
+--- a/k8s/crapi/network-policies/aws-allow-list.yaml
++++ b/k8s/crapi/network-policies/aws-allow-list.yaml
+@@ -22,13 +22,20 @@ spec:
+   podSelector: {}
+   policyTypes: [Ingress, Egress]
+   ingress:
+-    # Traefik (kube-system) -> waf :8080 (A2 edge) -> bff :8080
++    # Traefik (kube-system) -> waf :8080 (bien CU, giu song song toi khi bien MOI verify xong - Phan 1.3)
+     - from:
+         - namespaceSelector:
+             matchLabels: { kubernetes.io/metadata.name: kube-system }
+       ports:
+         - { port: 8080, protocol: TCP }
+         - { port: 15006, protocol: TCP }
++    # Istio IngressGateway (istio-system) -> waf :8080 (bien MOI, Phan 1.3) - xac nhan song 2026-09-13: thieu rule nay lam ECONNREFUSED tu gateway pod, kube-router THAT SU enforce netpol namespace-scoped cho traffic nay (khac mo ta chung 'khong enforce cho sidecar' trong tai lieu - do la ve L7/rule khac, khong phai default-deny theo namespace)
++    - from:
++        - namespaceSelector:
++            matchLabels: { kubernetes.io/metadata.name: istio-system }
++      ports:
++        - { port: 8080, protocol: TCP }
++        - { port: 15006, protocol: TCP }
+     # Prometheus scrape
+     - from:
+         - namespaceSelector:
+diff --git a/k8s/crapi/network-policies/aws-pod-segmentation.yaml b/k8s/crapi/network-policies/aws-pod-segmentation.yaml
+index fbddd946..c6a3221a 100644
+--- a/k8s/crapi/network-policies/aws-pod-segmentation.yaml
++++ b/k8s/crapi/network-policies/aws-pod-segmentation.yaml
+@@ -199,3 +199,25 @@ spec:
+       ports:
+         - port: 6379
+           protocol: TCP
++---
++apiVersion: networking.k8s.io/v1
++kind: NetworkPolicy
++metadata:
++  name: aws-pod-waf
++  namespace: crapi
++spec:
++  podSelector:
++    matchLabels:
++      app: waf
++  policyTypes:
++    - Ingress
++  ingress:
++    - from:
++        - podSelector:
++            matchLabels:
++              app: istio-ingressgateway-service-account
++      ports:
++        - port: 8080
++          protocol: TCP
++        - port: 15006
++          protocol: TCP
+diff --git a/k8s/crapi/network-policies/os-pod-segmentation.yaml b/k8s/crapi/network-policies/os-pod-segmentation.yaml
+index 0849d4cd..1baab297 100644
+--- a/k8s/crapi/network-policies/os-pod-segmentation.yaml
++++ b/k8s/crapi/network-policies/os-pod-segmentation.yaml
+@@ -9,6 +9,28 @@
+ ---
+ apiVersion: networking.k8s.io/v1
+ kind: NetworkPolicy
++metadata:
++  name: os-pod-keycloak
++  namespace: crapi
++spec:
++  podSelector:
++    matchLabels:
++      app: keycloak
++  policyTypes:
++    - Ingress
++  ingress:
++    - from:
++        - podSelector:
++            matchLabels:
++              app: kc-admin-setup
++      ports:
++        - port: 8080
++          protocol: TCP
++        - port: 15006
++          protocol: TCP
++---
++apiVersion: networking.k8s.io/v1
++kind: NetworkPolicy
+ metadata:
+   name: os-pod-opa
+   namespace: crapi
+diff --git a/k8s/crapi/opa.yaml b/k8s/crapi/opa.yaml
+index a2f8bd06..f054e00c 100644
+--- a/k8s/crapi/opa.yaml
++++ b/k8s/crapi/opa.yaml
+@@ -28,7 +28,22 @@ spec:
+     metadata:
+       labels: { app: opa }
+       annotations:
+-        sidecar.istio.io/inject: "false"
++        # Phần 1.2 (remediation 2026-09, BẪY 2 KEHOACH-THAYDOI-HETHONG.md):
++        # opa-server AWS gọi Keycloak (JWKS + OIDC discovery, http.send) —
++        # hop này giờ cần SVID thật (opa/crapi-policies/crosscloud_crapi.rego
++        # "Keycloak guard" kiểm valid_svid). Bật sidecar để CÓ danh tính cho
++        # EGRESS này. Không đặt spiffe.io/spiffeid cố định ở đây (khác
++        # bff/waf) vì file này DÙNG CHUNG cho cả 2 cluster — SPIFFE ID khác
++        # nhau (aws/opa vs openstack/opa) tuỳ context áp; SPIRE match theo
++        # k8s:ns/k8s:sa selector (scripts/ensure-spire-entries.sh), không
++        # phải theo annotation này (annotation ở bff/waf chỉ có giá trị tài
++        # liệu hoá, không có tác dụng chức năng — verify sống Phần 1.3).
++        # opa-service-plaintext DestinationRule + PeerAuthentication PERMISSIVE
++        # dưới đây GIỮ NGUYÊN hành vi INBOUND (mọi caller ext_authz hiện tại
++        # vẫn plaintext, không phá vỡ chuỗi PDP đang chạy) — chỉ EGRESS của
++        # opa (tới Keycloak, DestinationRule riêng phía AWS) mới đổi sang mТLS.
++        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
++        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+     spec:
+       serviceAccountName: opa
+       containers:
+@@ -41,18 +56,6 @@ spec:
+             - "--config-file=/etc/opa/opa-config.yaml"
+             - "--ignore=.*"
+             - "/policies"
+-          env:
+-            # A3/A2: same shared secret Traefik's edge-marker Middleware stamps
+-            # onto every request (k8s/crapi/edge-tls.yaml) and BFF checks
+-            # (services/bff/main.py) — zta_crapi.rego reads it via opa.runtime()
+-            # to recognize waf's OWN inbound hop (Traefik has no SPIFFE SVID,
+-            # so it can never pass valid_svid) as genuinely from the trusted
+-            # edge, not a pod calling waf/bff directly to fake the header.
+-            # Secret is AWS-only (edge only exists there) — optional so the
+-            # OpenStack opa-server (crosscloud_crapi.rego, unrelated) still starts.
+-            - name: EDGE_MARKER
+-              valueFrom:
+-                secretKeyRef: { name: bff-edge, key: marker, optional: true }
+           ports:
+             - { name: http, containerPort: 8181 }
+             - { name: grpc-authz, containerPort: 9191 }
+@@ -100,8 +103,9 @@ spec:
+     - { name: http, port: 8181, targetPort: 8181 }
+     - { name: grpc-authz, port: 9191, targetPort: 9191 }
+ ---
+-# opa-service không có sidecar → client istio-proxy phải đi plaintext tới nó
+-# (như opa-service-plaintext của finance).
++# opa-service KHÔNG chấp nhận mТLS ở chiều INBOUND (client istio-proxy phải
++# đi plaintext tới nó, như trước Phần 1.2) — chỉ EGRESS của opa (Phần 1.2,
++# tới Keycloak) mới có SVID thật.
+ apiVersion: networking.istio.io/v1
+ kind: DestinationRule
+ metadata:
+@@ -112,3 +116,21 @@ spec:
+   trafficPolicy:
+     tls:
+       mode: DISABLE
++---
++# Phần 1.2: opa-server nay có sidecar (egress tới Keycloak) nhưng INBOUND
++# (ext_authz gRPC/HTTP từ bff/waf/crapi-web/community/workshop/identity) phải
++# GIỮ NGUYÊN plaintext — nếu không override, ns default STRICT sẽ áp cho
++# opa's inbound và làm gãy toàn bộ PDP (mọi caller đang cấu hình DestinationRule
++# DISABLE cho host này, gửi plaintext, sẽ bị STRICT từ chối → fail-closed 503
++# toàn hệ thống). PERMISSIVE ở đây chấp nhận CẢ plaintext (mọi caller hiện tại,
++# không đổi) lẫn mТLS (nếu tương lai có caller khác chọn mã hoá hop này).
++apiVersion: security.istio.io/v1
++kind: PeerAuthentication
++metadata:
++  name: opa-permissive
++  namespace: crapi
++spec:
++  selector:
++    matchLabels: { app: opa }
++  mtls:
++    mode: PERMISSIVE
+diff --git a/k8s/crapi/waf-strip-forged-cert-header.yaml b/k8s/crapi/waf-strip-forged-cert-header.yaml
+new file mode 100644
+index 00000000..766cf369
+--- /dev/null
++++ b/k8s/crapi/waf-strip-forged-cert-header.yaml
+@@ -0,0 +1,56 @@
++# Phần 1.3 (remediation 2026-09) — chặn giả mạo header x-device-cert-info.
++#
++# Header đó chỉ đáng tin khi do CHÍNH Gateway biên (spiffe://ztlab.local/aws/
++# edge-gateway, k8s/istio/edge-gateway-cert-header.yaml) gắn — nhưng vì nó là
++# header ứng dụng bình thường (không phải tên đặc biệt Envoy), MỘT KHI đã lọt
++# qua waf's nginx, không có gì phân biệt được "Gateway gắn thật" với "client
++# tự gửi thẳng qua đường Traefik cũ hoặc một bypass port bất kỳ (:18081...)".
++# Nếu không chặn ở đây, RÀNG BUỘC #5 (chỉ tin giá trị do biên gắn) bị phá vỡ
++# y hệt lỗi mà X-Edge-Marker từng cố (và thất bại — xem KIEM-KE-HOP.md) sửa.
++#
++# Chỗ DUY NHẤT còn phân biệt được 2 nguồn là mТLS peer identity của CHÍNH hop
++# vào waf (waf's OWN inbound listener) — Gateway gọi bằng SPIFFE thật, Traefik/
++# bất kỳ bypass nào khác thì không (plaintext, source_principal rỗng) hoặc là
++# SPIFFE khác. Lọc ở SIDECAR_INBOUND của waf, TRƯỚC khi request tới nginx:
++# peer là đúng aws/edge-gateway thì giữ nguyên header, không thì xoá sạch.
++apiVersion: networking.istio.io/v1alpha3
++kind: EnvoyFilter
++metadata:
++  name: waf-strip-forged-device-cert-header
++  namespace: crapi
++spec:
++  workloadSelector:
++    labels:
++      app: waf
++  configPatches:
++    - applyTo: HTTP_FILTER
++      match:
++        context: SIDECAR_INBOUND
++        listener:
++          filterChain:
++            filter:
++              name: envoy.filters.network.http_connection_manager
++      patch:
++        operation: INSERT_BEFORE
++        value:
++          name: envoy.filters.http.lua
++          typed_config:
++            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
++            inlineCode: |
++              function envoy_on_request(request_handle)
++                local trusted = false
++                local ssl = request_handle:connection():ssl()
++                if ssl ~= nil then
++                  local uris = ssl:uriSanPeerCertificate()
++                  if uris ~= nil then
++                    for _, u in ipairs(uris) do
++                      if u == "spiffe://ztlab.local/aws/edge-gateway" then
++                        trusted = true
++                      end
++                    end
++                  end
++                end
++                if not trusted then
++                  request_handle:headers():remove("x-device-cert-info")
++                end
++              end
+diff --git a/k8s/crapi/waf.yaml b/k8s/crapi/waf.yaml
+index e10ac9e4..6b553911 100644
+--- a/k8s/crapi/waf.yaml
++++ b/k8s/crapi/waf.yaml
+@@ -150,18 +150,24 @@ spec:
+   ports:
+     - { name: http, port: 8080, targetPort: http }
+ ---
+-# waf receives plain HTTP from Traefik (not in the mesh) → PERMISSIVE.
+-# Its outbound hop to bff is ISTIO_MUTUAL (bff-custom-san DestinationRule).
++# Phần 1.3 (remediation 2026-09): Traefik (không sidecar, plaintext) đã bị
++# THÁO khỏi đường vào crAPI — biên nay là Istio IngressGateway (mТLS thật,
++# spiffe://ztlab.local/aws/edge-gateway). waf không còn lý do nhận plaintext
++# nữa nên siết về STRICT (đã cải thiện phụ đáng giá: hệ quả trực tiếp là mọi
++# EnvoyFilter/AuthorizationPolicy gắn vào waf's inbound giờ áp dụng cho MỌI
++# request — trước đây, PERMISSIVE khiến các filter đó không hề chạy cho
++# traffic plaintext, xem KIEM-KE-HOP.md nhóm (c)-1: waf-opa-authz CHƯA BAO
++# GIỜ được gọi khi waf còn PERMISSIVE).
+ apiVersion: security.istio.io/v1
+ kind: PeerAuthentication
+ metadata:
+-  name: waf-permissive
++  name: waf-strict
+   namespace: crapi
+ spec:
+   selector:
+     matchLabels: { app: waf }
+   mtls:
+-    mode: PERMISSIVE
++    mode: STRICT
+ ---
+ apiVersion: networking.istio.io/v1
+ kind: DestinationRule
+diff --git a/k8s/identity/keycloak-mesh-policies.yaml b/k8s/identity/keycloak-mesh-policies.yaml
+new file mode 100644
+index 00000000..5d1d781f
+--- /dev/null
++++ b/k8s/identity/keycloak-mesh-policies.yaml
+@@ -0,0 +1,45 @@
++# Phần 1.2 (remediation 2026-09) — Keycloak vào mesh thật (ns identity, cụm
++# OpenStack). Trước bản sửa này: không sidecar, không SPIFFE, không qua OPA
++# (KIEM-KE-HOP.md nhóm (c)-2/(c)-4). PeerAuthentication STRICT tuyệt đối —
++# KHÔNG có ngoại lệ PERMISSIVE nào (khác `waf`): mọi caller thật (bff, opa
++# AWS, 5 pod bootstrap Admin API) đều đã được đưa vào mesh, không còn ai cần
++# gọi plaintext nữa.
++---
++apiVersion: security.istio.io/v1
++kind: PeerAuthentication
++metadata:
++  name: keycloak-strict
++  namespace: identity
++spec:
++  selector:
++    matchLabels: { app: keycloak }
++  mtls:
++    mode: STRICT
++---
++# 2 DestinationRule — 2 tên DNS khác nhau trỏ cùng pod Keycloak:
++#   keycloak.identity.svc.cluster.local:8080       (nội cụm OpenStack — kc-admin-setup, probe)
++#   keycloak-openstack.crapi.svc.cluster.local:30091 (cross-cloud từ AWS — xem cross-cloud-aws.yaml)
++apiVersion: networking.istio.io/v1
++kind: DestinationRule
++metadata:
++  name: keycloak-custom-san
++  namespace: identity
++spec:
++  host: keycloak.identity.svc.cluster.local
++  trafficPolicy:
++    tls:
++      mode: ISTIO_MUTUAL
++      subjectAltNames:
++        - "spiffe://ztlab.local/openstack/keycloak"
++---
++apiVersion: security.istio.io/v1
++kind: AuthorizationPolicy
++metadata:
++  name: keycloak-opa-authz
++  namespace: identity
++spec:
++  selector:
++    matchLabels: { app: keycloak }
++  action: CUSTOM
++  provider: { name: opa-ext-authz }
++  rules: [ {} ]
+diff --git a/k8s/istio/edge-gateway-cert-header.yaml b/k8s/istio/edge-gateway-cert-header.yaml
+new file mode 100644
+index 00000000..5acd2303
+--- /dev/null
++++ b/k8s/istio/edge-gateway-cert-header.yaml
+@@ -0,0 +1,61 @@
++# Phần 1.3 (remediation 2026-09) — Gateway trích Subject/URI SAN của client cert
++# (đã verify bằng Device CA ở tầng TLS, k8s/crapi/edge-gateway.yaml) và gắn vào
++# 1 header ứng dụng riêng (x-device-cert-info) cho BFF đọc.
++#
++# TẠI SAO không dùng thẳng x-forwarded-client-cert (XFCC) chuẩn của Envoy: đã
++# verify sống 2026-09-13 — mỗi hop mТLS trong mesh (ở đây là waf->bff) TỰ GHI
++# ĐÈ XFCC bằng thông tin peer CỦA CHÍNH NÓ (SANITIZE_SET là hành vi mặc định
++# của Istio cho mọi sidecar) chứ không nối tiếp (append) hop trước — tới bff,
++# XFCC chỉ còn thấy waf (spiffe://.../aws/waf), thông tin cert thiết bị ở hop
++# Gateway->waf đã bị ghi đè mất. Đổi hành vi XFCC toàn mesh sang APPEND_FORWARD
++# ảnh hưởng MỌI hop mТLS khác — rủi ro vượt phạm vi Phần 1.3. Header riêng này
++# không phải tên đặc biệt của Envoy nên nginx (waf) và mọi hop sau chỉ forward
++# nguyên vẹn — đúng cơ chế "header riêng sống sót qua nginx" mà X-Edge-Marker/
++# X-Edge-Scheme (đường Traefik cũ) đã dùng, thay vì dựa vào bí mật chia sẻ.
++apiVersion: networking.istio.io/v1alpha3
++kind: EnvoyFilter
++metadata:
++  name: edge-gateway-device-cert-header
++  namespace: istio-system
++spec:
++  workloadSelector:
++    labels:
++      istio: ingressgateway
++  configPatches:
++    - applyTo: HTTP_FILTER
++      match:
++        context: GATEWAY
++        listener:
++          filterChain:
++            filter:
++              name: envoy.filters.network.http_connection_manager
++      patch:
++        operation: INSERT_BEFORE
++        value:
++          name: envoy.filters.http.lua
++          typed_config:
++            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
++            inlineCode: |
++              function envoy_on_request(request_handle)
++                local ssl = request_handle:connection():ssl()
++                if ssl ~= nil and ssl:peerCertificatePresented() then
++                  local subject = ssl:subjectPeerCertificate() or ""
++                  local uris = ssl:uriSanPeerCertificate()
++                  local uri = ""
++                  if uris ~= nil and #uris > 0 then
++                    uri = uris[1]
++                  end
++                  request_handle:headers():remove("x-device-cert-info")
++                  request_handle:headers():add("x-device-cert-info",
++                    "Subject=\"" .. subject .. "\";URI=\"" .. uri .. "\"")
++                end
++                -- waf's nginx ghi đè X-Forwarded-Proto về scheme của chính nó
++                -- (luôn http — TLS đã kết thúc ở Gateway) nên BFF không tin
++                -- được header chuẩn để dựng redirect_uri OIDC (services/bff/
++                -- main.py::_external_base). Header riêng này không bị nginx
++                -- đụng tới, y hệt cơ chế X-Edge-Scheme cũ của Traefik Middleware
++                -- edge-marker (nay đã xoá) — cố định "https" vì Gateway server
++                -- này CHỈ nhận HTTPS (k8s/crapi/edge-gateway.yaml).
++                request_handle:headers():remove("x-edge-scheme")
++                request_handle:headers():add("x-edge-scheme", "https")
++              end
+diff --git a/k8s/istio/istio-operator.yaml b/k8s/istio/istio-operator.yaml
+index d8a3a296..1f6f459b 100644
+--- a/k8s/istio/istio-operator.yaml
++++ b/k8s/istio/istio-operator.yaml
+@@ -59,3 +59,50 @@ spec:
+         envoyExtAuthzGrpc:
+           service: opa-service.crapi.svc.cluster.local
+           port: "9191"
++  # Phần 1.3 (remediation 2026-09) — biên vào mesh thật (thay Traefik->waf,
++  # hop chưa bao giờ có source_principal — xem KIEM-KE-HOP.md nhóm (c)-1).
++  # Chỉ bật trên AWS (nơi crAPI expose ra ngoài); OpenStack không cần
++  # ingressgateway crAPI. Service type ClusterIP — lab không có cloud LB,
++  # truy cập qua kubectl port-forward giống mọi UI khác (scripts/open-admin-uis.sh),
++  # cổng MỚI (8443) độc lập với Traefik :18443 hiện có (chạy song song, xem A3
++  # cũ + Phần 1.3 mới trong KEHOACH-THAYDOI-HETHONG.md — không tháo đường cũ
++  # trước khi đường mới verify xong cả 3 kịch bản cert).
++  components:
++    ingressGateways:
++      - name: istio-ingressgateway
++        namespace: istio-system
++        enabled: true
++        label:
++          app: istio-ingressgateway
++          istio: ingressgateway
++        k8s:
++          service:
++            type: ClusterIP
++            ports:
++              - name: https-device-mtls
++                port: 8443
++                targetPort: 8443
++          # Gateway pod nhận SPIFFE thật từ SPIRE, giống mọi workload khác
++          # (bff/waf) — nhưng KHÔNG đi qua sidecar-injection webhook (gateway
++          # pod render trực tiếp từ chart ingressGateways, không phải pod app
++          # được inject) nên `sidecar.istio.io/userVolume` annotation (dùng
++          # được cho bff/waf) KHÔNG có tác dụng ở đây — verify sống 2026-09-13:
++          # thiếu overlay này, istio-proxy log "Workload SDS socket not found.
++          # Starting Istio SDS Server" (rơi về cert tự ký của istiod, KHÔNG
++          # phải SPIRE) dù có podAnnotations. Dùng k8s.overlays (strategic
++          # patch vào chính Deployment) để mount đúng socket path.
++          podAnnotations:
++            spiffe.io/spiffeid: "spiffe://ztlab.local/aws/edge-gateway"
++          overlays:
++            - apiVersion: apps/v1
++              kind: Deployment
++              name: istio-ingressgateway
++              patches:
++                - path: spec.template.spec.volumes[100]
++                  value:
++                    name: spire-workload-socket
++                    hostPath: { path: /run/spire/sockets/agent.sock, type: Socket }
++                - path: spec.template.spec.containers.[name:istio-proxy].volumeMounts[100]
++                  value:
++                    name: spire-workload-socket
++                    mountPath: /var/run/secrets/workload-spiffe-uds/socket
+diff --git a/k8s/keycloak/deployment.yaml b/k8s/keycloak/deployment.yaml
+index 17f8fb2f..32dfe043 100644
+--- a/k8s/keycloak/deployment.yaml
++++ b/k8s/keycloak/deployment.yaml
+@@ -1,3 +1,7 @@
++apiVersion: v1
++kind: ServiceAccount
++metadata: { name: keycloak, namespace: identity }
++---
+ apiVersion: apps/v1
+ kind: Deployment
+ metadata:
+@@ -14,7 +18,16 @@ spec:
+     metadata:
+       labels:
+         app: keycloak
++      annotations:
++        # Phần 1.2 (remediation 2026-09) — vào mesh thật (SPIFFE
++        # spiffe://ztlab.local/openstack/keycloak, PeerAuthentication STRICT
++        # trong k8s/identity/keycloak-mesh-policies.yaml). Ns `identity` đã
++        # bật istio-injection=enabled (k8s/namespaces.yaml) nên sidecar tự
++        # tiêm; annotation dưới chỉ để mount đúng socket SPIRE, giống bff/waf.
++        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
++        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+     spec:
++      serviceAccountName: keycloak
+       containers:
+         - name: keycloak
+           image: quay.io/keycloak/keycloak:24.0.3
+diff --git a/k8s/keycloak/postgres.yaml b/k8s/keycloak/postgres.yaml
+index e585f5eb..d5bc3bf3 100644
+--- a/k8s/keycloak/postgres.yaml
++++ b/k8s/keycloak/postgres.yaml
+@@ -26,6 +26,13 @@ spec:
+     metadata:
+       labels:
+         app: keycloak-db
++      annotations:
++        # Ns identity nay bật istio-injection=enabled (Phần 1.2, cho Keycloak) —
++        # keycloak-db là hop L4 dữ liệu thuần (nhóm (b), KIEM-KE-HOP.md), cố ý
++        # KHÔNG vào mesh, giống postgresdb/mongodb/redis. Không tắt annotation
++        # này thì mọi pod trong ns tự động bị tiêm sidecar, cần SPIRE entry
++        # riêng mới lên Ready — không cần thiết cho một CSDL nội bộ.
++        sidecar.istio.io/inject: "false"
+     spec:
+       containers:
+         - name: postgres
+diff --git a/k8s/namespaces.yaml b/k8s/namespaces.yaml
+index 42afaa0c..de99f144 100644
+--- a/k8s/namespaces.yaml
++++ b/k8s/namespaces.yaml
+@@ -21,6 +21,9 @@ metadata:
+   labels:
+     app.kubernetes.io/part-of: ztlab
+     app.kubernetes.io/managed-by: kubectl
++    # Phần 1.2 (remediation 2026-09) — Keycloak + bootstrap Admin API pods vào
++    # mesh thật (xem KIEM-KE-HOP.md nhóm (c)-2/(c)-4).
++    istio-injection: enabled
+ ---
+ apiVersion: v1
+ kind: Namespace
+diff --git a/opa/crapi-policies/service_acl.rego b/opa/crapi-policies/service_acl.rego
+index 5929a868..b8fafb74 100644
+--- a/opa/crapi-policies/service_acl.rego
++++ b/opa/crapi-policies/service_acl.rego
+@@ -26,6 +26,10 @@ service_acl := {
+     "spiffe://ztlab.local/aws/crapi-web": {
+       "GET": ["/", "/static", "/images", "/index.html", "/favicon"],
+     },
++    "spiffe://ztlab.local/openstack/keycloak": {
++      "GET": ["/realms", "/resources", "/js"],
++      "POST": ["/realms"],
++    },
+   },
+   "spiffe://ztlab.local/aws/crapi-community": {
+     "spiffe://ztlab.local/openstack/crapi-identity": {
+@@ -39,6 +43,22 @@ service_acl := {
+       "GET": ["/identity/health_check"],
+     },
+   },
++  "spiffe://ztlab.local/aws/edge-gateway": {
++    "spiffe://ztlab.local/aws/waf": {
++      "GET": ["/"],
++      "POST": ["/"],
++      "PUT": ["/"],
++      "DELETE": ["/"],
++      "PATCH": ["/"],
++      "HEAD": ["/"],
++      "OPTIONS": ["/"],
++    },
++  },
++  "spiffe://ztlab.local/aws/opa": {
++    "spiffe://ztlab.local/openstack/keycloak": {
++      "GET": ["/realms"],
++    },
++  },
+   "spiffe://ztlab.local/aws/waf": {
+     "spiffe://ztlab.local/aws/bff": {
+       "GET": ["/"],
+@@ -50,4 +70,12 @@ service_acl := {
+       "OPTIONS": ["/"],
+     },
+   },
++  "spiffe://ztlab.local/openstack/kc-admin-setup": {
++    "spiffe://ztlab.local/openstack/keycloak": {
++      "GET": ["/"],
++      "POST": ["/"],
++      "PUT": ["/"],
++      "DELETE": ["/"],
++    },
++  },
+ }
+diff --git a/opa/crapi-policies/zta_crapi.rego b/opa/crapi-policies/zta_crapi.rego
+index c854f6de..268edcce 100644
+--- a/opa/crapi-policies/zta_crapi.rego
++++ b/opa/crapi-policies/zta_crapi.rego
+@@ -194,21 +194,14 @@ public_path if {
+   some p in ["/auth/start", "/auth/callback", "/auth/logout", "/login", "/kc"]
+   startswith(path, p)
+ }
+-# waf's OWN inbound hop (Traefik -> waf) can NEVER have a SPIFFE source_principal
+-# — Traefik sits outside the mesh by design, so internal_service_request/valid_svid
+-# is structurally unreachable here regardless of path. Real authz for these
+-# requests happens one hop later (waf -> bff, real mTLS SVID both sides) via
+-# internal_service_request; this rule only lets waf itself pass the request on.
+-# Gated on the same shared edge-marker secret Traefik stamps and BFF already
+-# trusts (RÀNG BUỘC #5) so a pod calling waf directly (no marker) still can't
+-# forge this — without it, every non-public_path request would 403 at waf
+-# before ever reaching bff's real check.
+-public_path if {
+-  source_principal == ""
+-  destination_principal == ""
+-  headers["x-edge-marker"] == opa.runtime().env.EDGE_MARKER
+-  opa.runtime().env.EDGE_MARKER != ""
+-}
++# Phần 1.3 (remediation 2026-09) — biên Traefik→waf (không SPIFFE, dựa vào
++# X-Edge-Marker) đã bị THÁO BỎ. Biên mới là Istio IngressGateway
++# (spiffe://ztlab.local/aws/edge-gateway, k8s/crapi/edge-gateway.yaml) →
++# waf, hop này có source_principal THẬT và được service_acl (generated)
++# cho phép qua edge `aws/edge-gateway -> aws/waf` — internal_service_request
++# ở dưới xử lý hop này như mọi hop mТLS khác, không cần rule public_path
++# riêng nào nữa. (Không còn X-Edge-Marker/EDGE_MARKER ở đâu trong codebase.)
++
+ # crapi-web static — bff → crapi-web GET
+ public_path if {
+   method in ["GET", "HEAD"]
+diff --git a/policy/service-graph-crapi.yaml b/policy/service-graph-crapi.yaml
+index 662c67b2..8562e1dd 100644
+--- a/policy/service-graph-crapi.yaml
++++ b/policy/service-graph-crapi.yaml
+@@ -22,6 +22,10 @@ clusters:
+ 
+ workloads:
+   aws/waf:              { cluster: aws, namespace: crapi, service_account: waf }
++  # Phần 1.3 — biên vào mesh thật (Istio IngressGateway, k8s/istio/istio-operator.yaml
++  # components.ingressGateways), thay hop Traefik->waf (không sidecar, đã chứng
++  # minh trong KIEM-KE-HOP.md là KHÔNG hề có source_principal/enforcement).
++  aws/edge-gateway:     { cluster: aws, namespace: istio-system, service_account: istio-ingressgateway-service-account }
+   aws/bff:              { cluster: aws, namespace: crapi, service_account: bff }
+   aws/crapi-web:        { cluster: aws, namespace: crapi, service_account: crapi-web }
+   aws/crapi-community:  { cluster: aws, namespace: crapi, service_account: crapi-community }
+@@ -29,13 +33,31 @@ workloads:
+   aws/mongodb:          { cluster: aws, namespace: crapi, app_label: mongodb, spiffe: false }
+   aws/redis:            { cluster: aws, namespace: crapi, app_label: redis, spiffe: false }
+   aws/mailhog:          { cluster: aws, namespace: crapi, app_label: mailhog, spiffe: false }
+-  aws/opa:              { cluster: aws, namespace: crapi, app_label: opa, spiffe: false }
++  # Phần 1.2 (remediation 2026-09, BẪY 2): opa (cả 2 cluster) nay có sidecar +
++  # SVID thật — cần cho egress aws/opa -> openstack/keycloak (JWKS/OIDC
++  # discovery qua OPA). service_account (không phải app_label) vì giờ nó CÓ
++  # tham gia edge L7 (test_every_l7_workload_has_spire_entry_and_real_spiffe
++  # đòi hỏi service_account để sinh entry SPIRE). Inbound (ext_authz từ mọi
++  # workload khác) GIỮ NGUYÊN plaintext — xem k8s/crapi/opa.yaml opa-permissive.
++  aws/opa:              { cluster: aws, namespace: crapi, service_account: opa }
+   openstack/crapi-identity: { cluster: openstack, namespace: crapi, service_account: crapi-identity }
+   openstack/postgresdb:     { cluster: openstack, namespace: crapi, app_label: postgresdb, spiffe: false }
+-  openstack/opa:            { cluster: openstack, namespace: crapi, app_label: opa, spiffe: false }
+-  # A1 — Keycloak + keycloak-db chuyển sang OpenStack (ns identity). Không sidecar,
+-  # không qua OPA service_acl; AWS gọi cross-cloud tới NodePort 30091.
+-  openstack/keycloak:       { cluster: openstack, namespace: identity, app_label: keycloak, spiffe: false }
++  openstack/opa:            { cluster: openstack, namespace: crapi, service_account: opa }
++  # Phần 1.2 (remediation 2026-09) — Keycloak (ns identity, OpenStack) vào mesh
++  # thật: sidecar + SPIFFE riêng, không còn `spiffe: false`/DestinationRule
++  # DISABLE. Trước bản sửa này hop bff/opa(AWS) -> Keycloak đi HTTP trần qua
++  # WireGuard, không SPIFFE, không qua OPA — đúng nhóm (c) trong KIEM-KE-HOP.md.
++  openstack/keycloak: { cluster: openstack, namespace: identity, service_account: keycloak }
++  # Bootstrap Keycloak Admin API (BẪY 1, Phần 1.2): 5 pod tạm (kc-crapi-setup,
++  # kc-ldap-federation-setup, kc-audience-mapper-setup, kc-stepup-flow-setup,
++  # kc-saml-meta — scripts/deploy-crapi.sh + deploy-app.sh) chạy Admin API
++  # calls tới Keycloak để cấu hình realm/client/role. Trước bản sửa này chạy
++  # HOÀN TOÀN ngoài mesh. Quyết định: đưa vào mesh (ServiceAccount riêng,
++  # cùng ns identity nên tự động có sidecar khi ns bật istio-injection) thay
++  # vì mở PERMISSIVE cho Keycloak — giữ Keycloak STRICT tuyệt đối, không có
++  # ngoại lệ plaintext nào. Danh tính build-time, không phải runtime user-
++  # facing, nên cho phép full path (giống waf/edge-gateway -> bff).
++  openstack/kc-admin-setup: { cluster: openstack, namespace: identity, service_account: kc-admin-setup }
+   # spire_only: cần entry SPIRE (workload có sidecar, cần SVID) nhưng KHÔNG tham
+   # gia edges/service_acl/pod-segmentation — không phải hop nghiệp vụ, chỉ cần
+   # danh tính. aws/prometheus: scrape nhiều target qua Prometheus Operator/manual
+@@ -45,9 +67,25 @@ workloads:
+   openstack/crapi-seed: { cluster: openstack, namespace: crapi,      service_account: crapi-seed,  spire_only: true }
+ 
+ edges:
+-  # ── Biên: Traefik → WAF (ModSecurity/CRS DetectionOnly) → bff ─────────────
+-  # WAF là proxy tin cậy đứng trước bff; mọi method/path đi qua. CRS chỉ ghi
+-  # nhận (DetectionOnly), không đổi quyết định OPA ở hop này.
++  # ── Biên MỚI (Phần 1.3): Istio IngressGateway → WAF ───────────────────────
++  # Gateway có sidecar/SPIFFE thật (spiffe://ztlab.local/aws/edge-gateway),
++  # verify client cert thiết bị bằng Device CA ở tầng TLS (Gateway resource,
++  # k8s/crapi/edge-gateway.yaml) — không còn cần X-Edge-Marker để "tin" hop
++  # này vì bản thân hop này giờ có source_principal thật, qua OPA thật.
++  - from: aws/edge-gateway
++    to: aws/waf
++    rules:
++      - { method: GET,     paths: ["/"] }
++      - { method: POST,    paths: ["/"] }
++      - { method: PUT,     paths: ["/"] }
++      - { method: DELETE,  paths: ["/"] }
++      - { method: PATCH,   paths: ["/"] }
++      - { method: HEAD,    paths: ["/"] }
++      - { method: OPTIONS, paths: ["/"] }
++    l4_ports: [8080, 15006]
++
++  # ── WAF → bff (không đổi bởi Phần 1.3 — waf vẫn là proxy đứng giữa Gateway
++  # và bff, chỉ có nguồn NHẬN vào waf đổi từ Traefik sang edge-gateway ở trên).
+   - from: aws/waf
+     to: aws/bff
+     rules:
+@@ -121,11 +159,36 @@ edges:
+   - { from: openstack/crapi-identity, to: openstack/postgresdb, l4_only: true, l4_ports: [5432] }
+   # identity → mailhog (AWS) SMTP, cross-cloud
+   - { from: openstack/crapi-identity, to: aws/mailhog, l4_only: true, cross_cluster: true, l4_ports: [31025] }
+-  # A1 — bff (/kc proxy + token) và opa AWS (JWKS + OIDC discovery qua http.send)
+-  # → Keycloak OpenStack, cross-cloud NodePort 30091 qua WireGuard. L4 thuần,
+-  # không qua OPA service_acl (Keycloak không phải hop mesh).
+-  - { from: aws/bff, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
+-  - { from: aws/opa, to: openstack/keycloak, l4_only: true, cross_cluster: true, l4_ports: [30091] }
++  # Phần 1.2 — bff (/kc proxy + token, paths giữ đúng _KC_PROXY_ALLOWED trong
++  # services/bff/main.py) và opa AWS (JWKS + OIDC discovery qua http.send) →
++  # Keycloak OpenStack, cross-cloud NodePort 30091 qua WireGuard. Nay qua OPA
++  # thật (crosscloud_crapi.rego "Keycloak guard") như mọi hop khác — không
++  # còn L4 thuần.
++  - from: aws/bff
++    to: openstack/keycloak
++    cross_cluster: true
++    l4_ports: [30091]
++    rules:
++      - { method: GET,  paths: ["/realms", "/resources", "/js"] }
++      - { method: POST, paths: ["/realms"] }
++  - from: aws/opa
++    to: openstack/keycloak
++    cross_cluster: true
++    l4_ports: [30091]
++    rules:
++      - { method: GET, paths: ["/realms"] }
++  # BẪY 1 — bootstrap Admin API (xem workloads: openstack/kc-admin-setup ở
++  # trên). Danh tính build-time đã cầm sẵn mật khẩu admin Keycloak qua Secret,
++  # gate theo path không thêm giá trị an toàn thật (khác bff/opa — không có
++  # credential thật) nên cho full path, giống waf/edge-gateway → bff.
++  - from: openstack/kc-admin-setup
++    to: openstack/keycloak
++    l4_ports: [8080, 15006]
++    rules:
++      - { method: GET,    paths: ["/"] }
++      - { method: POST,   paths: ["/"] }
++      - { method: PUT,    paths: ["/"] }
++      - { method: DELETE, paths: ["/"] }
+ 
+   # ── OPA ext_authz — mọi workload nghiệp vụ trong cluster đó ─────────────
+   - { from: aws/bff,             to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+@@ -148,7 +211,10 @@ netpol_baseline:
+     ingress:
+       - from_ns: kube-system
+         ports: [8080, 15006]
+-        comment: "Traefik (kube-system) -> waf :8080 (A2 edge) -> bff :8080"
++        comment: "Traefik (kube-system) -> waf :8080 (bien CU, giu song song toi khi bien MOI verify xong - Phan 1.3)"
++      - from_ns: istio-system
++        ports: [8080, 15006]
++        comment: "Istio IngressGateway (istio-system) -> waf :8080 (bien MOI, Phan 1.3) - xac nhan song 2026-09-13: thieu rule nay lam ECONNREFUSED tu gateway pod, kube-router THAT SU enforce netpol namespace-scoped cho traffic nay (khac mo ta chung 'khong enforce cho sidecar' trong tai lieu - do la ve L7/rule khac, khong phai default-deny theo namespace)"
+       - from_ns: monitoring
+         ports: [8080, 15006, 8181]
+         comment: "Prometheus scrape"
+diff --git a/scripts/deploy-app.sh b/scripts/deploy-app.sh
+index c5204223..af2417c0 100755
+--- a/scripts/deploy-app.sh
++++ b/scripts/deploy-app.sh
+@@ -273,7 +273,7 @@ deploy_openldap_and_federation() {
+   # already-imported realm. Register it live via Admin API too so it exists
+   # even when Keycloak itself wasn't redeployed this run.
+   kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
+ import urllib.request, json, urllib.parse, urllib.error
+@@ -331,7 +331,7 @@ deploy_audience_mapper() {
+   # then silently lost on the next from-scratch deploy-all.sh because it lived
+   # nowhere else). Register it live too so every deploy ends up with it.
+   kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+@@ -387,7 +387,7 @@ deploy_stepup_flow() {
+   # Admin API in a prior session and lost on the next from-scratch deploy (see
+   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
+   kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+@@ -517,7 +517,7 @@ deploy_aws_saml_federation() {
+   # and corrupt a captured file — use a plain pod + exec + explicit delete
+   # instead of --rm to keep the captured metadata byte-exact.
+   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --command -- sh -c "sleep 30" >/dev/null
++  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 30" >/dev/null
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
+   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+diff --git a/scripts/deploy-crapi.sh b/scripts/deploy-crapi.sh
+index 1665e933..ac9409f6 100755
+--- a/scripts/deploy-crapi.sh
++++ b/scripts/deploy-crapi.sh
+@@ -117,7 +117,7 @@ configure_crapi_keycloak() {
+   admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
+   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
+   kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
++  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+@@ -140,11 +140,14 @@ for name,desc in [('crapi-user','crAPI user'),('crapi-mechanic','crAPI mechanic'
+     if name not in roles:
+         call('POST','/admin/realms/%s/roles'%REALM,{'name':name,'description':desc}); print('role +',name)
+ 
+-# A3: điểm vào HTTPS/mTLS (Traefik websecure) thay cổng HTTP cũ (8080/18081) —
+-# giữ luôn các entry HTTP cũ cho tương thích ngược debug (bff bypass :18083 vẫn
+-# HTTP). 18443 = tunnel dev (scripts/open-admin-uis.sh); production/NodePort đi
+-# qua cổng 443 mặc định nên không cần khai báo cổng riêng.
+-REDIR=['https://crapi.ztlab.local/*','https://crapi.ztlab.local:18443/*','http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
++# Phần 1.3 (remediation 2026-09): điểm vào HTTPS/mTLS nay là Istio
++# IngressGateway (không còn Traefik websecure — xem k8s/crapi/edge-gateway.yaml)
++# — giữ luôn các entry HTTP cũ cho tương thích ngược debug (bff bypass :18081/
++# :18083 vẫn HTTP, xem KIEM-KE-HOP.md Phần 1.4 — các cổng này đòi hỏi kubeconfig
++# của cụm, không phải đường vào Zero-Trust cho thiết bị thật). 18444 = tunnel
++# dev cho Gateway (scripts/open-admin-uis.sh); production/NodePort đi qua cổng
++# 8443 mặc định nên không cần khai báo cổng riêng.
++REDIR=['https://crapi.ztlab.local/*','https://crapi.ztlab.local:18444/*','http://crapi.ztlab.local/*','http://crapi.ztlab.local:8080/*','http://localhost:8080/*','http://localhost:18081/*','http://127.0.0.1:8080/*','http://127.0.0.1:18081/*']
+ for cid in ('crapi-bff','crapi-bff-stepup'):
+     ex=call('GET','/admin/realms/%s/clients?clientId=%s'%(REALM,cid)) or []
+     if ex:
+@@ -185,7 +188,6 @@ deploy_bff() {
+   step "BFF (edge PEP + Keycloak) + WAF (ModSecurity/CRS DetectionOnly)"
+   kaws apply -f "$CRAPI_DIR/bff.yaml"
+   [[ -f "$CRAPI_DIR/waf.yaml" ]] && kaws apply -f "$CRAPI_DIR/waf.yaml"
+-  kaws apply -f "$CRAPI_DIR/ingress-aws.yaml"
+   kos apply -f "$CRAPI_DIR/ingress-os.yaml"
+   wait_rollout "$AWS_CONTEXT" crapi deployment/bff 240s
+   [[ -f "$CRAPI_DIR/waf.yaml" ]] && wait_rollout "$AWS_CONTEXT" crapi deployment/waf 240s
+@@ -224,7 +226,13 @@ deploy_mesh_policies() {
+   step "Istio mesh policies (PeerAuth + DestinationRule + AuthorizationPolicy→OPA)"
+   kaws apply -f "$CRAPI_DIR/istio-policies.yaml"
+   kos  apply -f "$CRAPI_DIR/istio-policies.yaml"
+-  ok "istio-policies"
++  # Phần 1.3 (remediation 2026-09) — biên vào mesh thật, thay Traefik->waf.
++  # Cần chạy SAU reinstall_istio_for_crapi_provider (istio-ingressgateway đã
++  # tồn tại, đọc secret edge-gateway-tls do provision_device_ca tạo).
++  kaws apply -f "$CRAPI_DIR/edge-gateway.yaml"
++  kaws apply -f "$REPO_ROOT/k8s/istio/edge-gateway-cert-header.yaml"
++  kaws apply -f "$CRAPI_DIR/waf-strip-forged-cert-header.yaml"
++  ok "istio-policies + edge-gateway"
+ }
+ 
+ register_spire() {
+diff --git a/scripts/deploy-security-stack.sh b/scripts/deploy-security-stack.sh
+index 5227a2d8..0ce2eeb0 100755
+--- a/scripts/deploy-security-stack.sh
++++ b/scripts/deploy-security-stack.sh
+@@ -130,6 +130,17 @@ deploy_step_2_keycloak() {
+   log_info "Creating Keycloak secrets..."
+   ensure_keycloak_secret
+ 
++  # Phần 1.2 (remediation 2026-09, BẪY 1) — ServiceAccount riêng cho 5 pod
++  # bootstrap Admin API (kc-crapi-setup, kc-ldap-federation-setup,
++  # kc-audience-mapper-setup, kc-stepup-flow-setup, kc-saml-meta —
++  # scripts/deploy-crapi.sh + deploy-app.sh). Trước bản sửa này chạy hoàn
++  # toàn ngoài mesh (default ServiceAccount, không sidecar). Ns identity đã
++  # bật istio-injection=enabled nên các pod này tự động có sidecar khi dùng
++  # SA này — cần entry SPIRE riêng (scripts/spire-entries.generated.sh,
++  # sinh từ policy/service-graph-crapi.yaml) để sidecar lên Ready.
++  kubectl --context $KEYCLOAK_CONTEXT -n identity create serviceaccount kc-admin-setup \
++    --dry-run=client -o yaml | kubectl --context $KEYCLOAK_CONTEXT apply -f -
++
+   log_info "Deploying Keycloak PostgreSQL..."
+   kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
+ 
+@@ -153,6 +164,13 @@ deploy_step_2_keycloak() {
+ 
+   kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
+   kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
++  # Phần 1.2 (remediation 2026-09) — PeerAuth STRICT + DestinationRule +
++  # AuthorizationPolicy→OPA cho Keycloak. An toàn áp sớm (trước khi SPIRE
++  # entry tồn tại ở bước 3.3 dưới): probe kubelet luôn đi qua cổng trạng thái
++  # riêng của istio-proxy, không bị STRICT chặn; sidecar tự settle khi entry
++  # xuất hiện, giống mọi workload khác trong bản sửa này (đã verify sống
++  # trên AWS — xem BAOCAO-SUA-GOC).
++  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/keycloak-mesh-policies.yaml"
+   # A1: Keycloak UI ingress theo Keycloak — chuyển sang cụm OpenStack.
+   [[ -f "$REPO_ROOT/k8s/identity/ingress-os.yaml" ]] && \
+     kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/ingress-os.yaml"
+@@ -256,32 +274,26 @@ provision_device_ca() {
+     rm -f "$ca_dir/edge.csr"
+   fi
+ 
+-  # k8s Secrets (ns crapi, cụm AWS — nơi Traefik phục vụ IngressRoute crapi-bff):
+-  #   device-ca-cert : cert public (Traefik TLSOption clientAuth caFiles + BFF verify)
+-  #   crapi-edge-tls  : server cert cho HTTPS entrypoint
++  # k8s Secrets (cụm AWS):
++  #   device-ca-cert  (ns crapi)        : cert public (BFF không dùng trực tiếp
++  #                                       nữa từ Phần 1.3, giữ cho issue-device-cert.sh
++  #                                       và tương thích ngược script cũ)
++  #   edge-gateway-tls (ns istio-system): server cert + Device CA — Gateway
++  #                                       resource (k8s/crapi/edge-gateway.yaml,
++  #                                       Phần 1.3) đọc secret này qua
++  #                                       credentialName để làm TLS server cert
++  #                                       VÀ verify client cert (mode: MUTUAL).
++  #                                       Secret phải nằm ns của gateway workload
++  #                                       (istio-system), không phải ns Gateway CR.
+   kubectl --context "$AWS_CONTEXT" -n crapi create secret generic device-ca-cert \
+     --from-file=tls.ca="$ca_dir/device-ca.crt" \
+     --from-file=ca.crt="$ca_dir/device-ca.crt" \
+     --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+-  kubectl --context "$AWS_CONTEXT" -n crapi create secret tls crapi-edge-tls \
+-    --cert="$ca_dir/edge.crt" --key="$ca_dir/edge.key" \
++  kubectl --context "$AWS_CONTEXT" -n istio-system create secret generic edge-gateway-tls \
++    --from-file=tls.crt="$ca_dir/edge.crt" --from-file=tls.key="$ca_dir/edge.key" \
++    --from-file=ca.crt="$ca_dir/device-ca.crt" \
+     --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+ 
+-  # Edge marker: BFF chỉ tin header cert khi request mang marker này (do middleware
+-  # Traefik gắn) — "chỉ chấp nhận giá trị do reverse proxy ở biên gắn vào" (RÀNG BUỘC #5).
+-  local marker
+-  if kubectl --context "$AWS_CONTEXT" -n crapi get secret bff-edge >/dev/null 2>&1; then
+-    marker="$(kubectl --context "$AWS_CONTEXT" -n crapi get secret bff-edge -o jsonpath='{.data.marker}' | base64 -d)"
+-  else
+-    marker="$(openssl rand -hex 24)"
+-    kubectl --context "$AWS_CONTEXT" -n crapi create secret generic bff-edge \
+-      --from-literal=marker="$marker" \
+-      --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+-  fi
+-  # Render edge-tls.yaml (Traefik TLSOption + Middlewares + HTTPS IngressRoute)
+-  sed "s/__EDGE_MARKER__/${marker}/g" "$REPO_ROOT/k8s/crapi/edge-tls.yaml" \
+-    | kubectl --context "$AWS_CONTEXT" apply -f -
+-
+   chmod 600 "$ca_dir"/*.key
+   log_info "Device CA + edge cert ready. Client certs: scripts/issue-device-cert.sh <user> <compliant|non-compliant>"
+ }
+diff --git a/scripts/open-admin-uis.sh b/scripts/open-admin-uis.sh
+index 025ca84a..3bff7c8b 100755
+--- a/scripts/open-admin-uis.sh
++++ b/scripts/open-admin-uis.sh
+@@ -8,11 +8,17 @@
+ #
+ # UI sau khi bật:
+ #   Keycloak     → http://localhost:8180   (admin / ztlab-admin-2026)
+-#   crAPI        → http://localhost:18081   (WAF→BFF — entry point; SPA + login OIDC)
+-#   crAPI BFF bypass → http://localhost:18083   (bỏ qua WAF, debug)
+-#   crAPI (Traefik mTLS) → https://crapi.ztlab.local:18443   (A3 — client-cert
+-#     mTLS thật qua Traefik biên; dùng bởi tests/crapi_*.sh. Cert:
++#   crAPI (Gateway mTLS) → https://crapi.ztlab.local:18444   (Phần 1.3 — client-cert
++#     mТLS thật qua Istio IngressGateway biên; ĐƯỜNG VÀO ZERO-TRUST DUY NHẤT
++#     cho thiết bị thật, dùng bởi tests/crapi_*.sh. Cert:
+ #     scripts/issue-device-cert.sh <device-id> <compliant|non-compliant>)
++#   crAPI (WAF, debug) → http://localhost:18081   (bỏ qua Gateway+TLS+mТLS+OPA
++#     HOÀN TOÀN — không chỉ "bỏ qua WAF". `kubectl port-forward` tunnel thẳng
++#     vào network namespace của pod, không đi qua iptables redirect của Istio
++#     sidecar (đã verify sống 2026-09-13: vẫn 200 dù waf đã STRICT) — cổng này
++#     đòi kubeconfig của cụm, tương đương quyền `kubectl exec`, KHÔNG phải một
++#     đường vào thứ hai cho thiết bị/người dùng thật. Xem KIEM-KE-HOP.md Phần 1.4.
++#   crAPI BFF bypass (debug) → http://localhost:18083   (idem — bỏ qua cả WAF/CRS)
+ #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
+ #   Loki         → http://localhost:13100
+ #   Incident Analyzer → http://localhost:8091   (evidence bundles — /evidence, /health)
+@@ -108,9 +114,9 @@ show_status() {
+   echo "=== ZTLab — Port-forward status ==="
+   declare -A PORT_NAMES=(
+     [8180]="Keycloak"
+-    [18081]="crAPI (WAF→BFF)"
+-    [18083]="crAPI BFF (bypass)"
+-    [18443]="crAPI (Traefik mTLS)"
++    [18081]="crAPI (WAF, debug — bo qua TLS/OPA)"
++    [18083]="crAPI BFF (bypass, debug)"
++    [18444]="crAPI (Gateway mTLS)"
+     [3000]="Grafana"
+     [13100]="Loki"
+     [8091]="Incident Analyzer"
+@@ -118,7 +124,7 @@ show_status() {
+     [8025]="MailHog (crAPI)"
+     [8026]="MailHog (SOC)"
+   )
+-  for port in 8180 18081 18083 18443 3000 13100 8091 9090 8025 8026; do
++  for port in 8180 18081 18083 18444 3000 13100 8091 9090 8025 8026; do
+     local name="${PORT_NAMES[$port]}"
+     local pid_file="$PID_DIR/${port}.pid"
+     local daemon_alive="no"
+@@ -159,14 +165,15 @@ start_pf_daemon "Keycloak"            identity   keycloak          8180  8080  "
+ # crAPI (ứng dụng mục tiêu) — điểm vào là WAF (ModSecurity/CRS DetectionOnly, A2)
+ # đứng trước BFF. Cổng 18081 khớp redirectUri client crapi-bff. WAF proxy trong
+ # suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).
+-start_pf_daemon "crAPI (WAF→BFF)"     crapi      waf              18081  8080
+-start_pf_daemon "crAPI BFF (bypass)"  crapi      bff              18083  8080
+-# A3 — cổng TLS thật của Traefik (entrypoint websecure, client-cert mTLS
+-# RequireAndVerifyClientCert). kubectl port-forward chỉ chuyển tiếp TCP nên
+-# TLS handshake vẫn diễn ra nguyên vẹn giữa curl/trình duyệt và Traefik.
+-# Remote port PHẢI là spec.ports[].port của Service (443), không phải
+-# targetPort container (8443) — kubectl port-forward svc/X không map theo targetPort.
+-start_pf_daemon "crAPI (Traefik mTLS)" kube-system traefik        18443  443
++start_pf_daemon "crAPI (WAF, debug — bo qua TLS/OPA)" crapi waf 18081 8080
++start_pf_daemon "crAPI BFF (bypass, debug)" crapi bff 18083 8080
++# Phần 1.3 — cổng TLS thật của Istio IngressGateway (client-cert mTLS
++# RequireAndVerifyClientCert bằng Device CA, k8s/crapi/edge-gateway.yaml).
++# kubectl port-forward chỉ chuyển tiếp TCP nên TLS handshake vẫn diễn ra
++# nguyên vẹn giữa curl/trình duyệt và Gateway — ĐÂY LÀ đường vào Zero-Trust
++# duy nhất cho thiết bị thật (khác :18081/:18083 ở trên, vốn bỏ qua TLS/OPA
++# hoàn toàn vì lý do kubectl port-forward, không phải vì thiết kế Gateway).
++start_pf_daemon "crAPI (Gateway mTLS)" istio-system istio-ingressgateway 18444 8443
+ # PLG Stack
+ start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
+ start_pf_daemon "Loki"                plg-stack  loki             13100  3100
+diff --git a/scripts/spire-entries.generated.sh b/scripts/spire-entries.generated.sh
+index 840ad468..89ce33a8 100644
+--- a/scripts/spire-entries.generated.sh
++++ b/scripts/spire-entries.generated.sh
+@@ -9,13 +9,18 @@ AWS_SPIRE_WORKLOADS=(
+   "spiffe://ztlab.local/aws/crapi-community|crapi|crapi-community"
+   "spiffe://ztlab.local/aws/crapi-web|crapi|crapi-web"
+   "spiffe://ztlab.local/aws/crapi-workshop|crapi|crapi-workshop"
++  "spiffe://ztlab.local/aws/edge-gateway|istio-system|istio-ingressgateway-service-account"
++  "spiffe://ztlab.local/aws/opa|crapi|opa"
+   "spiffe://ztlab.local/aws/prometheus|monitoring|prometheus"
+   "spiffe://ztlab.local/aws/waf|crapi|waf"
+ )
+-AWS_EXPECTED_COUNT=6
++AWS_EXPECTED_COUNT=8
+ 
+ OPENSTACK_SPIRE_WORKLOADS=(
+   "spiffe://ztlab.local/openstack/crapi-identity|crapi|crapi-identity"
+   "spiffe://ztlab.local/openstack/crapi-seed|crapi|crapi-seed"
++  "spiffe://ztlab.local/openstack/kc-admin-setup|identity|kc-admin-setup"
++  "spiffe://ztlab.local/openstack/keycloak|identity|keycloak"
++  "spiffe://ztlab.local/openstack/opa|crapi|opa"
+ )
+-OPENSTACK_EXPECTED_COUNT=2
++OPENSTACK_EXPECTED_COUNT=5
+diff --git a/services/bff/main.py b/services/bff/main.py
+index c22a074d..5429fddf 100644
+--- a/services/bff/main.py
++++ b/services/bff/main.py
+@@ -8,12 +8,15 @@ Vai trò (KE-HOACH-CRAPI.md C2b):
+      nhúng trong ảnh crapi-identity) với `sub` = email user. Token này đi ở
+      header `Authorization` cho hop Đông–Tây (crAPI cần). Token Keycloak đi
+      ở `X-Access-Token` cho OPA kiểm (realm role + step-up `acr`).
+-  3. Device-trust + device-posture (A3 KEHOACH-THAYDOI-HETHONG.md): Traefik ở
+-     biên yêu cầu client certificate (Device CA, k8s/crapi/edge-tls.yaml) rồi
+-     gắn header `X-Forwarded-Tls-Client-Cert-Info` — bff đọc cert đã verify để
+-     suy ra device_id (SAN URI) + posture (Subject OU), chỉ tin khi
+-     `X-Edge-Marker` (bí mật chia sẻ với Middleware biên) khớp `EDGE_MARKER` →
+-     header `X-Device-Trust` / `X-Device-Posture` cho hop đi tiếp.
++  3. Device-trust + device-posture (Phần 1.3, remediation 2026-09): Istio
++     IngressGateway ở biên yêu cầu client certificate (Device CA,
++     k8s/crapi/edge-gateway.yaml, tls.mode: MUTUAL) rồi gắn header
++     `x-device-cert-info` (Lua filter, k8s/istio/edge-gateway-cert-header.yaml)
++     — bff đọc cert đã verify để suy ra device_id (SAN URI) + posture (Subject
++     OU). Header chỉ đáng tin vì waf's inbound (k8s/crapi/waf-strip-forged-
++     cert-header.yaml) xoá nó trừ khi mТLS peer đúng là edge-gateway — không
++     còn bí mật chia sẻ (X-Edge-Marker cũ đã xoá hoàn toàn) → header
++     `X-Device-Trust` / `X-Device-Posture` cho hop đi tiếp.
+   4. Reverse-proxy: /identity /community /workshop → backend crAPI (có
+      inject header). / , /static , /images ... → crapi-web (React tĩnh).
+   5. Step-up: hành động nhạy cảm + `acr != high` → 401 step_up_required
+@@ -118,11 +121,21 @@ PKCE_COOKIE = "ztlab_bff_pkce"
+ SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE", "3600"))
+ HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
+ 
+-# ── A3: device cert đã verify ở Traefik biên (device-mtls) ──────────────────
+-EDGE_MARKER = os.getenv("EDGE_MARKER", "")
+-_MARKER_HEADER = "x-edge-marker"
+-_CERT_INFO_HEADER = "x-forwarded-tls-client-cert-info"
++# ── Phần 1.3 (remediation 2026-09): device cert đã verify ở biên mesh thật
++# (Istio IngressGateway, k8s/crapi/edge-gateway.yaml, tls.mode: MUTUAL bằng
++# Device CA) ─────────────────────────────────────────────────────────────
++# Header dưới đây KHÔNG cần một bí mật chia sẻ (kiểu X-Edge-Marker cũ, đã xoá
++# khỏi toàn bộ codebase — xem KIEM-KE-HOP.md nhóm (c)-1) để tin: nó chỉ có
++# thể mang giá trị thật vì (1) k8s/istio/edge-gateway-cert-header.yaml (Lua,
++# chạy ở Gateway) chỉ gắn nó SAU KHI tự verify client cert bằng Device CA ở
++# tầng TLS — không cert hợp lệ thì không có request nào tới được đây để gắn;
++# (2) k8s/crapi/waf-strip-forged-cert-header.yaml (Lua, chạy ở waf's inbound)
++# xoá sạch header này trừ khi mТLS peer đúng là
++# spiffe://ztlab.local/aws/edge-gateway — không pod/bypass port nào khác giả
++# được. Đây chính là "OPA/BFF đổi từ kiểm marker sang kiểm source_principal
++# đúng là biên" mà kế hoạch remediation yêu cầu.
+ _DEVICE_URI_PREFIX = "spiffe://ztlab.local/device/"
++_DEVICE_CERT_HEADER_V2 = "x-device-cert-info"
+ 
+ REDIS_URL = os.getenv("REDIS_URL", "redis://redis.crapi.svc.cluster.local:6379/0")
+ LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
+@@ -252,13 +265,14 @@ def _client_ip(request: Request) -> str:
+ 
+ def _external_base(request: Request) -> str:
+     """request.base_url chỉ phản ánh Host/scheme của hop bff thấy — KHÔNG phải
+-    URL bên ngoài client thật sự dùng. WAF (nginx) đứng giữa Traefik và bff
++    URL bên ngoài client thật sự dùng. WAF (nginx) đứng giữa Gateway và bff
+     ghi đè X-Forwarded-Proto về scheme của chính nó (luôn http, vì TLS đã kết
+-    thúc ở Traefik) nên header chuẩn này không tin được ở đây. X-Edge-Scheme
+-    là header riêng do Middleware edge-marker gắn (k8s/crapi/edge-tls.yaml) —
+-    nginx không biết tên này nên đi qua nguyên vẹn, giống X-Edge-Marker và
+-    X-Forwarded-Tls-Client-Cert-Info. Thiếu scheme đúng thì OIDC redirect_uri
+-    sai (http thay vì https), Keycloak/trình duyệt không quay lại được BFF."""
++    thúc ở Istio IngressGateway) nên header chuẩn này không tin được ở đây.
++    X-Edge-Scheme là header riêng do Lua filter ở Gateway gắn
++    (k8s/istio/edge-gateway-cert-header.yaml) — nginx không biết tên này nên
++    đi qua nguyên vẹn, giống x-device-cert-info. Thiếu scheme đúng thì OIDC
++    redirect_uri sai (http thay vì https), Keycloak/trình duyệt không quay
++    lại được BFF."""
+     scheme = request.headers.get("x-edge-scheme") or request.headers.get("x-forwarded-proto") or request.url.scheme
+     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.base_url.hostname
+     return f"{scheme}://{host}"
+@@ -279,19 +293,9 @@ def _parse_cert_info(raw: str) -> dict[str, str]:
+     return fields
+ 
+ 
+-def _evaluate_device_cert(request: Request) -> dict:
+-    """A3 — device_id/posture từ client cert đã verify ở Traefik biên
+-    (device-mtls, k8s/crapi/edge-tls.yaml). Chỉ tin X-Forwarded-Tls-Client-Cert-Info
+-    khi X-Edge-Marker khớp EDGE_MARKER (RÀNG BUỘC #5 — pod trong cluster gọi
+-    thẳng waf/bff, bỏ qua Traefik, không biết bí mật này nên không giả được)."""
+-    marker = request.headers.get(_MARKER_HEADER, "")
+-    cert_info = request.headers.get(_CERT_INFO_HEADER, "")
+-    if not EDGE_MARKER or marker != EDGE_MARKER or not cert_info:
+-        return {"device_id": None, "posture": "unknown", "device_trust": "suspicious"}
+-
+-    fields = _parse_cert_info(cert_info)
++def _cert_fields_to_device(fields: dict[str, str]) -> dict:
+     subject = fields.get("Subject", "")
+-    san = fields.get("SAN", "")
++    san = fields.get("SAN") or fields.get("URI", "")
+ 
+     m = re.search(r"OU=posture:([A-Za-z0-9_-]+)", subject)
+     posture = m.group(1) if m else "unknown"
+@@ -303,6 +307,20 @@ def _evaluate_device_cert(request: Request) -> dict:
+     return {"device_id": device_id, "posture": posture, "device_trust": device_trust}
+ 
+ 
++def _evaluate_device_cert(request: Request) -> dict:
++    """Device posture từ client cert đã verify bằng Device CA ở tầng TLS của
++    Istio IngressGateway (k8s/crapi/edge-gateway.yaml). Không cần kiểm gì
++    thêm ở đây: giá trị header CHỈ có thể là thật, vì
++    k8s/crapi/waf-strip-forged-cert-header.yaml đã xoá nó ở waf's inbound trừ
++    khi mТLS peer đúng spiffe://ztlab.local/aws/edge-gateway — không cert
++    hợp lệ ở Gateway thì không có request nào tới được BFF để mang header
++    giả cả (TLS handshake fail ngay ở Gateway)."""
++    cert_info = request.headers.get(_DEVICE_CERT_HEADER_V2, "")
++    if not cert_info:
++        return {"device_id": None, "posture": "unknown", "device_trust": "suspicious"}
++    return _cert_fields_to_device(_parse_cert_info(cert_info))
++
++
+ async def _audit(event: str, **kw: Any) -> None:
+     rec = {"event": event, "service": SERVICE, "cloud": CLOUD, "ts": time.time(), **kw}
+     logger.info(json.dumps(rec))
+@@ -520,10 +538,10 @@ async def _proxy(request: Request, base: str, upstream_path: str,
+         target += "?" + request.url.query
+     body = await request.body()
+     fwd = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+-    # client KHÔNG được tự đặt các header tin cậy (x-forwarded-tls-client-cert-info /
+-    # x-edge-marker là tín hiệu nội bộ bff↔Traefik — không được lộ ra hop sau)
++    # client KHÔNG được tự đặt các header tin cậy (x-device-cert-info là tín
++    # hiệu nội bộ bff↔Gateway — không được lộ ra hop sau)
+     for h in ("authorization", "x-access-token", "x-device-trust", "x-device-posture",
+-              _CERT_INFO_HEADER, _MARKER_HEADER):
++              _DEVICE_CERT_HEADER_V2):
+         fwd.pop(h, None)
+         fwd.pop(h.title(), None)
+     if inject:
+diff --git a/tests/lib/crapi_common.sh b/tests/lib/crapi_common.sh
+index 801c768c..2a6cbc02 100644
+--- a/tests/lib/crapi_common.sh
++++ b/tests/lib/crapi_common.sh
+@@ -16,13 +16,14 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ REPO_ROOT="$(cd "$LIB_DIR/../.." && pwd)"
+ CA_DIR="$REPO_ROOT/deploy/vendor/device-ca"
+ 
+-# A3 (KEHOACH-THAYDOI-HETHONG.md): điểm vào crAPI nay là Traefik biên với
+-# client-cert mTLS bắt buộc (k8s/crapi/edge-tls.yaml) — không còn cổng HTTP
+-# trần. Tunnel BFF_URL trỏ thẳng svc/traefik (entrypoint websecure, xem
+-# scripts/open-admin-uis.sh "crAPI (Traefik mTLS)"), --resolve để SNI/Host
+-# khớp Host(`crapi.ztlab.local`) dù cổng cục bộ khác nhau.
++# Phần 1.3 (remediation 2026-09): điểm vào crAPI nay là Istio IngressGateway
++# biên với client-cert mTLS bắt buộc (k8s/crapi/edge-gateway.yaml) — không
++# còn Traefik/cổng HTTP trần. Tunnel BFF_URL trỏ thẳng
++# svc/istio-ingressgateway (xem scripts/open-admin-uis.sh "crAPI (Gateway
++# mTLS)"), --resolve để SNI/Host khớp Host(`crapi.ztlab.local`) dù cổng cục
++# bộ khác nhau.
+ CRAPI_HOST="${CRAPI_HOST:-crapi.ztlab.local}"
+-BFF_URL="${BFF_URL:-https://$CRAPI_HOST:18443}"
++BFF_URL="${BFF_URL:-https://$CRAPI_HOST:18444}"
+ _BFF_TUNNEL_PORT="${BFF_URL##*:}"
+ KUBE_AWS="${KUBE_AWS:-ctx-aws}"
+ KUBE_OS="${KUBE_OS:-ctx-openstack}"
+@@ -57,7 +58,7 @@ log()  { printf '[%s] %s\n'       "$_SC" "$*"; }
+ pass() { printf '[%s] PASS: %s\n' "$_SC" "$*"; }
+ fail() { printf '[%s] FAIL: %s\n' "$_SC" "$*" >&2; exit 1; }
+ 
+-# preflight: Device CA fixtures + BFF reachable qua Traefik mTLS
++# preflight: Device CA fixtures + BFF reachable qua Istio Gateway mTLS
+ crapi_preflight() {
+   _ensure_device_cert test-compliant compliant
+   _ensure_device_cert test-noncompliant non-compliant
