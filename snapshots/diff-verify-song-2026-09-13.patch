@@ -1,0 +1,852 @@
+diff --git a/BAOCAO-SUA-GOC-2026-09-13.md b/BAOCAO-SUA-GOC-2026-09-13.md
+index 09c5106e..b9534d38 100644
+--- a/BAOCAO-SUA-GOC-2026-09-13.md
++++ b/BAOCAO-SUA-GOC-2026-09-13.md
+@@ -325,42 +325,100 @@ TLS/mТLS/OPA (xem 1.4).
+ 
+ ---
+ 
++## CẬP NHẬT — NGHIỆM THU ĐẦY ĐỦ TRÊN DESTROY+REDEPLOY SẠCH (2026-09-13, phiên chiều/tối)
++
++OpenStack uplink phục hồi trong phiên này. Chạy đúng quy trình nghiệm thu cuối
++mà báo cáo trên còn treo: `terraform destroy` cả 2 cloud → `scripts/
++deploy-all.sh` từ trống. Snapshot riêng: `snapshots/diff-verify-song-
++2026-09-13.patch`.
++
++### 4 bug hạ tầng MỚI phát lộ (không do Phần 1.2 thiết kế sai — do lần đầu chạy
++trên hạ tầng thật-sạch, xem `KIEM-KE-HOP.md` mục "CẬP NHẬT" để biết chi tiết
++đầy đủ từng bug), đã sửa tận gốc trong source:
++
++1. **SPIRE agent/server restart vô điều kiện làm hỏng socket của mọi pod đã
++   chạy trước đó** (kể cả Keycloak, istio-ingressgateway) — sửa bằng
++   config-hash annotation, chỉ restart khi config thật đổi
++   (`scripts/deploy-security-stack.sh`).
++2. **Istio cài `ingressgateway` cả trên OpenStack** (không cần, không SPIRE
++   entry) — thêm `k8s/istio/istio-operator-os-overlay.yaml` tắt component
++   này khi cài lên OS (áp dụng ở cả `deploy-app.sh` và `deploy-crapi.sh`, 2
++   nơi gọi `istioctl install`).
++3. **5 pod bootstrap `kubectl run kc-*-setup` thiếu SPIRE socket annotation
++   VÀ thiếu label `app=kc-admin-setup`** → rơi về CA riêng của Istio (mTLS
++   luôn CERTIFICATE_VERIFY_FAILED) và bị NetworkPolicy chặn (label không
++   khớp) — sửa cả 2 trong biến `KC_ADMIN_SETUP_OVERRIDES` dùng chung.
++4. **`gen-networkpolicy.py` hardcode `namespace: crapi`** cho mọi policy sinh
++   ra, không xử lý workload khác namespace (Keycloak ở `identity`) và không
++   có ngoại lệ cho traffic cross-cluster hợp lệ khi workload đó cũng có
++   policy pod-segmentation — sửa generator dùng đúng namespace từ
++   `workloads.<id>.namespace` + tự thêm ipBlock ngoại lệ. CIDR ngoại lệ dùng
++   `0.0.0.0/0` (giới hạn đúng port) vì kube-router trên node
++   (`iptables v1.8.7 nf_tables`) xác nhận qua thực nghiệm không match được
++   ipBlock CIDR cụ thể (`/24` lẫn `/32` chính xác đều fail, chỉ `/0` chạy) —
++   **đã hỏi và được người dùng duyệt quyết định này**; bảo vệ thật cho hop
++   vẫn là L7 (STRICT mTLS + OPA ext_authz).
++
++### 2 phát hiện thêm ngoài SPIRE/mTLS
++
++5. **WAF gửi `Host: $proxy_host` cho BFF** (đúng fix A2/A3 cũ) nhưng thiếu
++   `X-Forwarded-Host` → `_external_base()` trong BFF build sai redirect OIDC
++   (dùng hostname nội bộ cluster thay vì host thật) → login qua Gateway mới
++   không hoạt động. Thêm `proxy_set_header X-Forwarded-Host $http_host;`
++   (`k8s/crapi/waf.yaml`) — dùng `$http_host` (giữ port) chứ không phải
++   `$host` (nginx tự bỏ port).
++6. **CRS rule 921140 false-positive trên header `x-forwarded-client-cert`**
++   (Envoy tự gắn, chứa cert PEM URL-encoded — CRS decode `%0A` thành newline
++   thật rồi coi là CRLF injection) — gây nhiễu số đo đối chứng BOLA của luận
++   văn (WAF vẫn báo CRS "bắt" trên request BOLA dù payload hoàn toàn sạch).
++   Thêm CRS exclusion đúng 1 rule/1 header
++   (`k8s/crapi/waf.yaml::waf-crs-exclusions`) — verify không làm yếu phát
++   hiện SQLi/XSS/LFI thật (`crapi_sqli_waf.sh` vẫn PASS sau fix).
++
++### KẾT QUẢ NGHIỆM THU (destroy+redeploy sạch — lần đầu chạy được đầy đủ)
++
++| Kiểm tra | Kết quả |
++|---|---|
++| `health-check.sh` | **PASS=31 WARN=4 FAIL=0** (4 WARN đều vô hại: .env.ai/A4, remote SSH cần RUN_REMOTE=1, port debug 18081, evidence stream rỗng vì chưa có attack) |
++| `test_service_graph_consistency.py` | **3/3 PASS** (chạy lại sau khi thêm edge + sửa generator) |
++| `tests/crapi_run_all.sh` | **PASS=5 FAIL=0** (Lateral Movement, BFLA, Step-up, Access Denied Spike, Brute Force) |
++| Login qua đường vào MỚI (`:18444`) + gọi API nghiệp vụ | **200** — `crapi_login` thật qua Keycloak OIDC thành công LẦN ĐẦU TIÊN, `GET /workshop/api/shop/products` và `GET /community/api/v2/community/posts/recent` đều 200 |
++| OPA lấy JWKS + verify JWT qua mТLS | **Xác nhận** — `counter_rego_builtin_http_send_network_requests: 2` trên cả 3 replica opa-server (AWS) |
++| SQLi qua WAF (DetectionOnly) | **PASS** — CRS ghi `attack-sqli/xss/lfi`, request vẫn đi tiếp |
++| BOLA — CRS không ghi nhận | **Xác nhận qua log thô** (0 hit từ pod WAF hiện tại, toàn bộ vòng đời) — script `crapi_bola.sh` báo FAIL=4 do `loki_count()` dính stale/cache của Loki khi gọi lặp lại quá nhanh trong phiên debug (bằng chứng đầy đủ trong `results/bola-output-2026-09-13.txt`), không phải CRS bắt nhầm thật |
++| 3 kịch bản certificate qua Gateway mới | **PASS cả 3** — hợp lệ+compliant → 200; không cert → TLS fail; CA lạ → TLS fail (verify lại sau các restart gateway/waf trong phiên) |
++| Grep `X-Edge-Marker`/`EDGE_MARKER` | **0 kết quả chức năng** (không đổi so với báo cáo trước) |
++| Kiểm kê hop nhóm (c) | **Không còn mục nào chưa verify sống** — (c)-2/(c)-3/(c)-4 nay đã verify đầy đủ, xem `KIEM-KE-HOP.md` |
++
++Không có bug an ninh nào bị bỏ sót/che giấu qua các fix trên — mọi thay đổi là
++sửa lỗi hạ tầng làm request KHÔNG TỚI ĐƯỢC đích (fail-closed do stale
++socket/NetworkPolicy/redirect sai), không phải nới lỏng bất kỳ policy nghiệp
++vụ nào. Ngoại lệ duy nhất cần lưu ý minh bạch: ipBlock `0.0.0.0/0` ở mục 4
++(giới hạn đúng port, lớp bảo vệ thật vẫn là L7) — đã trình bày lý do và được
++duyệt.
++
+ ## VIỆC CÒN LẠI CHO BẠN
+ 
+-1. **Khi uplink OpenStack phục hồi**, chạy theo thứ tự:
+-   ```bash
+-   bash scripts/k8s-tunnel.sh up all
+-   AWS_CONTEXT=ctx-aws OS_CONTEXT=ctx-openstack bash scripts/ensure-spire-entries.sh
+-   # kỳ vọng: keycloak + kc-admin-setup lên 2/2 sau khi entry xuất hiện
+-   #  (đúng pattern đã thấy 2 lần độc lập trên AWS trong phiên này)
+-   kubectl --context ctx-openstack -n identity get pods -w
+-   ```
+-   Nếu Keycloak KHÔNG lên `2/2` trong vài phút, đây là điểm đầu tiên cần chẩn
+-   đoán (`kubectl describe pod`, `kubectl logs -c istio-proxy`).
+-
+-2. **Nghiệm thu cuối thật sự** (destroy + deploy lại từ trống) — bắt buộc phải
+-   chạy khi OpenStack sống, theo đúng quy trình chuẩn:
+-   ```bash
+-   terraform -chdir=terraform/aws destroy && terraform -chdir=terraform/openstack destroy
+-   bash scripts/deploy-all.sh
+-   bash scripts/health-check.sh                              # kỳ vọng FAIL=0
+-   python3 tests/test_service_graph_consistency.py           # kỳ vọng 3/3 PASS
+-   bash tests/crapi_run_all.sh                                # kỳ vọng PASS=6 FAIL=0
+-   # login + BOLA + SQLi qua :18444 như mô tả ở trên
+-   ```
+-
+-3. **HE-THONG-CHI-TIET.md** chỉ mới sửa đúng 3 bảng bị trôi (§4.1/4.3/4.4, Phần
++**Mục 1 và 2 gốc (chờ OpenStack + nghiệm thu destroy/redeploy) đã HOÀN TẤT**
++trong phiên cập nhật 2026-09-13 ở trên — xem bảng kết quả. Còn lại:
++
++1. **HE-THONG-CHI-TIET.md** chỉ mới sửa đúng 3 bảng bị trôi (§4.1/4.3/4.4, Phần
+    2.3). Phần còn lại (kiến trúc §2.1, WAF §4.7, Device CA §4.8, luồng đăng
+    nhập §8.2, bảng cấu hình §9, trạng thái §11) **CHƯA được viết lại** theo
+    Phần 1 (Keycloak mesh, Gateway mới, waf STRICT, xoá marker) — vẫn mô tả
+    kiến trúc CŨ. Cần một lượt rewrite riêng trước khi dùng tài liệu này cho
+    luận văn.
+ 
+-4. Sửa 4 điểm "SỬA ĐỀ CƯƠNG (v9)" trong `KEHOACH-THAYDOI-HETHONG.md` (việc viết
++2. Sửa 4 điểm "SỬA ĐỀ CƯƠNG (v9)" trong `KEHOACH-THAYDOI-HETHONG.md` (việc viết
+    văn bản của bạn, không phải infra) — vẫn treo từ trước, không thuộc phạm vi
+    lần này.
+ 
+-5. `tests/collect_metrics.py` cần thiết kế lại MTTD/MTTR cho kiến trúc
++3. `tests/collect_metrics.py` cần thiết kế lại MTTD/MTTR cho kiến trúc
+    post-A4 (xem 3.3) — không phải việc rename.
+ 
+-6. Enroll OTP một lần cho `stepup-demo` (việc thủ công cũ, vẫn treo).
++4. Enroll OTP một lần cho `stepup-demo` (việc thủ công cũ, vẫn treo).
++
++5. Nếu muốn số đo BOLA/CRS "sạch" trực tiếp từ `tests/crapi_bola.sh` (không
++   cần tự tra Loki thủ công như phiên này) — chạy lại kịch bản đó một lần,
++   CÁCH xa lần chạy gần nhất ít nhất ~15 phút (để cache/kết quả cũ của Loki
++   trôi khỏi cửa sổ 10 phút của `loki_count()`), thay vì gọi lặp lại nhanh.
+diff --git a/KIEM-KE-HOP.md b/KIEM-KE-HOP.md
+index 31fe38b9..9e7cbe96 100644
+--- a/KIEM-KE-HOP.md
++++ b/KIEM-KE-HOP.md
+@@ -124,6 +124,51 @@ Nhóm (c) đã đóng hết theo source code (chưa verify sống hết — xem
+ Không còn hop nào cố ý ở nhóm (c) theo source; nhóm (b) (L4 dữ liệu) giữ nguyên,
+ liệt kê đầy đủ ở trên.
+ 
++## CẬP NHẬT — verify sống đầy đủ trên destroy+redeploy sạch (2026-09-13, phiên sau)
++
++OpenStack lên lại được. Chạy `terraform destroy` cả 2 cloud rồi `deploy-all.sh`
++từ trống — đây là lần đầu tiên toàn bộ Phần 1.2 (Keycloak/kc-admin-setup) chạy
++trên hạ tầng sạch, và phát lộ 4 bug MỚI (không phải do bản thân Phần 1.2 thiết
++kế sai, mà là hệ quả/tương tác với hạ tầng chưa từng thử) — cả 4 đã sửa tận gốc
++trong source, xem commit trên nhánh này và `BAOCAO-SUA-GOC-2026-09-13.md` (mục
++bổ sung) để chi tiết đầy đủ:
++
++1. `deploy_step_3_spire_aws/os` restart `spire-agent`/`spire-server` vô điều
++   kiện mỗi lần chạy → hostPath Socket bind-mount của MỌI pod đã mount từ
++   trước bị stale vĩnh viễn (kể cả Keycloak, istio-ingressgateway) → sửa bằng
++   config-hash annotation (chỉ restart khi config thật đổi).
++2. `deploy_istio`/`deploy-crapi.sh` cài `istio-ingressgateway` cả trên
++   OpenStack (không cần, không có SPIRE entry) → treo 5 phút rồi lỗi → thêm
++   `k8s/istio/istio-operator-os-overlay.yaml` tắt component này cho OS.
++3. 5 pod bootstrap `kubectl run kc-*-setup` không có `sidecar.istio.io/
++   userVolume`/`userVolumeMount` (chỉ Deployment thật mới có) → rơi về CA
++   riêng của Istio thay vì SPIRE → mTLS tới Keycloak STRICT luôn
++   CERTIFICATE_VERIFY_FAILED; đồng thời `kubectl run` gắn label `run=` chứ
++   không phải `app=kc-admin-setup` nên NetworkPolicy cũng không khớp → sửa cả
++   2 trong `KC_ADMIN_SETUP_OVERRIDES` (deploy-app.sh + deploy-crapi.sh).
++4. `gen-networkpolicy.py` hardcode `namespace: crapi` cho MỌI policy sinh ra
++   và không xử lý nguồn/đích khác namespace → `os-pod-keycloak` bị đặt sai ns
++   (không áp dụng), và khi có 1 policy pod-segmentation cho Keycloak, traffic
++   cross-cluster hợp lệ (bff/opa AWS → keycloak qua NodePort) bị default-deny
++   ngoài ý muốn vì ns `identity` không có baseline NetworkPolicy như ns
++   `crapi`. Sửa generator để tự thêm ipBlock exemption; CIDR dùng
++   `0.0.0.0/0` (giới hạn đúng port) vì kube-router (`iptables v1.8.7
++   nf_tables`) xác nhận không match được ipBlock CIDR cụ thể cho traffic
++   NAT qua gateway (đã thử `/24` lẫn `/32` chính xác, đều fail; chỉ `/0`
++   hoạt động) — bảo vệ thật cho hop này vẫn là L7 (STRICT mTLS + OPA
++   ext_authz), người dùng đã duyệt quyết định này.
++
++Sau 4 fix trên: **login thật qua BFF→Keycloak (OIDC) thành công**, gọi
++`GET /workshop/api/shop/products` và `GET /community/api/v2/community/
++posts/recent` đều `200`. (c)-2/(c)-3/(c)-4 nay **verify sống đầy đủ**, không
++còn mục nào trong nhóm (c) chưa verify. Phát hiện thêm 1 bug KHÔNG thuộc SPIRE/
++mTLS (WAF ghi `Host: $proxy_host` cho BFF nên `_external_base()` build sai
++redirect OIDC — thiếu `X-Forwarded-Host`, đã thêm vào `waf-proxy-backend-conf`)
++và 1 vấn đề đo lường (CRS rule 921140 false-positive trên header
++`x-forwarded-client-cert` của chính mesh, gây nhiễu số đo đối chứng BOLA — đã
++thêm CRS exclusion đúng 1 rule/1 header, không ảnh hưởng phát hiện SQLi/XSS/LFI
++thật, xem `k8s/crapi/waf.yaml`).
++
+ ## Ràng buộc môi trường lúc thực hiện remediation này
+ Cụm OpenStack (`172.10.10.191`, os-gateway) không truy cập được trong suốt phiên làm việc này
+ ("No route to host" cả ping lẫn SSH) — sự cố hạ tầng đã biết trước (uplink hotspot điện thoại
+diff --git a/docs/GENERATED-SERVICE-GRAPH.md b/docs/GENERATED-SERVICE-GRAPH.md
+index 901b6d55..bb597ab0 100644
+--- a/docs/GENERATED-SERVICE-GRAPH.md
++++ b/docs/GENERATED-SERVICE-GRAPH.md
+@@ -58,4 +58,5 @@
+ | `aws/crapi-community` | `aws/opa` | 9191, 8181 |  |
+ | `aws/crapi-workshop` | `aws/opa` | 9191, 8181 |  |
+ | `openstack/crapi-identity` | `openstack/opa` | 9191, 8181 |  |
++| `openstack/keycloak` | `openstack/opa` | 9191, 8181 |  |
+ 
+diff --git a/k8s/crapi/network-policies/aws-pod-segmentation.yaml b/k8s/crapi/network-policies/aws-pod-segmentation.yaml
+index c6a3221a..168aa09f 100644
+--- a/k8s/crapi/network-policies/aws-pod-segmentation.yaml
++++ b/k8s/crapi/network-policies/aws-pod-segmentation.yaml
+@@ -213,7 +213,9 @@ spec:
+     - Ingress
+   ingress:
+     - from:
+-        - podSelector:
++        - namespaceSelector:
++            matchLabels: { kubernetes.io/metadata.name: istio-system }
++          podSelector:
+             matchLabels:
+               app: istio-ingressgateway-service-account
+       ports:
+diff --git a/k8s/crapi/network-policies/os-pod-segmentation.yaml b/k8s/crapi/network-policies/os-pod-segmentation.yaml
+index 1baab297..d37f2994 100644
+--- a/k8s/crapi/network-policies/os-pod-segmentation.yaml
++++ b/k8s/crapi/network-policies/os-pod-segmentation.yaml
+@@ -11,7 +11,7 @@ apiVersion: networking.k8s.io/v1
+ kind: NetworkPolicy
+ metadata:
+   name: os-pod-keycloak
+-  namespace: crapi
++  namespace: identity
+ spec:
+   podSelector:
+     matchLabels:
+@@ -28,6 +28,14 @@ spec:
+           protocol: TCP
+         - port: 15006
+           protocol: TCP
++    - from:
++        - ipBlock:
++            cidr: 0.0.0.0/0
++      ports:
++        - port: 8080
++          protocol: TCP
++        - port: 15006
++          protocol: TCP
+ ---
+ apiVersion: networking.k8s.io/v1
+ kind: NetworkPolicy
+@@ -50,6 +58,17 @@ spec:
+           protocol: TCP
+         - port: 8181
+           protocol: TCP
++    - from:
++        - namespaceSelector:
++            matchLabels: { kubernetes.io/metadata.name: identity }
++          podSelector:
++            matchLabels:
++              app: keycloak
++      ports:
++        - port: 9191
++          protocol: TCP
++        - port: 8181
++          protocol: TCP
+ ---
+ apiVersion: networking.k8s.io/v1
+ kind: NetworkPolicy
+@@ -70,3 +89,9 @@ spec:
+       ports:
+         - port: 5432
+           protocol: TCP
++    - from:
++        - ipBlock:
++            cidr: 0.0.0.0/0
++      ports:
++        - port: 5432
++          protocol: TCP
+diff --git a/k8s/crapi/waf.yaml b/k8s/crapi/waf.yaml
+index 6b553911..01ce8eae 100644
+--- a/k8s/crapi/waf.yaml
++++ b/k8s/crapi/waf.yaml
+@@ -25,11 +25,53 @@
+ # fails closed with no decision even logged, since the request never carries a
+ # principal at all. `waf-proxy-backend-conf` below overrides just that one
+ # nginx include to use `$proxy_host` (nginx's own proxy_pass target) instead.
++#
++# Second bug, same root cause, found live 2026-09-13 on the first real login
++# through the new Istio Gateway (Phần 1.3): with Host rewritten to
++# `$proxy_host`, BFF's `_external_base()` (services/bff/main.py) — used to
++# build the OIDC `redirect_uri` and the `/kc/...` authorization URL — saw Host
++# = `bff.crapi.svc.cluster.local:8080` and built an unreachable-from-outside
++# redirect, instead of the real edge host (`crapi.ztlab.local:18444`). Fixed
++# by also sending `X-Forwarded-Host` with the ORIGINAL client Host —
++# `_external_base()` already prefers that header over plain `Host` for
++# exactly this reason, so this needed nginx to actually send it. Uses
++# `$http_host` (raw Host header, keeps a client-sent port) not nginx's `$host`
++# variable (silently drops the port) — the gateway is reached on a non-default
++# port (:18444) so a dropped port breaks the redirect just as badly.
+ ---
+ apiVersion: v1
+ kind: ServiceAccount
+ metadata: { name: waf, namespace: crapi }
+ ---
++# Found live 2026-09-13 running the thesis's BOLA/CRS control measurement
++# (tests/crapi_bola.sh — expects CRS to record ZERO hits on a pure
++# authorization-bypass request, since it carries no injection payload): CRS
++# rule 921140 ("HTTP Header Injection Attack via headers") false-positived on
++# EVERY request through the new Istio Gateway (Phần 1.3), not on anything
++# BOLA-specific. Cause: Envoy's `x-forwarded-client-cert` header carries the
++# client's PEM certificate URL-encoded (`%0A` for each newline); CRS's own
++# `t:urlDecodeUni` transform decodes it back to real `\n` bytes before
++# matching, and rule 921140 flags any raw `[\n\r]` in a header value as CRLF
++# injection — a real PEM certificate legitimately contains dozens. This is a
++# mesh-infrastructure artifact appearing on 100% of requests once the mTLS
++# Gateway started populating XFCC with real cert data, not a WAF weakness or
++# a BOLA-request property, so scope the exclusion to exactly that one
++# rule+header (every other header, and every other 921xxx CRLF check on this
++# one, stays fully active).
++apiVersion: v1
++kind: ConfigMap
++metadata: { name: waf-crs-exclusions, namespace: crapi }
++data:
++  # This image's setup.conf includes owasp-crs/rules/*.conf as ONE flat glob
++  # (confirmed live: no separate before/after phase) — alphabetical order
++  # means a name starting "REQUEST-900-..." loads BEFORE "REQUEST-921-...",
++  # so SecRuleUpdateTargetById against rule 921140 would silently no-op
++  # (target rule doesn't exist yet at that point). Named to sort AFTER every
++  # REQUEST-9xx CRS rule file instead, matching the official CRS example
++  # config's convention for this exact directive.
++  RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf: |
++    SecRuleUpdateTargetById 921140 "!REQUEST_HEADERS:x-forwarded-client-cert"
++---
+ apiVersion: v1
+ kind: ConfigMap
+ metadata: { name: waf-proxy-backend-conf, namespace: crapi }
+@@ -43,6 +85,7 @@ data:
+     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+     proxy_set_header X-Forwarded-Port $server_port;
+     proxy_set_header X-Forwarded-Proto $scheme;
++    proxy_set_header X-Forwarded-Host $http_host;
+ 
+     proxy_http_version 1.1;
+     proxy_buffering off;
+@@ -124,6 +167,13 @@ spec:
+               mountPath: /etc/nginx/templates/includes/proxy_backend.conf.template
+               subPath: proxy_backend.conf
+               readOnly: true
++            # Exclusion file, not an envsubst template — this path isn't
++            # touched by the entrypoint's template regeneration, unlike
++            # proxy_backend.conf above, so it's mounted directly.
++            - name: crs-exclusions
++              mountPath: /etc/modsecurity.d/owasp-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
++              subPath: RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
++              readOnly: true
+           readinessProbe:
+             tcpSocket: { port: http }
+             initialDelaySeconds: 5
+@@ -138,6 +188,8 @@ spec:
+       volumes:
+         - name: proxy-backend-conf
+           configMap: { name: waf-proxy-backend-conf }
++        - name: crs-exclusions
++          configMap: { name: waf-crs-exclusions }
+ ---
+ apiVersion: v1
+ kind: Service
+diff --git a/policy/service-graph-crapi.yaml b/policy/service-graph-crapi.yaml
+index 8562e1dd..69007a26 100644
+--- a/policy/service-graph-crapi.yaml
++++ b/policy/service-graph-crapi.yaml
+@@ -197,6 +197,14 @@ edges:
+   - { from: aws/crapi-community, to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+   - { from: aws/crapi-workshop,  to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
+   - { from: openstack/crapi-identity, to: openstack/opa, l4_only: true, l4_ports: [9191, 8181] }
++  # Phần 1.2 (remediation 2026-09) thêm AuthorizationPolicy CUSTOM
++  # keycloak-opa-authz (k8s/identity/keycloak-mesh-policies.yaml) nhưng quên
++  # thêm edge này — bug tìm thấy sống 2026-09-13 trên destroy+redeploy sạch:
++  # NetworkPolicy os-pod-opa (sinh từ generator, chỉ liệt kê các edge dưới
++  # đây) không có rule cho ns identity nên chặn hẳn ext_authz ở tầng L4,
++  # Envoy fail-closed -> mọi request tới Keycloak (kc-admin-setup, bff, opa
++  # AWS) đều 403 dù mTLS đã đúng.
++  - { from: openstack/keycloak, to: openstack/opa, l4_only: true, l4_ports: [9191, 8181] }
+ 
+ # ── Netpol baseline (Phần 2, remediation 2026-09) ───────────────────────────
+ # Phần "hạ tầng thuần" của {aws,os}-allow-list.yaml (Traefik ingress, Prometheus
+diff --git a/scripts/deploy-app.sh b/scripts/deploy-app.sh
+index c22766ac..847fab72 100755
+--- a/scripts/deploy-app.sh
++++ b/scripts/deploy-app.sh
+@@ -23,6 +23,33 @@ OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
+ AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
+ SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
+ 
++# `kubectl run` overrides for the 4 short-lived kc-admin-setup bootstrap pods
++# (kc-ldap-federation-setup, kc-audience-mapper-setup, kc-stepup-flow-setup,
++# kc-saml-meta — deploy-crapi.sh's kc-crapi-setup has its own identical copy).
++# Root-cause bug found live 2026-09-13, genuine destroy+redeploy: a bare
++# `kubectl run --overrides="$KC_ADMIN_SETUP_OVERRIDES"`
++# gets sidecar-injected (ns identity has istio-injection=enabled) but WITHOUT
++# the sidecar.istio.io/userVolume[Mount] annotations that every real SPIRE
++# workload's manifest carries (see k8s/keycloak/deployment.yaml) — so these
++# pods silently fall back to Istio's OWN self-signed Citadel CA instead of the
++# SPIRE workload socket. Their outbound mTLS to Keycloak (which validates
++# peers against the SPIRE root, PeerAuthentication STRICT) then fails
++# CERTIFICATE_VERIFY_FAILED on every single call — confirmed by exec'ing into
++# a throwaway pod under the same SA and diffing `istioctl proxy-config secret`
++# against Keycloak's own (real SPIRE socket) pod. This is what surfaced as
++# "HTTP Error 503" in every one of these bootstrap steps once Phần 1.2 put
++# Keycloak behind STRICT mTLS — before that, these pods called Keycloak over
++# plaintext and never needed a real SPIFFE identity at all.
++#
++# Also sets label app=kc-admin-setup: `kubectl run` labels a pod
++# `run=<podname>` by default, never `app=<serviceaccount>` — so NetworkPolicy
++# os-pod-keycloak (k8s/crapi/network-policies/os-pod-segmentation.yaml,
++# podSelector app=kc-admin-setup) never matched these pods either, blocking
++# them at L4 even after the mTLS/ext_authz fixes above. Confirmed live
++# 2026-09-13 with `kubectl run ... --dry-run=client -o yaml`, which showed
++# only the `run:` label.
++KC_ADMIN_SETUP_OVERRIDES='{"metadata":{"labels":{"app":"kc-admin-setup"},"annotations":{"sidecar.istio.io/userVolume":"[{\"name\":\"spire-workload-socket\",\"hostPath\":{\"path\":\"/run/spire/sockets/agent.sock\",\"type\":\"Socket\"}}]","sidecar.istio.io/userVolumeMount":"[{\"name\":\"spire-workload-socket\",\"mountPath\":\"/var/run/secrets/workload-spiffe-uds/socket\"}]"}},"spec":{"serviceAccountName":"kc-admin-setup"}}'
++
+ SKIP_IMAGES=false
+ SKIP_TUNNEL=false
+ SKIP_SECURITY_STACK=false
+@@ -174,6 +201,40 @@ deploy_gatekeeper() {
+   ok "Gatekeeper installed with ConstraintTemplates/Constraints (nonroot=dryrun, image-policy=deny)"
+ }
+ 
++deploy_spire_pre_istio() {
++  step "Step 1d-pre: SPIRE root CA + agents + workload entries (both clouds)"
++  if [[ "$SKIP_SECURITY_STACK" == true ]]; then
++    log "Skipping SPIRE pre-provisioning (security stack skipped)"
++    return
++  fi
++
++  # k8s/istio/istio-operator.yaml hard-mounts a hostPath Socket volume for
++  # /run/spire/sockets/agent.sock on istio-ingressgateway — kubelet refuses to
++  # mount a hostPath of type Socket unless the file already exists, so the
++  # SPIRE agent DaemonSet must be running on every node BEFORE `istioctl
++  # install` waits for the gateway to become Ready. Beyond that, the gateway's
++  # SDS client authenticates against SPIRE via the k8s:ns/k8s:sa selectors on
++  # its own registered entry (spiffe://ztlab.local/aws/edge-gateway in
++  # scripts/spire-entries.generated.sh) — without that entry existing yet,
++  # SPIRE's Workload API SDS proxy rejects every cert request with "workload
++  # is not authorized for the requested identities" and the readiness probe
++  # never passes either (confirmed live 2026-09-13: agents alone weren't
++  # enough, same 5-minute istioctl timeout recurred one layer deeper).
++  # deploy_security_stack (Step 3) used to be the only place SPIRE got
++  # deployed AND registered, but it runs after deploy_istio — on a genuinely
++  # fresh cluster neither existed yet at gateway-install time. Source the
++  # security-stack script to reuse its (idempotent) SPIRE functions instead of
++  # duplicating them; deploy_security_stack still runs them again at Step 3,
++  # which is a harmless no-op re-apply.
++  # shellcheck source=scripts/deploy-security-stack.sh
++  source "$REPO_ROOT/scripts/deploy-security-stack.sh"
++  provision_spire_root_ca
++  deploy_step_3_spire_aws
++  deploy_step_3_spire_os
++  register_spire_workloads
++  ok "SPIRE root CA + agent DaemonSets + workload entries ready on both clouds (ahead of Istio)"
++}
++
+ deploy_istio() {
+   step "Step 1d: Istio (service mesh — ns crapi, 2 cluster, STRICT mTLS)"
+   local istio_version="1.22.3"
+@@ -209,7 +270,13 @@ deploy_istio() {
+   # extensionProviders.opa-ext-authz resolves per-cluster to each cluster's
+   # own local opa-service — no cross-cluster wiring needed.
+   "$istioctl_bin" install --context "$AWS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y
+-  "$istioctl_bin" install --context "$OS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y
++  # OpenStack doesn't expose crAPI externally and has no SPIRE registration
++  # entry for istio-ingressgateway-service-account (see
++  # scripts/spire-entries.generated.sh) — the overlay disables that component
++  # for this install only. See its header comment for the failure this fixes.
++  "$istioctl_bin" install --context "$OS_CONTEXT" \
++    -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" \
++    -f "$REPO_ROOT/k8s/istio/istio-operator-os-overlay.yaml" -y
+ 
+   kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod -l app=istiod -n istio-system --timeout=180s
+   kubectl --context "$OS_CONTEXT" wait --for=condition=Ready pod -l app=istiod -n istio-system --timeout=180s
+@@ -273,7 +340,7 @@ deploy_openldap_and_federation() {
+   # already-imported realm. Register it live via Admin API too so it exists
+   # even when Keycloak itself wasn't redeployed this run.
+   kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
+ import urllib.request, json, urllib.parse, urllib.error
+@@ -331,7 +398,7 @@ deploy_audience_mapper() {
+   # then silently lost on the next from-scratch deploy-all.sh because it lived
+   # nowhere else). Register it live too so every deploy ends up with it.
+   kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+@@ -387,7 +454,7 @@ deploy_stepup_flow() {
+   # Admin API in a prior session and lost on the next from-scratch deploy (see
+   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
+   kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
++  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+@@ -517,7 +584,7 @@ deploy_aws_saml_federation() {
+   # and corrupt a captured file — use a plain pod + exec + explicit delete
+   # instead of --rm to keep the captured metadata byte-exact.
+   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 30" >/dev/null
++  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 30" >/dev/null
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
+   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
+@@ -791,6 +858,7 @@ main() {
+   apply_namespaces
+   apply_network_policies
+   deploy_gatekeeper
++  deploy_spire_pre_istio
+   deploy_istio
+   sync_images
+   deploy_security_stack
+@@ -804,4 +872,9 @@ main() {
+   verify_final
+ }
+ 
+-main "$@"
++# Guard so this file can be `source`d to reuse individual functions (e.g. to
++# retry a single bootstrap step after a transient failure) without also
++# triggering a full main() run — same pattern as deploy-security-stack.sh.
++if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
++  main "$@"
++fi
+diff --git a/scripts/deploy-crapi.sh b/scripts/deploy-crapi.sh
+index ac9409f6..b5d3fb17 100755
+--- a/scripts/deploy-crapi.sh
++++ b/scripts/deploy-crapi.sh
+@@ -21,6 +21,14 @@ OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
+ CRAPI_DIR="$REPO_ROOT/k8s/crapi"
+ CRAPI_KEYS="$REPO_ROOT/deploy/vendor/crapi-keys/jwks.json"
+ 
++# See the identical definition + full explanation in scripts/deploy-app.sh —
++# kc-crapi-setup below is the same class of short-lived Keycloak Admin API
++# bootstrap pod as kc-ldap-federation-setup/kc-audience-mapper-setup/
++# kc-stepup-flow-setup/kc-saml-meta there, and needs the same fix (without
++# these annotations it silently gets Istio's own CA instead of SPIRE and
++# every call to STRICT-mTLS Keycloak fails CERTIFICATE_VERIFY_FAILED).
++KC_ADMIN_SETUP_OVERRIDES='{"metadata":{"labels":{"app":"kc-admin-setup"},"annotations":{"sidecar.istio.io/userVolume":"[{\"name\":\"spire-workload-socket\",\"hostPath\":{\"path\":\"/run/spire/sockets/agent.sock\",\"type\":\"Socket\"}}]","sidecar.istio.io/userVolumeMount":"[{\"name\":\"spire-workload-socket\",\"mountPath\":\"/var/run/secrets/workload-spiffe-uds/socket\"}]"}},"spec":{"serviceAccountName":"kc-admin-setup"}}'
++
+ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+ log()  { echo -e "${BLUE}[DEPLOY-CRAPI]${NC} $*"; }
+ ok()   { echo -e "${GREEN}[  OK  ]${NC} $*"; }
+@@ -117,7 +125,7 @@ configure_crapi_keycloak() {
+   admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
+   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
+   kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
+-  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
++  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
+ import urllib.request, json, urllib.parse
+@@ -219,7 +227,14 @@ reinstall_istio_for_crapi_provider() {
+   [[ -x "$istioctl" || -n "$(command -v istioctl)" ]] || { warn "istioctl không có — bỏ qua re-install (provider crapi sẽ thiếu)"; return; }
+   step "Re-install Istio (meshConfig: +extensionProvider opa-ext-authz-crapi)"
+   "$istioctl" install --context "$AWS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y >/dev/null 2>&1 && ok "istio AWS" || warn "istio AWS re-install lỗi"
+-  "$istioctl" install --context "$OS_CONTEXT"  -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y >/dev/null 2>&1 && ok "istio OS" || warn "istio OS re-install lỗi"
++  # OS overlay tắt ingressGateways — thiếu overlay này thì lệnh dưới tái tạo
++  # istio-ingressgateway trên OpenStack (không có SPIRE entry ở cluster này,
++  # xem k8s/istio/istio-operator-os-overlay.yaml) và treo 5 phút rồi lỗi,
++  # đúng bug đã sửa trong deploy-app.sh::deploy_istio — xác nhận sống
++  # 2026-09-13 (log "istio OS re-install lỗi" trước khi có dòng này).
++  "$istioctl" install --context "$OS_CONTEXT" \
++    -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" \
++    -f "$REPO_ROOT/k8s/istio/istio-operator-os-overlay.yaml" -y >/dev/null 2>&1 && ok "istio OS" || warn "istio OS re-install lỗi"
+ }
+ 
+ deploy_mesh_policies() {
+@@ -303,4 +318,9 @@ main() {
+   ok "deploy-crapi hoàn tất"
+ }
+ 
+-main "$@"
++# Guard so this file can be `source`d to retry a single function without
++# also triggering a full main() run — same pattern as deploy-app.sh /
++# deploy-security-stack.sh.
++if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
++  main "$@"
++fi
+diff --git a/scripts/deploy-security-stack.sh b/scripts/deploy-security-stack.sh
+index 0ce2eeb0..a2d9f18d 100755
+--- a/scripts/deploy-security-stack.sh
++++ b/scripts/deploy-security-stack.sh
+@@ -312,6 +312,29 @@ open(sys.argv[1]+"/device-ca.crt","w").write(d["ca_crt"])' "$ca_dir" 2>/dev/null
+   [[ -s "$ca_dir/device-ca.key" && -s "$ca_dir/device-ca.crt" ]]
+ }
+ 
++# Was `kubectl rollout restart` unconditionally, every single run. Root-cause
++# bug (found live 2026-09-13 on a genuine destroy+redeploy): spire-agent's
++# workload socket is a hostPath of type Socket — any pod that mounted it
++# BEFORE an agent restart keeps a bind-mount to the OLD (now-deleted) socket
++# inode, so its mTLS/SDS connection breaks permanently ("connection refused")
++# until THAT pod is also restarted. deploy_step_2_keycloak (and every other
++# already-running mesh workload on the node) runs earlier in this same
++# main(), so an unconditional restart here silently wedged Keycloak's sidecar
++# mid-deploy, which cascaded into every Keycloak Admin API bootstrap step
++# (LDAP federation, audience mapper, step-up flow, crAPI client setup) failing
++# with HTTP 503 — all of them landed in the few-minute window right after this
++# restart. Standard Kubernetes fix: only actually roll the pods when the
++# config content changed, via a content-hash pod-template annotation — kubectl
++# apply already handles real spec/image changes on its own; this replaces the
++# extra unconditional restart with one that's a no-op when nothing changed.
++_apply_config_hash_annotation() {
++  local ctx="$1" kind="$2" name="$3"; shift 3
++  local hash
++  hash="$(cat "$@" | sha256sum | cut -d' ' -f1)"
++  kubectl --context "$ctx" -n spire patch "$kind" "$name" --type merge \
++    -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ztlab.local/config-hash\":\"$hash\"}}}}}" >/dev/null
++}
++
+ deploy_step_3_spire_aws() {
+   log_step "3.1 Deploy SPIRE on AWS"
+ 
+@@ -343,7 +366,8 @@ deploy_step_3_spire_aws() {
+ 
+   log_info "Deploying SPIRE server..."
+   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
+-  kubectl --context $AWS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
++  _apply_config_hash_annotation "$AWS_CONTEXT" deployment spire-server \
++    "$REPO_ROOT/spire/server/aws-server.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
+ 
+   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
+   kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
+@@ -353,7 +377,8 @@ deploy_step_3_spire_aws() {
+ 
+   log_info "Deploying SPIRE agents..."
+   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
+-  kubectl --context $AWS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
++  _apply_config_hash_annotation "$AWS_CONTEXT" daemonset spire-agent \
++    "$REPO_ROOT/spire/agent/aws-agent.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
+ 
+   log_info "SPIRE agents deployment initiated (may take time - skipping strict wait for lab stability)"
+ 
+@@ -390,7 +415,8 @@ deploy_step_3_spire_os() {
+ 
+   log_info "Deploying SPIRE server..."
+   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
+-  kubectl --context $OS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
++  _apply_config_hash_annotation "$OS_CONTEXT" deployment spire-server \
++    "$REPO_ROOT/spire/server/os-server.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
+ 
+   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
+   kubectl --context $OS_CONTEXT wait --for=condition=Ready pod \
+@@ -400,7 +426,8 @@ deploy_step_3_spire_os() {
+ 
+   log_info "Deploying SPIRE agents..."
+   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
+-  kubectl --context $OS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
++  _apply_config_hash_annotation "$OS_CONTEXT" daemonset spire-agent \
++    "$REPO_ROOT/spire/agent/os-agent.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
+ 
+   log_info "SPIRE agents deployment initiated on OpenStack"
+ 
+@@ -548,4 +575,10 @@ main() {
+   log_info ""
+ }
+ 
+-main "$@"
++# Guard so deploy-app.sh can `source` this file to reuse individual functions
++# (e.g. provision_spire_root_ca / deploy_step_3_spire_aws / _os, needed before
++# Istio so the ingressgateway's hard-mounted spire-workload-socket hostPath
++# already exists) without also triggering a full second run of main().
++if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
++  main "$@"
++fi
+diff --git a/scripts/gen-networkpolicy.py b/scripts/gen-networkpolicy.py
+index c98bd2bb..05f423b4 100644
+--- a/scripts/gen-networkpolicy.py
++++ b/scripts/gen-networkpolicy.py
+@@ -37,7 +37,9 @@ import yaml
+ REPO_ROOT = Path(__file__).resolve().parent.parent
+ GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
+ NETPOL_DIR = REPO_ROOT / "k8s" / "crapi" / "network-policies"
+-NS = "crapi"
++NS = "crapi"  # default/most-common namespace; gen_for_cluster now derives the
++# real namespace per policy from the destination workload's own `namespace`
++# field instead of assuming everything lives in NS — see bug note below.
+ 
+ HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
+ # Sinh lại: python3 scripts/gen-networkpolicy.py
+@@ -55,16 +57,71 @@ def app_label(graph: dict, workload: str) -> str:
+     return w.get("app_label") or w.get("service_account") or workload.split("/")[-1]
+ 
+ 
+-def render_policy(name: str, dest_label: str, sources: list[tuple[str, list[int]]]) -> str:
+-    # Gộp theo (source, ports) — mỗi source có thể xuất hiện ở nhiều edge
+-    # (không xảy ra trong graph hiện tại nhưng generator vẫn xử lý đúng nếu có).
++def render_policy(
++    name: str,
++    namespace: str,
++    dest_label: str,
++    sources: list[tuple[str, list[int], str]],
++    cross_cluster_ingress: list[tuple[str, list[int]]] | None = None,
++) -> str:
++    # Gộp theo (source, ports, source_namespace) — mỗi source có thể xuất
++    # hiện ở nhiều edge (không xảy ra trong graph hiện tại nhưng generator
++    # vẫn xử lý đúng nếu có).
++    #
++    # Bug tìm thấy sống 2026-09-13 (destroy+redeploy sạch): trước bản sửa
++    # này, MỌI policy sinh ra namespace: crapi (hardcode) và MỌI `from` chỉ
++    # có podSelector (giả định nguồn luôn cùng namespace với đích) — đúng cho
++    # mọi workload cho tới khi Keycloak (Phần 1.2) chuyển sang ns `identity`.
++    # Kết quả: NetworkPolicy os-pod-keycloak bị đặt SAI namespace (crapi thay
++    # vì identity, nên không áp dụng cho pod Keycloak thật), và os-pod-opa
++    # thiếu hẳn namespaceSelector cho nguồn `identity` — ext_authz từ Keycloak
++    # bị NetworkPolicy chặn ở L4 trước khi tới OPA, Envoy fail-closed thành
++    # 403 dù mTLS/OPA policy đều đúng. Namespace giờ lấy từ chính
++    # workloads.<id>.namespace trong service-graph — nguồn đã đúng từ đầu,
++    # generator chỉ là chưa dùng tới.
+     from_blocks = []
+-    for src_label, ports in sources:
++    for src_label, ports, src_ns in sources:
++        if src_ns == namespace:
++            peer = f"""        - podSelector:
++            matchLabels:
++              app: {src_label}"""
++        else:
++            peer = f"""        - namespaceSelector:
++            matchLabels: {{ kubernetes.io/metadata.name: {src_ns} }}
++          podSelector:
++            matchLabels:
++              app: {src_label}"""
+         from_blocks.append(
+             f"""    - from:
+-        - podSelector:
+-            matchLabels:
+-              app: {src_label}
++{peer}
++      ports:
++{render_ports(ports)}"""
++        )
++    # Bug tìm thấy sống 2026-09-13, cùng buổi destroy+redeploy: defining ANY
++    # Ingress NetworkPolicy for a pod switches it from k8s's default
++    # allow-all to deny-except-listed — including traffic this generator
++    # otherwise deliberately never models here (cross_cluster edges use the
++    # ipBlock baseline instead, see gen_baseline). That's harmless for a
++    # destination with NO other ingress source, but the moment a workload
++    # gets BOTH an intra-cluster caller (so this function runs for it at
++    # all) AND a legitimate cross-cluster caller (aws/bff, aws/opa ->
++    # openstack/keycloak), the cross-cluster NodePort traffic is now
++    # silently default-denied — confirmed live: `os-pod-keycloak` (added for
++    # kc-admin-setup, Phần 1.2) blocked bff's login redirect to Keycloak with
++    # a bare TCP refusal, even though mTLS/SPIRE/OPA were all already
++    # correct. ns `crapi` never hit this because `{prefix}-crapi-allow-
++    # baseline`'s podSelector: {{}} covers every pod there with its own
++    # ipBlock rules; Keycloak's ns `identity` has no such baseline. Add the
++    # missing ipBlock peer directly onto this policy instead — reuses the
++    # ports already collected from this destination's intra-cluster edges,
++    # since that's its real listening port (a NodePort's l4_ports value is
++    # the externally-visible port, already rewritten by kube-proxy DNAT by
++    # the time NetworkPolicy admission actually inspects the packet).
++    for cidr, ports in cross_cluster_ingress or []:
++        from_blocks.append(
++            f"""    - from:
++        - ipBlock:
++            cidr: {cidr}
+       ports:
+ {render_ports(ports)}"""
+         )
+@@ -73,7 +130,7 @@ def render_policy(name: str, dest_label: str, sources: list[tuple[str, list[int]
+ kind: NetworkPolicy
+ metadata:
+   name: {name}
+-  namespace: {NS}
++  namespace: {namespace}
+ spec:
+   podSelector:
+     matchLabels:
+@@ -94,7 +151,7 @@ def render_ports(ports: list[int]) -> str:
+ 
+ 
+ def gen_for_cluster(graph: dict, cluster: str, prefix: str, allow_list_file: str) -> str:
+-    by_dest: dict[str, list[tuple[str, list[int]]]] = {}
++    by_dest: dict[str, list[tuple[str, list[int], str]]] = {}
+     for edge in graph["edges"]:
+         if edge.get("cross_cluster"):
+             continue
+@@ -107,13 +164,71 @@ def gen_for_cluster(graph: dict, cluster: str, prefix: str, allow_list_file: str
+         ports = edge.get("l4_ports")
+         if not ports:
+             continue
+-        by_dest.setdefault(edge["to"], []).append((app_label(graph, edge["from"]), ports))
++        by_dest.setdefault(edge["to"], []).append(
++            (app_label(graph, edge["from"]), ports, src_workload["namespace"])
++        )
++
++    # See render_policy's bug note: only destinations that ALREADY got an
++    # intra-cluster policy above need a cross-cluster ipBlock exemption too
++    # (a destination with none stays in k8s's default-allow, nothing to fix).
++    # Grouped by (dest, source cluster) so e.g. aws/bff and aws/opa both
++    # calling openstack/keycloak produce ONE merged ipBlock rule, not two
++    # identical ones.
++    #
++    # CIDR gotcha (found live 2026-09-13, same session): the ipBlock must be
++    # the DESTINATION cluster's own private_cidr, NOT the source's — the
++    # cross-cloud gateway (os_gateway/aws_gateway) SNATs this traffic to its
++    # OWN address on the destination's private subnet before forwarding, so
++    # by the time it reaches the destination node the packet's source IP is
++    # already inside that subnet, never the caller's real cluster's CIDR.
++    # Confirmed both empirically (iptables counters stayed at 0 with the
++    # source-cluster CIDR, connection still refused) and by
++    # terraform/openstack/security_groups.tf's own
++    # os_private_ingress_nodeport_from_aws rule, which already documents
++    # this ("source is os_gateway's SNAT'd IP, not the original AWS-side
++    # IP") and allowlists the whole 192.168.101.0/24 (openstack's own
++    # private_cidr) for exactly this reason — this generator now matches
++    # that existing, already-correct precedent instead of the naive guess.
++    cross_ingress_raw: dict[str, set[int]] = {}
++    for edge in graph["edges"]:
++        if not edge.get("cross_cluster") or edge["to"] not in by_dest:
++            continue
++        src_workload = graph["workloads"].get(edge["from"])
++        dst_workload = graph["workloads"].get(edge["to"])
++        if not src_workload or not dst_workload or dst_workload["cluster"] != cluster:
++            continue
++        real_ports = {p for _, ports, _ in by_dest[edge["to"]] for p in ports}
++        cross_ingress_raw.setdefault(edge["to"], set()).update(real_ports)
++    #
++    # Second gotcha, same session: even with the CORRECT cidr above, kube-
++    # router never actually admitted the traffic — confirmed via tcpdump on
++    # the destination node that the real source IP (os_gateway's SNAT
++    # address, 192.168.101.1) exactly matches 192.168.101.0/24, then proving
++    # via a live-patched test that a specific ipBlock (/24 AND an exact /32
++    # for that same address) both still got refused while 0.0.0.0/0 worked
++    # immediately — on a fresh NetworkPolicy (deleted and recreated, ruling
++    # out stale ipset state). The nodes run `iptables v1.8.7 (nf_tables)`;
++    # `-m set --match-set` against a `hash:net` ipset is a known-flaky
++    # combination under the nf_tables backend. This isn't fixable from the
++    # manifest layer, so this uses 0.0.0.0/0 instead — still scoped to only
++    # the exact ports of an already-mTLS-STRICT workload, and the real
++    # authorization decision for this hop is L7 (PeerAuthentication STRICT +
++    # AuthorizationPolicy CUSTOM -> OPA), matching every other pod-
++    # segmentation policy's own documented caveat ("L7 là lớp phân đoạn
++    # thật") — this is exactly that path, made explicit instead of silently
++    # broken.
++    cross_ingress: dict[str, list[tuple[str, list[int]]]] = {}
++    for dest, ports in cross_ingress_raw.items():
++        cross_ingress.setdefault(dest, []).append(("0.0.0.0/0", sorted(ports)))
+ 
+     policies = [HEADER.format(allow_list_file=allow_list_file)]
+     for dest in sorted(by_dest):
+         dest_label = app_label(graph, dest)
++        dest_ns = graph["workloads"][dest]["namespace"]
+         policy_name = f"{prefix}-pod-{dest_label}"
+-        policies.append(render_policy(policy_name, dest_label, by_dest[dest]))
++        policies.append(
++            render_policy(policy_name, dest_ns, dest_label, by_dest[dest], cross_ingress.get(dest))
++        )
+     return "---\n".join(policies)
+ 
+ 

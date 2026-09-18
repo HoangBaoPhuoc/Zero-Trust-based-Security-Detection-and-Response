@@ -58,4 +58,5 @@
 | `aws/crapi-community` | `aws/opa` | 9191, 8181 |  |
 | `aws/crapi-workshop` | `aws/opa` | 9191, 8181 |  |
 | `openstack/crapi-identity` | `openstack/opa` | 9191, 8181 |  |
+| `openstack/keycloak` | `openstack/opa` | 9191, 8181 |  |
 

@@ -312,6 +312,29 @@ open(sys.argv[1]+"/device-ca.crt","w").write(d["ca_crt"])' "$ca_dir" 2>/dev/null
   [[ -s "$ca_dir/device-ca.key" && -s "$ca_dir/device-ca.crt" ]]
 }
 
+# Was `kubectl rollout restart` unconditionally, every single run. Root-cause
+# bug (found live 2026-09-13 on a genuine destroy+redeploy): spire-agent's
+# workload socket is a hostPath of type Socket — any pod that mounted it
+# BEFORE an agent restart keeps a bind-mount to the OLD (now-deleted) socket
+# inode, so its mTLS/SDS connection breaks permanently ("connection refused")
+# until THAT pod is also restarted. deploy_step_2_keycloak (and every other
+# already-running mesh workload on the node) runs earlier in this same
+# main(), so an unconditional restart here silently wedged Keycloak's sidecar
+# mid-deploy, which cascaded into every Keycloak Admin API bootstrap step
+# (LDAP federation, audience mapper, step-up flow, crAPI client setup) failing
+# with HTTP 503 — all of them landed in the few-minute window right after this
+# restart. Standard Kubernetes fix: only actually roll the pods when the
+# config content changed, via a content-hash pod-template annotation — kubectl
+# apply already handles real spec/image changes on its own; this replaces the
+# extra unconditional restart with one that's a no-op when nothing changed.
+_apply_config_hash_annotation() {
+  local ctx="$1" kind="$2" name="$3"; shift 3
+  local hash
+  hash="$(cat "$@" | sha256sum | cut -d' ' -f1)"
+  kubectl --context "$ctx" -n spire patch "$kind" "$name" --type merge \
+    -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ztlab.local/config-hash\":\"$hash\"}}}}}" >/dev/null
+}
+
 deploy_step_3_spire_aws() {
   log_step "3.1 Deploy SPIRE on AWS"
 
@@ -343,7 +366,8 @@ deploy_step_3_spire_aws() {
 
   log_info "Deploying SPIRE server..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
-  kubectl --context $AWS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$AWS_CONTEXT" deployment spire-server \
+    "$REPO_ROOT/spire/server/aws-server.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
   kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
@@ -353,7 +377,8 @@ deploy_step_3_spire_aws() {
 
   log_info "Deploying SPIRE agents..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
-  kubectl --context $AWS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$AWS_CONTEXT" daemonset spire-agent \
+    "$REPO_ROOT/spire/agent/aws-agent.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "SPIRE agents deployment initiated (may take time - skipping strict wait for lab stability)"
 
@@ -390,7 +415,8 @@ deploy_step_3_spire_os() {
 
   log_info "Deploying SPIRE server..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
-  kubectl --context $OS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$OS_CONTEXT" deployment spire-server \
+    "$REPO_ROOT/spire/server/os-server.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
   kubectl --context $OS_CONTEXT wait --for=condition=Ready pod \
@@ -400,7 +426,8 @@ deploy_step_3_spire_os() {
 
   log_info "Deploying SPIRE agents..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
-  kubectl --context $OS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$OS_CONTEXT" daemonset spire-agent \
+    "$REPO_ROOT/spire/agent/os-agent.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "SPIRE agents deployment initiated on OpenStack"
 
@@ -548,4 +575,10 @@ main() {
   log_info ""
 }
 
-main "$@"
+# Guard so deploy-app.sh can `source` this file to reuse individual functions
+# (e.g. provision_spire_root_ca / deploy_step_3_spire_aws / _os, needed before
+# Istio so the ingressgateway's hard-mounted spire-workload-socket hostPath
+# already exists) without also triggering a full second run of main().
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

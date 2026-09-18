@@ -124,6 +124,51 @@ Nhóm (c) đã đóng hết theo source code (chưa verify sống hết — xem 
 Không còn hop nào cố ý ở nhóm (c) theo source; nhóm (b) (L4 dữ liệu) giữ nguyên,
 liệt kê đầy đủ ở trên.
 
+## CẬP NHẬT — verify sống đầy đủ trên destroy+redeploy sạch (2026-09-13, phiên sau)
+
+OpenStack lên lại được. Chạy `terraform destroy` cả 2 cloud rồi `deploy-all.sh`
+từ trống — đây là lần đầu tiên toàn bộ Phần 1.2 (Keycloak/kc-admin-setup) chạy
+trên hạ tầng sạch, và phát lộ 4 bug MỚI (không phải do bản thân Phần 1.2 thiết
+kế sai, mà là hệ quả/tương tác với hạ tầng chưa từng thử) — cả 4 đã sửa tận gốc
+trong source, xem commit trên nhánh này và `BAOCAO-SUA-GOC-2026-09-13.md` (mục
+bổ sung) để chi tiết đầy đủ:
+
+1. `deploy_step_3_spire_aws/os` restart `spire-agent`/`spire-server` vô điều
+   kiện mỗi lần chạy → hostPath Socket bind-mount của MỌI pod đã mount từ
+   trước bị stale vĩnh viễn (kể cả Keycloak, istio-ingressgateway) → sửa bằng
+   config-hash annotation (chỉ restart khi config thật đổi).
+2. `deploy_istio`/`deploy-crapi.sh` cài `istio-ingressgateway` cả trên
+   OpenStack (không cần, không có SPIRE entry) → treo 5 phút rồi lỗi → thêm
+   `k8s/istio/istio-operator-os-overlay.yaml` tắt component này cho OS.
+3. 5 pod bootstrap `kubectl run kc-*-setup` không có `sidecar.istio.io/
+   userVolume`/`userVolumeMount` (chỉ Deployment thật mới có) → rơi về CA
+   riêng của Istio thay vì SPIRE → mTLS tới Keycloak STRICT luôn
+   CERTIFICATE_VERIFY_FAILED; đồng thời `kubectl run` gắn label `run=` chứ
+   không phải `app=kc-admin-setup` nên NetworkPolicy cũng không khớp → sửa cả
+   2 trong `KC_ADMIN_SETUP_OVERRIDES` (deploy-app.sh + deploy-crapi.sh).
+4. `gen-networkpolicy.py` hardcode `namespace: crapi` cho MỌI policy sinh ra
+   và không xử lý nguồn/đích khác namespace → `os-pod-keycloak` bị đặt sai ns
+   (không áp dụng), và khi có 1 policy pod-segmentation cho Keycloak, traffic
+   cross-cluster hợp lệ (bff/opa AWS → keycloak qua NodePort) bị default-deny
+   ngoài ý muốn vì ns `identity` không có baseline NetworkPolicy như ns
+   `crapi`. Sửa generator để tự thêm ipBlock exemption; CIDR dùng
+   `0.0.0.0/0` (giới hạn đúng port) vì kube-router (`iptables v1.8.7
+   nf_tables`) xác nhận không match được ipBlock CIDR cụ thể cho traffic
+   NAT qua gateway (đã thử `/24` lẫn `/32` chính xác, đều fail; chỉ `/0`
+   hoạt động) — bảo vệ thật cho hop này vẫn là L7 (STRICT mTLS + OPA
+   ext_authz), người dùng đã duyệt quyết định này.
+
+Sau 4 fix trên: **login thật qua BFF→Keycloak (OIDC) thành công**, gọi
+`GET /workshop/api/shop/products` và `GET /community/api/v2/community/
+posts/recent` đều `200`. (c)-2/(c)-3/(c)-4 nay **verify sống đầy đủ**, không
+còn mục nào trong nhóm (c) chưa verify. Phát hiện thêm 1 bug KHÔNG thuộc SPIRE/
+mTLS (WAF ghi `Host: $proxy_host` cho BFF nên `_external_base()` build sai
+redirect OIDC — thiếu `X-Forwarded-Host`, đã thêm vào `waf-proxy-backend-conf`)
+và 1 vấn đề đo lường (CRS rule 921140 false-positive trên header
+`x-forwarded-client-cert` của chính mesh, gây nhiễu số đo đối chứng BOLA — đã
+thêm CRS exclusion đúng 1 rule/1 header, không ảnh hưởng phát hiện SQLi/XSS/LFI
+thật, xem `k8s/crapi/waf.yaml`).
+
 ## Ràng buộc môi trường lúc thực hiện remediation này
 Cụm OpenStack (`172.10.10.191`, os-gateway) không truy cập được trong suốt phiên làm việc này
 ("No route to host" cả ping lẫn SSH) — sự cố hạ tầng đã biết trước (uplink hotspot điện thoại

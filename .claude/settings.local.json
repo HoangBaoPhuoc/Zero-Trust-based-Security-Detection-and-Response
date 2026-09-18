@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl:*)", "Bash(terraform:*)", "Bash(ansible:*)",
+      "Bash(ansible-playbook:*)", "Bash(ansible-inventory:*)", "Bash(istioctl:*)",
+      "Bash(helm:*)", "Bash(openstack:*)", "Bash(aws:*)", "Bash(docker:*)",
+      "Bash(vault:*)", "Bash(ssh:*)", "Bash(scp:*)", "Bash(ssh-keygen:*)",
+      "Bash(openssl:*)", "Bash(logcli:*)", "Bash(sudo:*)", "Bash(cd:*)",
+      "Bash(bash scripts/deploy-all.sh:*)", "Bash(bash scripts/destroy-all.sh:*)",
+      "Bash(bash scripts/deploy-app.sh:*)", "Bash(bash scripts/deploy-crapi.sh:*)",
+      "Bash(bash scripts/deploy-security-stack.sh:*)", "Bash(bash scripts/sync-app-images.sh:*)",
+      "Bash(bash scripts/ensure-spire-entries.sh:*)", "Bash(bash scripts/k8s-tunnel.sh:*)",
+      "Bash(bash scripts/open-admin-uis.sh:*)", "Bash(bash scripts/health-check.sh:*)",
+      "Bash(bash tests/:*)", "Bash(python3 scripts/:*)", "Bash(python3 tests/:*)"
+    ]
+  }
+}
+

@@ -21,6 +21,14 @@ OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 CRAPI_DIR="$REPO_ROOT/k8s/crapi"
 CRAPI_KEYS="$REPO_ROOT/deploy/vendor/crapi-keys/jwks.json"
 
+# See the identical definition + full explanation in scripts/deploy-app.sh —
+# kc-crapi-setup below is the same class of short-lived Keycloak Admin API
+# bootstrap pod as kc-ldap-federation-setup/kc-audience-mapper-setup/
+# kc-stepup-flow-setup/kc-saml-meta there, and needs the same fix (without
+# these annotations it silently gets Istio's own CA instead of SPIRE and
+# every call to STRICT-mTLS Keycloak fails CERTIFICATE_VERIFY_FAILED).
+KC_ADMIN_SETUP_OVERRIDES='{"metadata":{"labels":{"app":"kc-admin-setup"},"annotations":{"sidecar.istio.io/userVolume":"[{\"name\":\"spire-workload-socket\",\"hostPath\":{\"path\":\"/run/spire/sockets/agent.sock\",\"type\":\"Socket\"}}]","sidecar.istio.io/userVolumeMount":"[{\"name\":\"spire-workload-socket\",\"mountPath\":\"/var/run/secrets/workload-spiffe-uds/socket\"}]"}},"spec":{"serviceAccountName":"kc-admin-setup"}}'
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log()  { echo -e "${BLUE}[DEPLOY-CRAPI]${NC} $*"; }
 ok()   { echo -e "${GREEN}[  OK  ]${NC} $*"; }
@@ -117,7 +125,7 @@ configure_crapi_keycloak() {
   admin_pass="$(kkc get secret keycloak-secret -n identity -o jsonpath='{.data.admin-password}' 2>/dev/null | base64 -d)"
   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
   kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
+  kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
 import urllib.request, json, urllib.parse
@@ -219,7 +227,14 @@ reinstall_istio_for_crapi_provider() {
   [[ -x "$istioctl" || -n "$(command -v istioctl)" ]] || { warn "istioctl không có — bỏ qua re-install (provider crapi sẽ thiếu)"; return; }
   step "Re-install Istio (meshConfig: +extensionProvider opa-ext-authz-crapi)"
   "$istioctl" install --context "$AWS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y >/dev/null 2>&1 && ok "istio AWS" || warn "istio AWS re-install lỗi"
-  "$istioctl" install --context "$OS_CONTEXT"  -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y >/dev/null 2>&1 && ok "istio OS" || warn "istio OS re-install lỗi"
+  # OS overlay tắt ingressGateways — thiếu overlay này thì lệnh dưới tái tạo
+  # istio-ingressgateway trên OpenStack (không có SPIRE entry ở cluster này,
+  # xem k8s/istio/istio-operator-os-overlay.yaml) và treo 5 phút rồi lỗi,
+  # đúng bug đã sửa trong deploy-app.sh::deploy_istio — xác nhận sống
+  # 2026-09-13 (log "istio OS re-install lỗi" trước khi có dòng này).
+  "$istioctl" install --context "$OS_CONTEXT" \
+    -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" \
+    -f "$REPO_ROOT/k8s/istio/istio-operator-os-overlay.yaml" -y >/dev/null 2>&1 && ok "istio OS" || warn "istio OS re-install lỗi"
 }
 
 deploy_mesh_policies() {
@@ -303,4 +318,9 @@ main() {
   ok "deploy-crapi hoàn tất"
 }
 
-main "$@"
+# Guard so this file can be `source`d to retry a single function without
+# also triggering a full main() run — same pattern as deploy-app.sh /
+# deploy-security-stack.sh.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

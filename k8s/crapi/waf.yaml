@@ -25,10 +25,52 @@
 # fails closed with no decision even logged, since the request never carries a
 # principal at all. `waf-proxy-backend-conf` below overrides just that one
 # nginx include to use `$proxy_host` (nginx's own proxy_pass target) instead.
+#
+# Second bug, same root cause, found live 2026-09-13 on the first real login
+# through the new Istio Gateway (Phần 1.3): with Host rewritten to
+# `$proxy_host`, BFF's `_external_base()` (services/bff/main.py) — used to
+# build the OIDC `redirect_uri` and the `/kc/...` authorization URL — saw Host
+# = `bff.crapi.svc.cluster.local:8080` and built an unreachable-from-outside
+# redirect, instead of the real edge host (`crapi.ztlab.local:18444`). Fixed
+# by also sending `X-Forwarded-Host` with the ORIGINAL client Host —
+# `_external_base()` already prefers that header over plain `Host` for
+# exactly this reason, so this needed nginx to actually send it. Uses
+# `$http_host` (raw Host header, keeps a client-sent port) not nginx's `$host`
+# variable (silently drops the port) — the gateway is reached on a non-default
+# port (:18444) so a dropped port breaks the redirect just as badly.
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata: { name: waf, namespace: crapi }
+---
+# Found live 2026-09-13 running the thesis's BOLA/CRS control measurement
+# (tests/crapi_bola.sh — expects CRS to record ZERO hits on a pure
+# authorization-bypass request, since it carries no injection payload): CRS
+# rule 921140 ("HTTP Header Injection Attack via headers") false-positived on
+# EVERY request through the new Istio Gateway (Phần 1.3), not on anything
+# BOLA-specific. Cause: Envoy's `x-forwarded-client-cert` header carries the
+# client's PEM certificate URL-encoded (`%0A` for each newline); CRS's own
+# `t:urlDecodeUni` transform decodes it back to real `\n` bytes before
+# matching, and rule 921140 flags any raw `[\n\r]` in a header value as CRLF
+# injection — a real PEM certificate legitimately contains dozens. This is a
+# mesh-infrastructure artifact appearing on 100% of requests once the mTLS
+# Gateway started populating XFCC with real cert data, not a WAF weakness or
+# a BOLA-request property, so scope the exclusion to exactly that one
+# rule+header (every other header, and every other 921xxx CRLF check on this
+# one, stays fully active).
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: waf-crs-exclusions, namespace: crapi }
+data:
+  # This image's setup.conf includes owasp-crs/rules/*.conf as ONE flat glob
+  # (confirmed live: no separate before/after phase) — alphabetical order
+  # means a name starting "REQUEST-900-..." loads BEFORE "REQUEST-921-...",
+  # so SecRuleUpdateTargetById against rule 921140 would silently no-op
+  # (target rule doesn't exist yet at that point). Named to sort AFTER every
+  # REQUEST-9xx CRS rule file instead, matching the official CRS example
+  # config's convention for this exact directive.
+  RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf: |
+    SecRuleUpdateTargetById 921140 "!REQUEST_HEADERS:x-forwarded-client-cert"
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -43,6 +85,7 @@ data:
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Port $server_port;
     proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $http_host;
 
     proxy_http_version 1.1;
     proxy_buffering off;
@@ -124,6 +167,13 @@ spec:
               mountPath: /etc/nginx/templates/includes/proxy_backend.conf.template
               subPath: proxy_backend.conf
               readOnly: true
+            # Exclusion file, not an envsubst template — this path isn't
+            # touched by the entrypoint's template regeneration, unlike
+            # proxy_backend.conf above, so it's mounted directly.
+            - name: crs-exclusions
+              mountPath: /etc/modsecurity.d/owasp-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+              subPath: RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+              readOnly: true
           readinessProbe:
             tcpSocket: { port: http }
             initialDelaySeconds: 5
@@ -138,6 +188,8 @@ spec:
       volumes:
         - name: proxy-backend-conf
           configMap: { name: waf-proxy-backend-conf }
+        - name: crs-exclusions
+          configMap: { name: waf-crs-exclusions }
 ---
 apiVersion: v1
 kind: Service

@@ -197,6 +197,14 @@ edges:
   - { from: aws/crapi-community, to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
   - { from: aws/crapi-workshop,  to: aws/opa, l4_only: true, l4_ports: [9191, 8181] }
   - { from: openstack/crapi-identity, to: openstack/opa, l4_only: true, l4_ports: [9191, 8181] }
+  # Phần 1.2 (remediation 2026-09) thêm AuthorizationPolicy CUSTOM
+  # keycloak-opa-authz (k8s/identity/keycloak-mesh-policies.yaml) nhưng quên
+  # thêm edge này — bug tìm thấy sống 2026-09-13 trên destroy+redeploy sạch:
+  # NetworkPolicy os-pod-opa (sinh từ generator, chỉ liệt kê các edge dưới
+  # đây) không có rule cho ns identity nên chặn hẳn ext_authz ở tầng L4,
+  # Envoy fail-closed -> mọi request tới Keycloak (kc-admin-setup, bff, opa
+  # AWS) đều 403 dù mTLS đã đúng.
+  - { from: openstack/keycloak, to: openstack/opa, l4_only: true, l4_ports: [9191, 8181] }
 
 # ── Netpol baseline (Phần 2, remediation 2026-09) ───────────────────────────
 # Phần "hạ tầng thuần" của {aws,os}-allow-list.yaml (Traefik ingress, Prometheus

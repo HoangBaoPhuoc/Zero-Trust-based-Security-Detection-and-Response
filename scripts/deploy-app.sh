@@ -23,6 +23,33 @@ OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 
+# `kubectl run` overrides for the 4 short-lived kc-admin-setup bootstrap pods
+# (kc-ldap-federation-setup, kc-audience-mapper-setup, kc-stepup-flow-setup,
+# kc-saml-meta — deploy-crapi.sh's kc-crapi-setup has its own identical copy).
+# Root-cause bug found live 2026-09-13, genuine destroy+redeploy: a bare
+# `kubectl run --overrides="$KC_ADMIN_SETUP_OVERRIDES"`
+# gets sidecar-injected (ns identity has istio-injection=enabled) but WITHOUT
+# the sidecar.istio.io/userVolume[Mount] annotations that every real SPIRE
+# workload's manifest carries (see k8s/keycloak/deployment.yaml) — so these
+# pods silently fall back to Istio's OWN self-signed Citadel CA instead of the
+# SPIRE workload socket. Their outbound mTLS to Keycloak (which validates
+# peers against the SPIRE root, PeerAuthentication STRICT) then fails
+# CERTIFICATE_VERIFY_FAILED on every single call — confirmed by exec'ing into
+# a throwaway pod under the same SA and diffing `istioctl proxy-config secret`
+# against Keycloak's own (real SPIRE socket) pod. This is what surfaced as
+# "HTTP Error 503" in every one of these bootstrap steps once Phần 1.2 put
+# Keycloak behind STRICT mTLS — before that, these pods called Keycloak over
+# plaintext and never needed a real SPIFFE identity at all.
+#
+# Also sets label app=kc-admin-setup: `kubectl run` labels a pod
+# `run=<podname>` by default, never `app=<serviceaccount>` — so NetworkPolicy
+# os-pod-keycloak (k8s/crapi/network-policies/os-pod-segmentation.yaml,
+# podSelector app=kc-admin-setup) never matched these pods either, blocking
+# them at L4 even after the mTLS/ext_authz fixes above. Confirmed live
+# 2026-09-13 with `kubectl run ... --dry-run=client -o yaml`, which showed
+# only the `run:` label.
+KC_ADMIN_SETUP_OVERRIDES='{"metadata":{"labels":{"app":"kc-admin-setup"},"annotations":{"sidecar.istio.io/userVolume":"[{\"name\":\"spire-workload-socket\",\"hostPath\":{\"path\":\"/run/spire/sockets/agent.sock\",\"type\":\"Socket\"}}]","sidecar.istio.io/userVolumeMount":"[{\"name\":\"spire-workload-socket\",\"mountPath\":\"/var/run/secrets/workload-spiffe-uds/socket\"}]"}},"spec":{"serviceAccountName":"kc-admin-setup"}}'
+
 SKIP_IMAGES=false
 SKIP_TUNNEL=false
 SKIP_SECURITY_STACK=false
@@ -174,6 +201,40 @@ deploy_gatekeeper() {
   ok "Gatekeeper installed with ConstraintTemplates/Constraints (nonroot=dryrun, image-policy=deny)"
 }
 
+deploy_spire_pre_istio() {
+  step "Step 1d-pre: SPIRE root CA + agents + workload entries (both clouds)"
+  if [[ "$SKIP_SECURITY_STACK" == true ]]; then
+    log "Skipping SPIRE pre-provisioning (security stack skipped)"
+    return
+  fi
+
+  # k8s/istio/istio-operator.yaml hard-mounts a hostPath Socket volume for
+  # /run/spire/sockets/agent.sock on istio-ingressgateway — kubelet refuses to
+  # mount a hostPath of type Socket unless the file already exists, so the
+  # SPIRE agent DaemonSet must be running on every node BEFORE `istioctl
+  # install` waits for the gateway to become Ready. Beyond that, the gateway's
+  # SDS client authenticates against SPIRE via the k8s:ns/k8s:sa selectors on
+  # its own registered entry (spiffe://ztlab.local/aws/edge-gateway in
+  # scripts/spire-entries.generated.sh) — without that entry existing yet,
+  # SPIRE's Workload API SDS proxy rejects every cert request with "workload
+  # is not authorized for the requested identities" and the readiness probe
+  # never passes either (confirmed live 2026-09-13: agents alone weren't
+  # enough, same 5-minute istioctl timeout recurred one layer deeper).
+  # deploy_security_stack (Step 3) used to be the only place SPIRE got
+  # deployed AND registered, but it runs after deploy_istio — on a genuinely
+  # fresh cluster neither existed yet at gateway-install time. Source the
+  # security-stack script to reuse its (idempotent) SPIRE functions instead of
+  # duplicating them; deploy_security_stack still runs them again at Step 3,
+  # which is a harmless no-op re-apply.
+  # shellcheck source=scripts/deploy-security-stack.sh
+  source "$REPO_ROOT/scripts/deploy-security-stack.sh"
+  provision_spire_root_ca
+  deploy_step_3_spire_aws
+  deploy_step_3_spire_os
+  register_spire_workloads
+  ok "SPIRE root CA + agent DaemonSets + workload entries ready on both clouds (ahead of Istio)"
+}
+
 deploy_istio() {
   step "Step 1d: Istio (service mesh — ns crapi, 2 cluster, STRICT mTLS)"
   local istio_version="1.22.3"
@@ -209,7 +270,13 @@ deploy_istio() {
   # extensionProviders.opa-ext-authz resolves per-cluster to each cluster's
   # own local opa-service — no cross-cluster wiring needed.
   "$istioctl_bin" install --context "$AWS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y
-  "$istioctl_bin" install --context "$OS_CONTEXT" -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" -y
+  # OpenStack doesn't expose crAPI externally and has no SPIRE registration
+  # entry for istio-ingressgateway-service-account (see
+  # scripts/spire-entries.generated.sh) — the overlay disables that component
+  # for this install only. See its header comment for the failure this fixes.
+  "$istioctl_bin" install --context "$OS_CONTEXT" \
+    -f "$REPO_ROOT/k8s/istio/istio-operator.yaml" \
+    -f "$REPO_ROOT/k8s/istio/istio-operator-os-overlay.yaml" -y
 
   kubectl --context "$AWS_CONTEXT" wait --for=condition=Ready pod -l app=istiod -n istio-system --timeout=180s
   kubectl --context "$OS_CONTEXT" wait --for=condition=Ready pod -l app=istiod -n istio-system --timeout=180s
@@ -273,7 +340,7 @@ deploy_openldap_and_federation() {
   # already-imported realm. Register it live via Admin API too so it exists
   # even when Keycloak itself wasn't redeployed this run.
   kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
 import urllib.request, json, urllib.parse, urllib.error
@@ -331,7 +398,7 @@ deploy_audience_mapper() {
   # then silently lost on the next from-scratch deploy-all.sh because it lived
   # nowhere else). Register it live too so every deploy ends up with it.
   kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
 import urllib.request, json, urllib.parse
@@ -387,7 +454,7 @@ deploy_stepup_flow() {
   # Admin API in a prior session and lost on the next from-scratch deploy (see
   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
   kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
+  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
 import urllib.request, json, urllib.parse
@@ -517,7 +584,7 @@ deploy_aws_saml_federation() {
   # and corrupt a captured file — use a plain pod + exec + explicit delete
   # instead of --rm to keep the captured metadata byte-exact.
   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides='{"spec":{"serviceAccountName":"kc-admin-setup"}}' --command -- sh -c "sleep 30" >/dev/null
+  kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 30" >/dev/null
   kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
@@ -791,6 +858,7 @@ main() {
   apply_namespaces
   apply_network_policies
   deploy_gatekeeper
+  deploy_spire_pre_istio
   deploy_istio
   sync_images
   deploy_security_stack
@@ -804,4 +872,9 @@ main() {
   verify_final
 }
 
-main "$@"
+# Guard so this file can be `source`d to reuse individual functions (e.g. to
+# retry a single bootstrap step after a transient failure) without also
+# triggering a full main() run — same pattern as deploy-security-stack.sh.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
