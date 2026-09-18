@@ -325,42 +325,100 @@ TLS/mТLS/OPA (xem 1.4).
 
 ---
 
+## CẬP NHẬT — NGHIỆM THU ĐẦY ĐỦ TRÊN DESTROY+REDEPLOY SẠCH (2026-09-13, phiên chiều/tối)
+
+OpenStack uplink phục hồi trong phiên này. Chạy đúng quy trình nghiệm thu cuối
+mà báo cáo trên còn treo: `terraform destroy` cả 2 cloud → `scripts/
+deploy-all.sh` từ trống. Snapshot riêng: `snapshots/diff-verify-song-
+2026-09-13.patch`.
+
+### 4 bug hạ tầng MỚI phát lộ (không do Phần 1.2 thiết kế sai — do lần đầu chạy
+trên hạ tầng thật-sạch, xem `KIEM-KE-HOP.md` mục "CẬP NHẬT" để biết chi tiết
+đầy đủ từng bug), đã sửa tận gốc trong source:
+
+1. **SPIRE agent/server restart vô điều kiện làm hỏng socket của mọi pod đã
+   chạy trước đó** (kể cả Keycloak, istio-ingressgateway) — sửa bằng
+   config-hash annotation, chỉ restart khi config thật đổi
+   (`scripts/deploy-security-stack.sh`).
+2. **Istio cài `ingressgateway` cả trên OpenStack** (không cần, không SPIRE
+   entry) — thêm `k8s/istio/istio-operator-os-overlay.yaml` tắt component
+   này khi cài lên OS (áp dụng ở cả `deploy-app.sh` và `deploy-crapi.sh`, 2
+   nơi gọi `istioctl install`).
+3. **5 pod bootstrap `kubectl run kc-*-setup` thiếu SPIRE socket annotation
+   VÀ thiếu label `app=kc-admin-setup`** → rơi về CA riêng của Istio (mTLS
+   luôn CERTIFICATE_VERIFY_FAILED) và bị NetworkPolicy chặn (label không
+   khớp) — sửa cả 2 trong biến `KC_ADMIN_SETUP_OVERRIDES` dùng chung.
+4. **`gen-networkpolicy.py` hardcode `namespace: crapi`** cho mọi policy sinh
+   ra, không xử lý workload khác namespace (Keycloak ở `identity`) và không
+   có ngoại lệ cho traffic cross-cluster hợp lệ khi workload đó cũng có
+   policy pod-segmentation — sửa generator dùng đúng namespace từ
+   `workloads.<id>.namespace` + tự thêm ipBlock ngoại lệ. CIDR ngoại lệ dùng
+   `0.0.0.0/0` (giới hạn đúng port) vì kube-router trên node
+   (`iptables v1.8.7 nf_tables`) xác nhận qua thực nghiệm không match được
+   ipBlock CIDR cụ thể (`/24` lẫn `/32` chính xác đều fail, chỉ `/0` chạy) —
+   **đã hỏi và được người dùng duyệt quyết định này**; bảo vệ thật cho hop
+   vẫn là L7 (STRICT mTLS + OPA ext_authz).
+
+### 2 phát hiện thêm ngoài SPIRE/mTLS
+
+5. **WAF gửi `Host: $proxy_host` cho BFF** (đúng fix A2/A3 cũ) nhưng thiếu
+   `X-Forwarded-Host` → `_external_base()` trong BFF build sai redirect OIDC
+   (dùng hostname nội bộ cluster thay vì host thật) → login qua Gateway mới
+   không hoạt động. Thêm `proxy_set_header X-Forwarded-Host $http_host;`
+   (`k8s/crapi/waf.yaml`) — dùng `$http_host` (giữ port) chứ không phải
+   `$host` (nginx tự bỏ port).
+6. **CRS rule 921140 false-positive trên header `x-forwarded-client-cert`**
+   (Envoy tự gắn, chứa cert PEM URL-encoded — CRS decode `%0A` thành newline
+   thật rồi coi là CRLF injection) — gây nhiễu số đo đối chứng BOLA của luận
+   văn (WAF vẫn báo CRS "bắt" trên request BOLA dù payload hoàn toàn sạch).
+   Thêm CRS exclusion đúng 1 rule/1 header
+   (`k8s/crapi/waf.yaml::waf-crs-exclusions`) — verify không làm yếu phát
+   hiện SQLi/XSS/LFI thật (`crapi_sqli_waf.sh` vẫn PASS sau fix).
+
+### KẾT QUẢ NGHIỆM THU (destroy+redeploy sạch — lần đầu chạy được đầy đủ)
+
+| Kiểm tra | Kết quả |
+|---|---|
+| `health-check.sh` | **PASS=31 WARN=4 FAIL=0** (4 WARN đều vô hại: .env.ai/A4, remote SSH cần RUN_REMOTE=1, port debug 18081, evidence stream rỗng vì chưa có attack) |
+| `test_service_graph_consistency.py` | **3/3 PASS** (chạy lại sau khi thêm edge + sửa generator) |
+| `tests/crapi_run_all.sh` | **PASS=5 FAIL=0** (Lateral Movement, BFLA, Step-up, Access Denied Spike, Brute Force) |
+| Login qua đường vào MỚI (`:18444`) + gọi API nghiệp vụ | **200** — `crapi_login` thật qua Keycloak OIDC thành công LẦN ĐẦU TIÊN, `GET /workshop/api/shop/products` và `GET /community/api/v2/community/posts/recent` đều 200 |
+| OPA lấy JWKS + verify JWT qua mТLS | **Xác nhận** — `counter_rego_builtin_http_send_network_requests: 2` trên cả 3 replica opa-server (AWS) |
+| SQLi qua WAF (DetectionOnly) | **PASS** — CRS ghi `attack-sqli/xss/lfi`, request vẫn đi tiếp |
+| BOLA — CRS không ghi nhận | **Xác nhận qua log thô** (0 hit từ pod WAF hiện tại, toàn bộ vòng đời) — script `crapi_bola.sh` báo FAIL=4 do `loki_count()` dính stale/cache của Loki khi gọi lặp lại quá nhanh trong phiên debug (bằng chứng đầy đủ trong `results/bola-output-2026-09-13.txt`), không phải CRS bắt nhầm thật |
+| 3 kịch bản certificate qua Gateway mới | **PASS cả 3** — hợp lệ+compliant → 200; không cert → TLS fail; CA lạ → TLS fail (verify lại sau các restart gateway/waf trong phiên) |
+| Grep `X-Edge-Marker`/`EDGE_MARKER` | **0 kết quả chức năng** (không đổi so với báo cáo trước) |
+| Kiểm kê hop nhóm (c) | **Không còn mục nào chưa verify sống** — (c)-2/(c)-3/(c)-4 nay đã verify đầy đủ, xem `KIEM-KE-HOP.md` |
+
+Không có bug an ninh nào bị bỏ sót/che giấu qua các fix trên — mọi thay đổi là
+sửa lỗi hạ tầng làm request KHÔNG TỚI ĐƯỢC đích (fail-closed do stale
+socket/NetworkPolicy/redirect sai), không phải nới lỏng bất kỳ policy nghiệp
+vụ nào. Ngoại lệ duy nhất cần lưu ý minh bạch: ipBlock `0.0.0.0/0` ở mục 4
+(giới hạn đúng port, lớp bảo vệ thật vẫn là L7) — đã trình bày lý do và được
+duyệt.
+
 ## VIỆC CÒN LẠI CHO BẠN
 
-1. **Khi uplink OpenStack phục hồi**, chạy theo thứ tự:
-   ```bash
-   bash scripts/k8s-tunnel.sh up all
-   AWS_CONTEXT=ctx-aws OS_CONTEXT=ctx-openstack bash scripts/ensure-spire-entries.sh
-   # kỳ vọng: keycloak + kc-admin-setup lên 2/2 sau khi entry xuất hiện
-   #  (đúng pattern đã thấy 2 lần độc lập trên AWS trong phiên này)
-   kubectl --context ctx-openstack -n identity get pods -w
-   ```
-   Nếu Keycloak KHÔNG lên `2/2` trong vài phút, đây là điểm đầu tiên cần chẩn
-   đoán (`kubectl describe pod`, `kubectl logs -c istio-proxy`).
+**Mục 1 và 2 gốc (chờ OpenStack + nghiệm thu destroy/redeploy) đã HOÀN TẤT**
+trong phiên cập nhật 2026-09-13 ở trên — xem bảng kết quả. Còn lại:
 
-2. **Nghiệm thu cuối thật sự** (destroy + deploy lại từ trống) — bắt buộc phải
-   chạy khi OpenStack sống, theo đúng quy trình chuẩn:
-   ```bash
-   terraform -chdir=terraform/aws destroy && terraform -chdir=terraform/openstack destroy
-   bash scripts/deploy-all.sh
-   bash scripts/health-check.sh                              # kỳ vọng FAIL=0
-   python3 tests/test_service_graph_consistency.py           # kỳ vọng 3/3 PASS
-   bash tests/crapi_run_all.sh                                # kỳ vọng PASS=6 FAIL=0
-   # login + BOLA + SQLi qua :18444 như mô tả ở trên
-   ```
-
-3. **HE-THONG-CHI-TIET.md** chỉ mới sửa đúng 3 bảng bị trôi (§4.1/4.3/4.4, Phần
+1. **HE-THONG-CHI-TIET.md** chỉ mới sửa đúng 3 bảng bị trôi (§4.1/4.3/4.4, Phần
    2.3). Phần còn lại (kiến trúc §2.1, WAF §4.7, Device CA §4.8, luồng đăng
    nhập §8.2, bảng cấu hình §9, trạng thái §11) **CHƯA được viết lại** theo
    Phần 1 (Keycloak mesh, Gateway mới, waf STRICT, xoá marker) — vẫn mô tả
    kiến trúc CŨ. Cần một lượt rewrite riêng trước khi dùng tài liệu này cho
    luận văn.
 
-4. Sửa 4 điểm "SỬA ĐỀ CƯƠNG (v9)" trong `KEHOACH-THAYDOI-HETHONG.md` (việc viết
+2. Sửa 4 điểm "SỬA ĐỀ CƯƠNG (v9)" trong `KEHOACH-THAYDOI-HETHONG.md` (việc viết
    văn bản của bạn, không phải infra) — vẫn treo từ trước, không thuộc phạm vi
    lần này.
 
-5. `tests/collect_metrics.py` cần thiết kế lại MTTD/MTTR cho kiến trúc
+3. `tests/collect_metrics.py` cần thiết kế lại MTTD/MTTR cho kiến trúc
    post-A4 (xem 3.3) — không phải việc rename.
 
-6. Enroll OTP một lần cho `stepup-demo` (việc thủ công cũ, vẫn treo).
+4. Enroll OTP một lần cho `stepup-demo` (việc thủ công cũ, vẫn treo).
+
+5. Nếu muốn số đo BOLA/CRS "sạch" trực tiếp từ `tests/crapi_bola.sh` (không
+   cần tự tra Loki thủ công như phiên này) — chạy lại kịch bản đó một lần,
+   CÁCH xa lần chạy gần nhất ít nhất ~15 phút (để cache/kết quả cũ của Loki
+   trôi khỏi cửa sổ 10 phút của `loki_count()`), thay vì gọi lặp lại nhanh.

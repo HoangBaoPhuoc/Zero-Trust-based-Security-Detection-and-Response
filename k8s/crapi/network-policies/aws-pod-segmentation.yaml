@@ -213,7 +213,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - podSelector:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-system }
+          podSelector:
             matchLabels:
               app: istio-ingressgateway-service-account
       ports:
