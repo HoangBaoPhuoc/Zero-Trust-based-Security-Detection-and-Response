@@ -34,7 +34,7 @@ resource "openstack_networking_subnet_v2" "dmz_subnet" {
   cidr            = "192.168.100.0/24"
   ip_version      = 4
   gateway_ip      = "192.168.100.1"
-  dns_nameservers = ["8.8.8.8", "8.8.4.4"]
+  dns_nameservers = var.subnet_dns_nameservers
 }
 
 resource "openstack_networking_router_interface_v2" "edge_router_dmz" {
@@ -57,7 +57,7 @@ resource "openstack_networking_subnet_v2" "private_subnet" {
   cidr            = "192.168.101.0/24"
   ip_version      = 4
   gateway_ip      = "192.168.101.1"
-  dns_nameservers = ["8.8.8.8", "8.8.4.4"]
+  dns_nameservers = var.subnet_dns_nameservers
 
   allocation_pool {
     start = "192.168.101.20"
@@ -80,7 +80,7 @@ resource "openstack_networking_subnet_v2" "identity_subnet" {
   cidr            = "192.168.102.0/24"
   ip_version      = 4
   gateway_ip      = "192.168.102.1"
-  dns_nameservers = ["8.8.8.8", "8.8.4.4"]
+  dns_nameservers = var.subnet_dns_nameservers
 
   allocation_pool {
     start = "192.168.102.20"

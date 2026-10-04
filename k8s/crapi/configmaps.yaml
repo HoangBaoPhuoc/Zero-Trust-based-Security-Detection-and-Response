@@ -1,0 +1,138 @@
+# ConfigMap cho crAPI — bê từ OWASP/crAPI deploy/k8s/base/*/config.yaml,
+# sửa host theo split hybrid (KE-HOACH-CRAPI.md §0 B, GATE 0 DB-2):
+#   - Postgres DUY NHẤT nằm ở OpenStack → community/workshop (AWS) trỏ tới
+#     selectorless Service `postgresdb-openstack` (NodePort 30432 qua WireGuard).
+#   - identity (OpenStack) trỏ Postgres local `postgresdb:5432`.
+#   - mailhog nằm ở OpenStack (cạnh identity → SMTP nội cluster). crapi-web (AWS)
+#     KHÔNG có Service `mailhog` → route /mailhog trỏ về `crapi-web:80` cho nginx
+#     khởi động được (xem mail thật qua Traefik `mailhog.ztlab.local` ở OpenStack).
+#   - Mongo nằm ở AWS (chỉ community/workshop dùng).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crapi-identity-configmap
+  namespace: crapi
+  labels: { app: crapi-identity }
+data:
+  DB_HOST: "postgresdb"
+  DB_USER: "admin"
+  DB_PASSWORD: "crapisecretpassword"
+  DB_NAME: "crapi"
+  DB_PORT: "5432"
+  APP_NAME: "crapi-identity"
+  ENABLE_SHELL_INJECTION: "false"
+  ENABLE_LOG4J: "true"
+  MAILHOG_HOST: "mailhog"
+  MAILHOG_PORT: "1025"
+  MAILHOG_DOMAIN: "example.com"
+  SMTP_HOST: "smtp.example.com"
+  SMTP_PORT: "587"
+  SMTP_EMAIL: "user@example.com"
+  SMTP_PASS: "xxxxxxxxxxxxxx"
+  SMTP_FROM: "no-reply@example.com"
+  SMTP_AUTH: "true"
+  SMTP_STARTTLS: "true"
+  JWT_EXPIRATION: "604800000"
+  JWT_SECRET: "crapi"
+  SERVER_PORT: "8080"
+  TLS_ENABLED: "false"
+  API_GATEWAY_URL: "https://api.mypremiumdealership.com"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crapi-community-configmap
+  namespace: crapi
+  labels: { app: crapi-community }
+data:
+  IDENTITY_SERVICE: "crapi-identity-openstack.crapi.svc.cluster.local:30090"
+  DB_HOST: "postgresdb-openstack.crapi.svc.cluster.local"
+  DB_USER: "admin"
+  DB_PASSWORD: "crapisecretpassword"
+  DB_NAME: "crapi"
+  DB_PORT: "30432"
+  MONGO_DB_HOST: "mongodb"
+  MONGO_DB_PORT: "27017"
+  MONGO_DB_USER: "admin"
+  MONGO_DB_PASSWORD: "crapisecretpassword"
+  MONGO_DB_NAME: "crapi"
+  SERVER_PORT: "8087"
+  TLS_ENABLED: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crapi-workshop-configmap
+  namespace: crapi
+  labels: { app: crapi-workshop }
+data:
+  IDENTITY_SERVICE: "crapi-identity-openstack.crapi.svc.cluster.local:30090"
+  SECRET_KEY: "crapi"
+  DB_HOST: "postgresdb-openstack.crapi.svc.cluster.local"
+  DB_USER: "admin"
+  DB_PASSWORD: "crapisecretpassword"
+  DB_NAME: "crapi"
+  DB_PORT: "30432"
+  MONGO_DB_HOST: "mongodb"
+  MONGO_DB_PORT: "27017"
+  MONGO_DB_USER: "admin"
+  MONGO_DB_PASSWORD: "crapisecretpassword"
+  MONGO_DB_NAME: "crapi"
+  SERVER_PORT: "8000"
+  API_GATEWAY_URL: "https://api.mypremiumdealership.com"
+  GUNICORN_WORKERS: "4"
+  GUNICORN_TIMEOUT: "120"
+  GUNICORN_MAX_REQUESTS: "1000"
+  GUNICORN_MAX_REQUESTS_JITTER: "50"
+  DB_CONN_MAX_AGE: "600"
+  TLS_ENABLED: "false"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: crapi-web-configmap
+  namespace: crapi
+  labels: { app: crapi-web }
+data:
+  COMMUNITY_SERVICE: "crapi-community:8087"
+  IDENTITY_SERVICE: "crapi-identity-openstack.crapi.svc.cluster.local:30090"
+  WORKSHOP_SERVICE: "crapi-workshop:8000"
+  # chatbot ngoài phạm vi Core — trỏ về chính web để nginx không lỗi cấu hình;
+  # không route nào của UI dùng /chatbot trong luồng demo.
+  CHATBOT_SERVICE: "crapi-web:80"
+  # mailhog ở cluster OpenStack — không có Service `mailhog` trên AWS. Trỏ về
+  # chính web (như CHATBOT_SERVICE) để nginx resolve upstream lúc start, không
+  # `[emerg] host not found in upstream "mailhog"` → CrashLoopBackOff.
+  MAILHOG_WEB_SERVICE: "crapi-web:80"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: crapi
+  labels: { app: postgresdb }
+data:
+  POSTGRES_USER: "admin"
+  POSTGRES_PASSWORD: "crapisecretpassword"
+  POSTGRES_DB: "crapi"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-config
+  namespace: crapi
+  labels: { app: mongodb }
+data:
+  MONGO_INITDB_ROOT_USERNAME: "admin"
+  MONGO_INITDB_ROOT_PASSWORD: "crapisecretpassword"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailhog-configmap
+  namespace: crapi
+  labels: { app: mailhog }
+data:
+  MH_MONGO_URI: "admin:crapisecretpassword@mongodb:27017"
+  MH_STORAGE: "mongodb"

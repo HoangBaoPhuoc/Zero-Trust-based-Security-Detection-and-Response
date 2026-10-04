@@ -37,24 +37,42 @@ data:
       http_listen_port: 9080
       grpc_listen_port: 0
 
+    # Muc 1 vong 2026-09-29 (duong log ben cho Giai doan B 150h):
+    # positions tren hostPath (/var/lib/promtail, xem volumes) -> pod restart /
+    # rollout KHONG doc lai tu dau va KHONG bo qua phan chua gui. Truoc day la
+    # emptyDir: pod OpenStack restart trong luc mat mang = mat log am tham.
     positions:
       filename: /tmp/promtail-positions/positions.yaml
+      sync_period: 5s
 
+    # backoff: 0.5s -> 30s, 300 lan thu ~= 2.5 gio truoc khi bo batch. Trong
+    # luc client dang retry, tailer bi chan (kenh day) nen promtail NGUNG doc
+    # file -> positions khong tien -> gian doan mang (WireGuard rot, Loki
+    # restart) chi lam tre log, khong mat log. Mac dinh (max_retries 10,
+    # max_period 5m) chi chiu ~10 phut.
     clients:
       - url: ${LOKI_PUSH_URL}
         batchwait: 1s
         batchsize: 1048576
+        timeout: 20s
+        backoff_config:
+          min_period: 500ms
+          max_period: 30s
+          max_retries: 300
 
     scrape_configs:
 
+      # kubernetes_sd_configs below deliberately omit `api_server`/`tls_config`/
+      # `authorization` — this manifest is applied verbatim to BOTH clusters
+      # (deploy-app.sh kaws/kos apply). A hardcoded api_server IP here used to
+      # point at the AWS k3s master unconditionally, so on OpenStack every pod
+      # SD lookup silently failed (`dial tcp <aws-ip>:6443: timed out`, no pods
+      # ever discovered there) — omitting these fields makes promtail fall back
+      # to its standard in-cluster autoconfig, which resolves to whichever
+      # cluster the pod actually runs in.
       - job_name: kubernetes-pods
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
         relabel_configs:
@@ -63,7 +81,7 @@ data:
             regex: ${NODE_NAME}
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: financial|identity|plg-stack
+            regex: crapi|identity|plg-stack
           - source_labels: [__meta_kubernetes_namespace]
             target_label: namespace
           - source_labels: [__meta_kubernetes_pod_name]
@@ -92,11 +110,6 @@ data:
       - job_name: envoy-access-k8s
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
           - json:
@@ -111,11 +124,29 @@ data:
                 bytes_sent: bytes_sent
                 trace_id: trace_id
                 svid: svid
+                upstream_cluster: upstream_cluster
+          # Mục 4 vòng 2026-09-29 (H2): nhãn `direction` (inbound|outbound) từ
+          # upstream_cluster ("inbound|8080||" = dòng phía server của sidecar;
+          # "outbound|..."/PassthroughCluster = phía client). Cardinality 2.
+          # Dòng không có upstream_cluster (vd NR — plaintext bị từ chối trước
+          # khi chọn được cluster) không có nhãn này.
+          - regex:
+              source: upstream_cluster
+              expression: '^(?P<direction>inbound|outbound)\|'
+          - regex:
+              source: upstream_cluster
+              expression: '^(?P<direction>InboundPassthrough)'
+          - template:
+              source: direction
+              # .Value rỗng/thiếu -> chuỗi rỗng -> labels stage bỏ nhãn (không
+              # in "<no value>").
+              template: '{{ if not .Value }}{{ else if eq .Value "InboundPassthrough" }}inbound{{ else }}{{ .Value }}{{ end }}'
           - labels:
               method:
               path:
               response_code:
               source_ip:
+              direction:
           - timestamp:
               source: timestamp
               format: RFC3339
@@ -126,7 +157,7 @@ data:
             regex: ${NODE_NAME}
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: financial
+            regex: crapi
           - source_labels: [__meta_kubernetes_pod_container_name]
             action: keep
             # All 8 financial services are Istio-migrated (Phase 6) — the
@@ -158,29 +189,35 @@ data:
       - job_name: opa-decisions-k8s
         kubernetes_sd_configs:
           - role: pod
-            api_server: https://10.10.1.10:6443
-            tls_config:
-              insecure_skip_verify: true
-            authorization:
-              credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
         pipeline_stages:
           - cri: {}
           - json:
               expressions:
                 decision_id: decision_id
                 opa_result: result
+                # A5.1 — thesis feature group B ("số danh tính đích khác nhau").
+                # OPA logs the full Envoy ext_authz `input` (decision_logs.console:
+                # true), so source/destination principal are already in the log
+                # body and queryable via `| json`. Promoting them to first-class
+                # labels here makes the count directly computable and immune to a
+                # future `output:` stage rewriting the body. Cardinality is low
+                # (~a dozen SPIFFE IDs, far below `request_path`).
+                source_principal: input.attributes.source.principal
+                destination_principal: input.attributes.destination.principal
           - regex:
-              expression: '":path":"(?P<request_path>[^"]+)"'
+              expression: '"[:]?path":"(?P<request_path>[^"]+)"'
           - labels:
               opa_result:
               request_path:
+              source_principal:
+              destination_principal:
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_node_name]
             action: keep
             regex: ${NODE_NAME}
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
-            regex: financial
+            regex: crapi
           - source_labels: [__meta_kubernetes_pod_container_name]
             action: keep
             regex: opa
@@ -190,6 +227,58 @@ data:
             target_label: pod
           - target_label: job
             replacement: opa-decisions
+          - target_label: cloud
+            replacement: ${CLOUD_PROVIDER}
+          - target_label: env
+            replacement: ztlab
+          - source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            target_label: __path__
+            separator: /
+            regex: (.+)/(.+)
+            replacement: /var/log/pods/*$1/$2/*.log
+
+      # A2 — ModSecurity/CRS JSON audit log from the `waf` container stdout.
+      # Engine is DetectionOnly, so a record here means CRS *flagged* the request
+      # but let it through. The full JSON transaction is shipped verbatim
+      # (queryable via `| json`); labels stay low-cardinality.
+      - job_name: waf-audit-k8s
+        kubernetes_sd_configs:
+          - role: pod
+        pipeline_stages:
+          - cri: {}
+          # ModSec audit lines are a JSON object with a top-level "transaction";
+          # nginx access lines are not — drop everything without "transaction".
+          - match:
+              selector: '{job="waf-audit"} !~ "\"transaction\""'
+              action: drop
+          # ModSec v3 JSON audit: fields live under `transaction` (not audit_data).
+          - json:
+              expressions:
+                transaction_id: transaction.unique_id
+                client_ip: transaction.client_ip
+                request_uri: transaction.request.uri
+                request_method: transaction.request.method
+                response_code: transaction.response.http_code
+                secrules_engine: transaction.producer.secrules_engine
+          - labels:
+              request_method:
+              secrules_engine:
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_node_name]
+            action: keep
+            regex: ${NODE_NAME}
+          - source_labels: [__meta_kubernetes_namespace]
+            action: keep
+            regex: crapi
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            action: keep
+            regex: waf
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - target_label: job
+            replacement: waf-audit
           - target_label: cloud
             replacement: ${CLOUD_PROVIDER}
           - target_label: env
@@ -276,7 +365,9 @@ spec:
           configMap:
             name: promtail-config
         - name: positions
-          emptyDir: {}
+          hostPath:
+            path: /var/lib/promtail
+            type: DirectoryOrCreate
         - name: varlog
           hostPath:
             path: /var/log

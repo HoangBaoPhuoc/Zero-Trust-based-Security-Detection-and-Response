@@ -1,0 +1,72 @@
+# [TEST DOUBLE — Phần 3.8] mailhog KHÔNG phải SMTP relay vận hành thật — đây
+# là fake-SMTP-catcher dùng để demo/kiểm tra luồng email (signup/reset mật
+# khẩu crAPI) mà không gửi mail thật ra ngoài. KHÔNG nâng cấp (không cần
+# resource lớn/HA/auth thật) — chỉ cần đánh dấu rõ để không ai đọc nhầm thành
+# thành phần vận hành thật khi viết chương kiến trúc.
+#
+# mailhog — cluster OpenStack (cạnh crapi-identity → SMTP nội cluster, không
+# cross-cloud). `MH_STORAGE=memory` → KHÔNG cần MongoDB.
+#
+# Vì sao KHÔNG đặt ở AWS (cross-cloud SMTP như dự kiến ban đầu): AWS security
+# group `ztlab-sg-private` (terraform/aws/security_groups.tf) chưa cho inbound
+# NodePort từ dải OpenStack (192.168.101.0/24 / 10.200.0.0/24) → identity(OS)
+# → mailhog(AWS):31025 bị chặn, signup treo. Đã thêm rule vào terraform
+# (root-cause) nhưng cần AWS creds + terraform apply để hiệu lực. Khi có rule
+# đó, có thể chuyển mailhog về AWS (`MH_STORAGE=mongodb`, NodePort 31025,
+# selectorless `mailhog-aws` trong cross-cloud-os.yaml) để có thêm 1 hop
+# cross-cloud SMTP cho luận văn. Xem KET-QUA-CRAPI.md.
+#
+# UI 8025: qua Traefik (mailhog.ztlab.local — ingress ở OpenStack cluster).
+# inject=false: SMTP + UI, giữ đơn giản.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailhog
+  namespace: crapi
+  labels: { app: mailhog }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mailhog }
+  template:
+    metadata:
+      labels: { app: mailhog }
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: mailhog
+          image: crapi/mailhog@sha256:015c23f79d40c9dc1800cd0a458503b89aeda3b585a12c37d53829d6c7d61fdd
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MH_STORAGE
+              value: "memory"
+          ports:
+            - containerPort: 1025
+              name: smtp
+            - containerPort: 8025
+              name: web
+          readinessProbe:
+            tcpSocket: { port: 1025 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket: { port: 1025 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailhog
+  namespace: crapi
+  labels: { app: mailhog }
+spec:
+  selector: { app: mailhog }
+  ports:
+    - { name: tcp-smtp, port: 1025, targetPort: 1025 }
+    - { name: web, port: 8025, targetPort: 8025 }

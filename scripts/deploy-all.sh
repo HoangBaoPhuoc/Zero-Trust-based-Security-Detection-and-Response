@@ -87,10 +87,15 @@ if run_step 1; then
 fi
 
 # ─────────────────────────────────────────────────────────
+# .env được nạp CẢ khi chạy tiếp bằng --from-step > 2 (2026-10-04: `--from-step 11` bỏ qua bước 2 →
+# không có khoá AWS → deploy-app.sh::deploy_aws_saml_federation chỉ WARN rồi bỏ qua, trong khi bước 5
+# đã tạo SAML provider từ file metadata còn sót của Keycloak cũ — deploy báo xanh với SSO hỏng).
+if [[ -f .env ]]; then set -a; source <(grep -v '^#' .env | grep '='); set +a; fi
+export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-1}"
+
 step 2 "Credentials .env"
 if run_step 2; then
   [[ -f .env ]] || fail "Không thấy file .env — copy từ .env.template trước"
-  set -a; source <(grep -v '^#' .env | grep '='); set +a
 
   if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
     warn "Thiếu AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY trong .env"
@@ -153,6 +158,9 @@ fi
 # ─────────────────────────────────────────────────────────
 step 6 "Image Ubuntu OpenStack"
 if run_step 6; then
+  # Tiền kiểm control-plane AIO (sự cố 2026-10-04: đồng hồ bị chỉnh lùi sau khi Kolla khởi động →
+  # nova-scheduler câm, VM kẹt BUILD 30 phút). Tự khởi động lại container bị ảnh hưởng + tạo VM thử.
+  bash scripts/openstack-aio-preflight.sh || fail "control-plane OpenStack AIO không lập lịch được VM"
   if openstack image list -f value -c Name | grep -qx "ubuntu-22.04"; then
     ok "Image 'ubuntu-22.04' đã tồn tại — bỏ qua"
   else
@@ -195,6 +203,16 @@ if run_step 9; then
     || fail "Thiếu output Terraform — kiểm tra Bước 5/8 đã apply thành công chưa"
 
   log "aws_bastion=$AWS_BASTION_IP  aws_gateway=$AWS_GATEWAY_IP  os_gateway=$OS_GATEWAY_IP"
+
+  # Xoá host key cũ của các jump host (bastion/gateway). Floating IP OpenStack
+  # (và có thể cả EIP AWS) được tái sử dụng qua nhiều lần deploy, nên known_hosts
+  # còn giữ key của instance cũ. ProxyJump mở một ssh con tới jump host KHÔNG kế
+  # thừa -o StrictHostKeyChecking=no/UserKnownHostsFile từ lệnh ngoài, nên key lệch
+  # làm hop này chết → "Connection closed by UNKNOWN port 65535" ở mọi node phía sau.
+  for _jh in "$AWS_BASTION_IP" "$AWS_GATEWAY_IP" "$OS_GATEWAY_IP"; do
+    ssh-keygen -R "$_jh" >/dev/null 2>&1 || true
+  done
+  ok "Đã xoá host key cũ của jump host trong known_hosts"
 
   HOSTS_YML="ansible/inventory/hosts.yml"
   cp "$HOSTS_YML" "$HOSTS_YML.bak"
@@ -284,9 +302,10 @@ step 13 "Deploy ứng dụng"
 if run_step 13; then
   [[ -f "$HOME/kolla-venv/bin/activate" ]] && source "$HOME/kolla-venv/bin/activate"
 
-  IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh
+  IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh
   export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-ztlab-admin-2026}"
-  bash scripts/deploy-app.sh
+  # --skip-images: sync-app-images.sh vừa chạy ngay trên, không lặp lại trong deploy-app.sh
+  bash scripts/deploy-app.sh --skip-images
 
   kubectl --context ctx-aws get pods -A
   kubectl --context ctx-openstack get pods -A
@@ -296,9 +315,10 @@ fi
 # ─────────────────────────────────────────────────────────
 step 14 "Seed data + mở UI"
 if run_step 14; then
-  python3 tests/seed_db.py
+  # Seed dữ liệu crAPI do Job `crapi-seed` (deploy-crapi.sh::run_seed) lo —
+  # signup user demo Keycloak + vehicle/product cho BOLA. Bước này chỉ mở UI.
   bash scripts/open-admin-uis.sh
-  ss -lnt | grep -E ':(18080|18081|3000|13100|8091|18082|18092|9090|5050|5540)\b' || true
+  ss -lnt | grep -E ':(8180|18081|3000|13100|8091|18082|18092|9090|8025)\b' || true
   ok "Seed + UI xong"
 fi
 

@@ -1,0 +1,48 @@
+apiVersion: 1
+
+# Mục 1 vòng 2026-09-29 — lưới an toàn cho đợt thu thập 150 giờ (Giai đoạn B).
+# Log OpenStack tới Loki (AWS) qua WireGuard → NodePort 31000. Nếu đường này
+# chết (WireGuard rớt quá lâu, SG, Promtail OpenStack crash, host `aio` ngủ),
+# Promtail chỉ retry âm thầm; không có rule này thì chỉ phát hiện lúc gán nhãn.
+# Không phải rule phát hiện tấn công — KHÔNG tính vào bộ 9 rule phát hiện.
+groups:
+  - orgId: 1
+    name: log-pipeline
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: log-pipeline-openstack-silent
+        title: "Log Pipeline Silent — không nhận log từ cụm OpenStack 10 phút"
+        for: 0m
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              # 1 khi KHÔNG có dòng log nào cloud=openstack trong 10 phút; rỗng
+              # khi có log → NoData là trạng thái bình thường.
+              expr: 'absent_over_time({cloud="openstack"}[10m])'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "Loki không nhận log nào từ OpenStack trong 10 phút — đợt thu thập đang mất dữ liệu phía OpenStack"
+          description: |
+            Đường log: Promtail (ctx-openstack, ns plg-stack) → WireGuard → http://10.10.1.10:31000 (NodePort Loki).
+            Promtail giữ positions trên hostPath và retry ~2,5 giờ, nên nếu sửa trong thời gian đó
+            log bị trễ chứ không mất. Kiểm tra:
+              kubectl --context ctx-openstack -n plg-stack logs ds/promtail --tail=50
+              ssh os_gateway 'sudo wg show'   # latest handshake
+              curl -s http://10.10.1.10:31000/ready  (từ node OpenStack)
+        labels:
+          severity: critical
+          category: infrastructure
+          component: log-pipeline

@@ -12,6 +12,23 @@
         state: present
       notify: Reload sshd
 
+    # 2026-10-04 (mục 2.3 đóng sổ): ổ EBS của node k3s AWS được nâng 30 → 100 GB trong Terraform để chứa
+    # log Loki (51,6 MB/h × retention 720 h ≈ 37 GB, ×2 biên). Khi EBS được mở rộng tại chỗ trên cụm đang
+    # chạy, partition/filesystem KHÔNG tự lớn theo (cloud-init growpart chỉ chạy lúc boot) → mở rộng online.
+    # Idempotent: growpart in "NOCHANGE" và thoát 1 khi đã đầy đĩa.
+    - name: Grow root partition + filesystem to fill the disk (online, idempotent)
+      ansible.builtin.shell: |
+        set -e
+        src=$(findmnt -n -o SOURCE /)
+        disk=/dev/$(lsblk -n -o PKNAME "$src")
+        part=$(cat /sys/class/block/$(basename "$src")/partition)
+        out=$(growpart "$disk" "$part" 2>&1) || echo "$out" | grep -q NOCHANGE
+        resize2fs "$src" >/dev/null 2>&1 || true
+        df -h / | tail -1
+      register: growfs
+      changed_when: "'NOCHANGE' not in growfs.stdout"
+      tags: [growfs]
+
     - name: Create 2GB swap file if not present
       ansible.builtin.command: fallocate -l 2G /swapfile
       args:

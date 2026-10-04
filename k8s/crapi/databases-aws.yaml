@@ -1,0 +1,172 @@
+# MongoDB + Redis — cluster AWS. Cả 2 infra thuần, không SPIRE/mТLS (như
+# Postgres/Redis của finance app). Mongo: community/workshop/mailhog dùng.
+# Redis: chỉ bff (rate-limit + PKCE state), KHÔNG phục vụ crAPI.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+  namespace: crapi
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 4Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongodb
+  namespace: crapi
+  labels: { app: mongodb }
+spec:
+  serviceName: mongodb
+  replicas: 1
+  selector:
+    matchLabels: { app: mongodb }
+  template:
+    metadata:
+      labels: { app: mongodb }
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef
+          imagePullPolicy: IfNotPresent
+          # Phần 2 remediation (2026-09-19) — nghi vấn ban đầu (mongo không
+          # --auth, vì manifest này không có MONGO_INITDB_ROOT_*/args) là
+          # SAI theo thực nghiệm sống: `ps aux` trong container xác nhận
+          # `mongod --auth --bind_ip_all` đang chạy, và
+          # `mongo -u admin -p crapisecretpassword` xác thực + đọc DB thành
+          # công (cơ chế bootstrap chính xác chưa truy hết — không phải việc
+          # cấu hình ở file này — không đổi gì thêm để tránh phá vỡ cái đang
+          # chạy đúng mà mình chưa hiểu hết). KHÔNG cần args/env thêm. Xem
+          # AUDIT-THUC-THI.md mục MongoDB: auth có thật (lớp DATA ổn), netpol
+          # aws-pod-mongodb thì không được kube-router enforce thật (lớp
+          # NETWORK không đáng tin) — 2 lớp độc lập, chỉ 1 lớp cần sửa.
+          ports:
+            - containerPort: 27017
+              name: mongo
+          envFrom:
+            - configMapRef:
+                name: mongodb-config
+          volumeMounts:
+            - mountPath: /data/db
+              name: mongodb-data
+          readinessProbe:
+            exec:
+              command: ["mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          # Phần 3.5 remediation (2026-09-19) — thiếu requests/limits trước đây
+          # (Gatekeeper chưa có constraint bắt buộc, xem AUDIT-THUC-THI.md).
+          # Mongo cần bộ nhớ đủ cho WiredTiger cache — không đặt limit quá sát
+          # request để tránh OOM-kill khi có traffic tăng đột biến.
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 768Mi }
+      volumes:
+        - name: mongodb-data
+          persistentVolumeClaim:
+            claimName: mongodb-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: crapi
+spec:
+  selector: { app: mongodb }
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: 27017
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-auth
+  namespace: crapi
+type: Opaque
+stringData:
+  password: "ZTALab-Redis-2026!"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-pvc
+  namespace: crapi
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: crapi
+  labels: { app: redis }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+          args: ["redis-server", "--appendonly", "yes", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-auth
+                  key: password
+          ports:
+            - containerPort: 6379
+              name: redis
+          volumeMounts:
+            - name: redis-data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a $REDIS_PASSWORD --no-auth-warning ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a $REDIS_PASSWORD --no-auth-warning ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
+      volumes:
+        - name: redis-data
+          persistentVolumeClaim:
+            claimName: redis-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: crapi
+spec:
+  selector: { app: redis }
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379

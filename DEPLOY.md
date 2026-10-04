@@ -198,7 +198,7 @@ kubectl --context ctx-openstack get nodes
 ```bash
 source ~/kolla-venv/bin/activate   # nếu dùng venv riêng cho openstack CLI
 
-IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh   # build + copy image vào mọi node
+IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh   # build + copy image vào mọi node
 docker images | grep '^ztlab/'                          # kiểm tra image đã build
 
 export KEYCLOAK_ADMIN_PASSWORD=ztlab-admin-2026
@@ -208,14 +208,14 @@ kubectl --context ctx-aws get pods -A
 kubectl --context ctx-openstack get pods -A
 ```
 
-### Bước 14 — Seed data và mở UI
+### Bước 14 — Mở UI
 
 ```bash
-python3 tests/seed_db.py
 bash scripts/open-admin-uis.sh
-
-ss -lnt | grep -E ':(18080|18081|3000|13100|8091|18082|18092|9090|5050|5540)\b'
+ss -lnt | grep -E ':(8180|18081|3000|13100|8091|18082|18092|9090|8025)\b'
 ```
+
+> Seed dữ liệu crAPI do Job `crapi-seed` (`deploy-crapi.sh::run_seed`) tự chạy trong Bước 13 — signup user demo Keycloak + tạo vehicle/product cho BOLA. Không cần chạy tay.
 
 Sau bước này, hệ thống đã sẵn sàng — chuyển sang **Phần 2** cho các lần khởi động/redeploy tiếp theo.
 
@@ -243,96 +243,77 @@ kubectl --context ctx-openstack get nodes
 
 # 3. Mở toàn bộ port-forward — daemon tự-restart, KHÔNG cần lệnh nohup thủ công
 bash scripts/open-admin-uis.sh
-
-# 4. Restore services về trạng thái sạch (gỡ isolation/NetworkPolicy còn sót từ demo trước)
-bash scripts/run-demo.sh --restore
 ```
 
-> `scripts/open-admin-uis.sh` mở toàn bộ port-forward cần thiết (web-portal, api-gateway, grafana, loki, soar-engine, ai-analyzer, security-scorer, keycloak, prometheus, pgadmin, redisinsight) và tự kết nối lại nếu 1 tunnel bị rớt — không cần chạy `kubectl port-forward` tay từng lệnh.
+> `scripts/open-admin-uis.sh` mở port-forward: crAPI/BFF (:18081), Keycloak (:8180), Grafana (:3000), Loki (:13100), SOAR (:8091), AI Analyzer (:18082), Security Scorer (:18092), Prometheus (:9090), MailHog (:8025) — tự kết nối lại nếu 1 tunnel rớt.
 
 ### 2.2 Kiểm tra sức khoẻ hệ thống
 
 ```bash
-curl -s http://localhost:18080/health | python3 -m json.tool
-
-curl -s http://localhost:8180/realms/ztlab/.well-known/openid-configuration \
-  | python3 -c "import sys,json; print('Keycloak OK:', json.load(sys.stdin)['issuer'])"
-
-curl -s "http://localhost:13100/loki/api/v1/label/job/values" \
-  | python3 -c "import sys,json; print('Loki jobs:', json.load(sys.stdin)['data'])"
-# Phải thấy: envoy-access, opa-decisions, kubernetes-pods, security-healthcheck, system
-
-curl -s http://localhost:8091/health \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('SOAR:', d['status'], '| cases:', d.get('total_cases',0))"
-
-curl -s -u admin:ZTALab2026! http://localhost:3000/api/health \
-  | python3 -c "import sys,json; print('Grafana:', json.load(sys.stdin)['database'])"
+bash scripts/health-check.sh          # tổng hợp — kỳ vọng FAIL=0
+python3 tests/test_service_graph_consistency.py   # service_acl khớp service-graph — 2/2 PASS
 ```
 
-Pods phải `Running`; các microservice có Istio sidecar (istio-proxy) phải `2/2`:
+Hoặc kiểm từng phần:
+```bash
+curl -s http://localhost:18081/health | python3 -m json.tool            # BFF
+curl -s http://localhost:8180/realms/ztlab/.well-known/openid-configuration | python3 -c "import sys,json; print('Keycloak:', json.load(sys.stdin)['issuer'])"
+curl -s "http://localhost:13100/loki/api/v1/label/job/values" | python3 -c "import sys,json; print('Loki jobs:', json.load(sys.stdin)['data'])"
+# Phải thấy: envoy-access, opa-decisions, kubernetes-pods, bff-audit, soar-engine, security-healthcheck
+curl -s http://localhost:8091/health | python3 -m json.tool             # SOAR
+```
+
+Pods phải `Running`; workload có Istio sidecar phải `2/2`:
 
 ```bash
-kubectl --context ctx-aws get pods -n financial
-kubectl --context ctx-aws get pods -n identity
-kubectl --context ctx-aws get pods -n plg-stack
+kubectl --context ctx-aws       get pods -n crapi
+kubectl --context ctx-openstack get pods -n crapi
+kubectl --context ctx-aws       get pods -n identity,plg-stack,spire
 ```
 
 ### 2.3 Redeploy sau khi sửa code
 
-Có 2 đường, chọn theo loại thay đổi:
+Chỉ còn **ảnh tự build**: `bff`, `soar-engine`, `ai-analyzer`, `security-scorer` (từ `services/Dockerfile`, `ARG SERVICE_NAME`). Ảnh crAPI/postgres/mongo do node K3s tự pull theo digest.
 
-**(A) Sửa logic Python (`main.py`) của 1 service — nhanh, không rebuild image**
-
+**(A) `soar-engine` — có ConfigMap patch mount đè `/app/main.py`** (`ai-soar.yaml`). Sau khi sửa `services/soar-engine/main.py`:
 ```bash
-bash scripts/patch-services.sh                    # patch tất cả 5 service hỗ trợ
-bash scripts/patch-services.sh fraud-detection     # hoặc chỉ 1 service
+kubectl --context ctx-aws -n plg-stack create configmap soar-main-patch \
+  --from-file=main.py=services/soar-engine/main.py --dry-run=client -o yaml | kubectl --context ctx-aws apply -f -
+kubectl --context ctx-aws -n plg-stack rollout restart deployment/soar-engine
 ```
 
-Cách hoạt động: mount 1 ConfigMap chứa `main.py` hiện tại đè lên `/app/main.py` trong container, rồi `rollout restart`. Danh sách service hỗ trợ nằm trong `scripts/patch-services.sh` (`SERVICE_NS` map) — hiện có `web-portal`, `api-gateway`, `fraud-detection`, `payment-service`, `soar-engine`. Thêm service mới vào map đó nếu cần patch nhanh 1 service khác.
-
-> **Giới hạn quan trọng:** cách này CHỈ đè `main.py`. Nếu sửa file khác trong service đó (vd. `services/web-portal/templates/*.html`, file tĩnh, hoặc thêm dependency mới vào `requirements.txt`) — ConfigMap patch sẽ KHÔNG áp dụng, phải rebuild image (đường B).
-
-**(B) Sửa template/static/requirements, hoặc thêm service mới — rebuild image**
-
+**(B) `bff` / `ai-analyzer` / `security-scorer` — rebuild + import ảnh**
 ```bash
-docker build --network host -t "ztlab/<service>:1.0.0" \
-  --build-arg SERVICE_NAME="<service>" -f services/Dockerfile .
-
-docker save "ztlab/<service>:1.0.0" -o /tmp/<service>.tar
-
+docker build --network host -t "ztlab/<svc>:1.0.0" --build-arg SERVICE_NAME="<svc>" -f services/Dockerfile .
+docker save "ztlab/<svc>:1.0.0" -o /tmp/<svc>.tar
 ansible aws_private -i ansible/inventory/hosts.yml -m copy \
-  -a "src=/tmp/<service>.tar dest=/tmp/<service>.tar" \
-  --limit "aws_k3s_master,aws_k3s_worker_1,aws_k3s_worker_2"
-
+  -a "src=/tmp/<svc>.tar dest=/tmp/<svc>.tar" --limit "aws_k3s_master,aws_k3s_worker_1,aws_k3s_worker_2"
 ansible aws_private -i ansible/inventory/hosts.yml -m shell \
-  -a "sudo -n ctr -n k8s.io images import /tmp/<service>.tar && rm -f /tmp/<service>.tar" \
+  -a "sudo -n ctr -n k8s.io images import /tmp/<svc>.tar && rm -f /tmp/<svc>.tar" \
   --limit "aws_k3s_master,aws_k3s_worker_1,aws_k3s_worker_2"
+kubectl --context ctx-aws -n crapi       rollout restart deployment/bff        # hoặc
+kubectl --context ctx-aws -n plg-stack   rollout restart deployment/ai-analyzer
+```
+> Rebuild tất cả cùng lúc: `IMAGE_TAG=1.0.0 bash scripts/sync-app-images.sh`.
 
-kubectl --context ctx-aws rollout restart deployment/<service> -n financial
-kubectl --context ctx-aws rollout status  deployment/<service> -n financial --timeout=90s
+**(C) Sửa policy / alert / service-graph** — không cần rebuild ảnh:
+```bash
+python3 scripts/gen-rego-acl.py && python3 scripts/gen-networkpolicy.py   # nếu sửa policy/service-graph-crapi.yaml
+kubectl --context ctx-aws -n crapi create configmap opa-policies-crapi \
+  --from-file=opa/crapi-policies --dry-run=client -o yaml | kubectl --context ctx-aws apply -f -
+kubectl --context ctx-aws -n crapi rollout restart deployment/opa-server   # + ctx-openstack
+# Grafana alert: rebuild configmap grafana-alerting + rollout restart deployment/grafana (xem deploy-app.sh)
 ```
 
-> **Nếu service đó CŨNG có ConfigMap patch mount (đường A) từ trước** — image mới sẽ bị đè lại bởi ConfigMap cũ. Chạy lại `bash scripts/patch-services.sh <service>` sau khi rebuild để đồng bộ ConfigMap với `main.py` mới nhất trong repo, hoặc gỡ volumeMount nếu không cần patch nhanh nữa.
->
-> Để deploy lại toàn bộ service tài chính cùng lúc (không chỉ 1 cái), dùng `IMAGE_TAG=1.0.0 bash scripts/sync-financial-images.sh` thay vì lặp tay từng service.
-
-### 2.4 Chạy demo / kịch bản tấn công
+### 2.4 Chạy kịch bản tấn công (Zero-Trust + detection → SOAR)
 
 ```bash
-# Normal traffic + kịch bản tấn công (xem README.md để biết danh sách kịch bản hiện hành)
-bash scripts/run-demo.sh
-
-# Chỉ 1 kịch bản cụ thể
-bash scripts/run-demo.sh --kb1   # brute force
-bash scripts/run-demo.sh --kb2   # lateral movement
-bash scripts/run-demo.sh --kb3   # fraud gate bypass
-bash scripts/run-demo.sh --kb4   # data exfiltration
-
-# Restore về trạng thái sạch sau demo (bắt buộc trước khi demo lại)
-bash scripts/run-demo.sh --restore
+bash tests/crapi_run_all.sh            # 5 kịch bản: lateral movement, BFLA, step-up, access-denied, brute-force
+bash tests/crapi_lateral_movement.sh  # hoặc chạy từng cái
+bash tests/chaos_opa_failover.sh      # OPA down → fail-closed
+bash tests/chaos_spire_failover.sh    # spire-server down → SVID cache vẫn chạy
 ```
-
-> Web Portal cũng có bộ kịch bản demo trực quan tại `/scenarios` (yêu cầu đăng nhập role `security-admin`/`security-analyst`, ví dụ tài khoản `soc01`) — 12 kịch bản, dùng để demo trực tiếp trên UI thay vì terminal.
+> Sau khi chạy: Grafana `http://localhost:3000` (Alerting → ZTLab, xem rule Firing) · SOAR `http://localhost:8091/cases` · MailHog `http://localhost:8025` (mail HITL).
 
 ### 2.5 Sinh dataset ML/DL thật (cho nhóm nghiên cứu mô hình)
 
@@ -424,7 +405,7 @@ Nếu chỉ muốn gỡ 1 bên (vd. giữ AWS, xoá OpenStack để tiết kiệ
 terraform -chdir=terraform/openstack destroy --auto-approve
 ```
 
-Lưu ý: `payment-service`/`core-banking` phụ thuộc kết nối cross-cloud qua WireGuard — nếu xoá OpenStack mà giữ AWS chạy, các health-check liên quan `core-banking`/`account-service`/`transaction-service` (OpenStack) sẽ báo down, đây là hành vi đúng, không phải lỗi.
+Lưu ý: `crapi-community`/`crapi-workshop` (AWS) verify JWT ở `crapi-identity` (OpenStack) mỗi request — nếu xoá OpenStack mà giữ AWS chạy, 2 service này sẽ CrashLoopBackOff, đây là hành vi đúng (hard dependency), không phải lỗi.
 
 ---
 
@@ -438,6 +419,7 @@ Lưu ý: `payment-service`/`core-banking` phụ thuộc kết nối cross-cloud 
 | `docker ps` báo lỗi quyền | Chưa thêm user vào group docker | `sudo usermod -aG docker $USER && newgrp docker` |
 | SSH timeout khi provision | Security group chưa mở port 22, hoặc `TF_VAR_key_pair_name` sai | Kiểm tra `admin_ip` trong terraform variables + đúng tên key-pair đã import |
 | `curl http://localhost:XXXXX` trả `HTTP:000` | Port-forward bị rớt (thường sau khi `rollout restart` pod) | `bash scripts/open-admin-uis.sh` — daemon tự kết nối lại, không cần restart tay |
-| Sửa `main.py` xong nhưng chạy vẫn thấy code cũ | Service đó đang có ConfigMap patch (`patch-<service>`) đè `/app/main.py`, patch cũ chưa refresh | `bash scripts/patch-services.sh <service>` |
-| Sửa template/HTML xong nhưng web không đổi | Template được bake cứng vào image lúc build, ConfigMap patch chỉ đè `main.py` | Rebuild image — xem mục 2.3(B) |
-| `payment-service`/`fraud-detection` báo lỗi thiếu field khi gọi trực tiếp qua `curl` | Field mới (vd. `device_trust`) có default nên không bắt buộc — kiểm tra đang gọi đúng field name, không phải lỗi thiếu field | Xem `class PaymentRequest`/`FraudRequest` trong `main.py` tương ứng |
+| Sửa `soar-engine/main.py` xong chạy vẫn thấy code cũ | `ai-soar.yaml` mount ConfigMap `soar-main-patch` đè `/app/main.py`, chưa refresh | Rebuild configmap + rollout restart — xem mục 2.3(A) |
+| `crapi-web` CrashLoopBackOff `[emerg] host not found in upstream "mailhog"` | ConfigMap `crapi-web-configmap` sai `MAILHOG_WEB_SERVICE` | Đã fix (`crapi-web:80`); `kubectl -n crapi rollout restart deploy/crapi-web` |
+| Toàn bộ crapi 2-cloud 503, `svid:null` | Uplink OpenStack drop UDP → DNS/WireGuard/SPIRE sập dây chuyền | Runbook `HE-THONG-CHI-TIET.md` §10.3 |
+| Login Keycloak đòi "username là email" | Đang ở form login gốc của SPA crAPI | Vào thẳng `http://localhost:18081/login` |

@@ -8,20 +8,28 @@
 #
 # UI sau khi bật:
 #   Keycloak     → http://localhost:8180   (admin / ztlab-admin-2026)
-#   API Gateway  → http://localhost:18080
-#   Web Portal   → http://localhost:18081
+#   crAPI (Gateway mTLS) → https://crapi.ztlab.local:18444   (Phần 1.3 — client-cert
+#     mТLS thật qua Istio IngressGateway biên; ĐƯỜNG VÀO ZERO-TRUST DUY NHẤT
+#     cho thiết bị thật, dùng bởi tests/crapi_*.sh. Cert:
+#     scripts/issue-device-cert.sh <device-id> <compliant|non-compliant>)
+#   crAPI (WAF, debug) → http://localhost:18081   (bỏ qua Gateway+TLS+mТLS+OPA
+#     HOÀN TOÀN — không chỉ "bỏ qua WAF". `kubectl port-forward` tunnel thẳng
+#     vào network namespace của pod, không đi qua iptables redirect của Istio
+#     sidecar (đã verify sống 2026-09-13: vẫn 200 dù waf đã STRICT) — cổng này
+#     đòi kubeconfig của cụm, tương đương quyền `kubectl exec`, KHÔNG phải một
+#     đường vào thứ hai cho thiết bị/người dùng thật. Xem KIEM-KE-HOP.md Phần 1.4.
+#   crAPI BFF bypass (debug) → http://localhost:18083   (idem — bỏ qua cả WAF/CRS)
 #   Grafana      → http://localhost:3000   (admin / ZTALab2026!)
 #   Loki         → http://localhost:13100
-#   SOAR Engine  → http://localhost:8091
-#   AI Analyzer  → http://localhost:18082
-#   Scorer       → http://localhost:18092
+#   Incident Analyzer → http://localhost:8091   (evidence bundles — /evidence, /health)
 #   Prometheus   → http://localhost:9090
-#   pgAdmin      → http://localhost:5050   (admin@ztlab.com / ztlab2026)
-#   RedisInsight → http://localhost:5540
+#   MailHog (crAPI)  → http://localhost:8025   (mail signup/reset crAPI — cluster OpenStack)
+#   MailHog (SOC)    → http://localhost:8026   (incident-analyzer evidence emails — plg-stack)
 
 set -euo pipefail
 
 AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
+OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 PID_DIR="/tmp/ztlab-pf"
 LOG_FILE="/tmp/ztlab-pf.log"
 
@@ -95,7 +103,7 @@ stop_all() {
     fi
     rm -f "$pid_file"
   done
-  # Kill socat Loki proxy
+  # Dọn socat Loki proxy cũ (trước 2026-09-29) nếu còn sót
   pkill -f "socat.*13099" 2>/dev/null || true
   # Kill bất kỳ kubectl port-forward nào còn sót
   pkill -f "kubectl.*port-forward" 2>/dev/null || true
@@ -106,18 +114,17 @@ show_status() {
   echo "=== ZTLab — Port-forward status ==="
   declare -A PORT_NAMES=(
     [8180]="Keycloak"
-    [18080]="API Gateway"
-    [18081]="Web Portal"
+    [18081]="crAPI (WAF, debug — bo qua TLS/OPA)"
+    [18083]="crAPI BFF (bypass, debug)"
+    [18444]="crAPI (Gateway mTLS)"
     [3000]="Grafana"
     [13100]="Loki"
-    [8091]="SOAR Engine"
-    [18082]="AI Analyzer"
-    [18092]="Security Scorer"
+    [8091]="Incident Analyzer"
     [9090]="Prometheus"
-    [5050]="pgAdmin"
-    [5540]="RedisInsight"
+    [8025]="MailHog (crAPI)"
+    [8026]="MailHog (SOC)"
   )
-  for port in 8180 18080 18081 3000 13100 8091 18082 18092 9090 5050 5540; do
+  for port in 8180 18081 18083 18444 3000 13100 8091 9090 8025 8026; do
     local name="${PORT_NAMES[$port]}"
     local pid_file="$PID_DIR/${port}.pid"
     local daemon_alive="no"
@@ -153,37 +160,38 @@ echo "=== ZTLab — Mở port-forwards (auto-restart daemons) ==="
 echo "Yêu cầu: K8s tunnel đang chạy (bash scripts/k8s-tunnel.sh up aws)"
 echo ""
 
-# Identity
-start_pf_daemon "Keycloak"            identity   keycloak          8180  8080
-# Financial
-start_pf_daemon "API Gateway"         financial  api-gateway      18080  8080
-start_pf_daemon "Web Portal"          financial  web-portal       18081  8080
+# Identity — A1: Keycloak nay ở cụm OpenStack
+start_pf_daemon "Keycloak"            identity   keycloak          8180  8080  "$OS_CONTEXT"
+# crAPI (ứng dụng mục tiêu) — điểm vào là WAF (ModSecurity/CRS DetectionOnly, A2)
+# đứng trước BFF. Cổng 18081 khớp redirectUri client crapi-bff. WAF proxy trong
+# suốt tới bff:8080. 18083 = bypass thẳng bff để debug (bỏ qua WAF).
+start_pf_daemon "crAPI (WAF, debug — bo qua TLS/OPA)" crapi waf 18081 8080
+start_pf_daemon "crAPI BFF (bypass, debug)" crapi bff 18083 8080
+# Phần 1.3 — cổng TLS thật của Istio IngressGateway (client-cert mTLS
+# RequireAndVerifyClientCert bằng Device CA, k8s/crapi/edge-gateway.yaml).
+# kubectl port-forward chỉ chuyển tiếp TCP nên TLS handshake vẫn diễn ra
+# nguyên vẹn giữa curl/trình duyệt và Gateway — ĐÂY LÀ đường vào Zero-Trust
+# duy nhất cho thiết bị thật (khác :18081/:18083 ở trên, vốn bỏ qua TLS/OPA
+# hoàn toàn vì lý do kubectl port-forward, không phải vì thiết kế Gateway).
+start_pf_daemon "crAPI (Gateway mTLS)" istio-system istio-ingressgateway 18444 8443
 # PLG Stack
 start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
 start_pf_daemon "Loki"                plg-stack  loki             13100  3100
-# Loki proxy cho OpenStack promtail: 10.10.10.1:13099 → localhost:13100
-# OpenStack nodes không reach được localhost trực tiếp nên cần socat bridge
-if ! ss -lnt | awk '{print $4}' | grep -Eq ":13099$"; then
-  pkill -f "socat.*13099" 2>/dev/null || true
-  setsid socat TCP-LISTEN:13099,bind=10.10.10.1,fork,reuseaddr TCP:127.0.0.1:13100 &
-  echo $! > "$PID_DIR/loki-proxy.pid"
-  echo "[ OK ] Loki-proxy → 10.10.10.1:13099 → localhost:13100 (for OpenStack promtail)"
-fi
-start_pf_daemon "SOAR Engine"         plg-stack  soar-engine       8091  8080
-start_pf_daemon "AI Analyzer"         plg-stack  ai-analyzer      18082  8080
-start_pf_daemon "Security Scorer"     plg-stack  security-scorer  18092  8080
+# (Đã bỏ 2026-09-29) socat 172.10.10.1:13099 → localhost:13100 cho Promtail
+# OpenStack: log OpenStack nay đi thẳng WireGuard → NodePort 31000 của Loki
+# (deploy-app.sh, OS_LOKI_PUSH_URL), không còn phụ thuộc máy này.
+start_pf_daemon "Incident Analyzer"   plg-stack  incident-analyzer 8091  8080
 # Monitoring
 start_pf_daemon "Prometheus"          monitoring prometheus        9090  9090
-# DB Admin (cả hai chạy trên AWS cluster)
-start_pf_daemon "pgAdmin"             financial  pgadmin           5050  80
-start_pf_daemon "RedisInsight"        financial  redisinsight      5540  5540
+# Mail — mailhog nằm ở cluster OpenStack (cạnh crapi-identity)
+start_pf_daemon "MailHog (crAPI)"     crapi      mailhog           8025  8025  "$OS_CONTEXT"
+start_pf_daemon "MailHog (SOC)"       plg-stack  mailhog           8026  8025
 
 echo ""
 echo "Credentials:"
-echo "  Keycloak:  admin / ztlab-admin-2026"
-echo "  Grafana:   admin / ZTALab2026!"
-echo "  pgAdmin:   admin@ztlab.com / ztlab2026"
-echo "  Web Portal: testuser01 / Test1234!"
+echo "  Keycloak:   admin / ztlab-admin-2026"
+echo "  Grafana:    admin / ZTALab2026!"
+echo "  crAPI login (qua BFF, Keycloak OIDC): testuser01 / Test1234!  (demoadmin / Test1234! cho admin)"
 echo ""
 echo "Daemon tự restart nếu kubectl port-forward chết."
 echo "Dừng tất cả: bash scripts/open-admin-uis.sh stop"

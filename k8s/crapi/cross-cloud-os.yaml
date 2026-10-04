@@ -1,0 +1,5 @@
+# Cross-cloud wiring — áp trên cluster OpenStack.
+#
+# (Trống — mailhog đã chuyển về OpenStack cạnh identity, không còn hop
+# cross-cloud OS→AWS. Nếu sau này chuyển mailhog về AWS: thêm selectorless
+# Service `mailhog-aws` → <aws-worker>:31025 ở đây, cùng rule SG terraform.)

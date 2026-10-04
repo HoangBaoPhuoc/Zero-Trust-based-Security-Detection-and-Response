@@ -1,33 +1,75 @@
-# Kết quả audit thật (2026-08-19, xem PLAN.md Phase 2): 14 vi phạm cho
-# ZTLabRequireNonRoot (toàn bộ service trong namespace financial hiện chưa
-# hardening runAsNonRoot — đã thử hardening payment-service riêng lẻ, làm gãy
-# Envoy sidecar, revert), 0 vi phạm cho ZTLabRequireImagePolicy.
+# Phần 2 remediation (2026-09-18) — DEAD POLICY tìm thấy khi audit thực thi
+# (AUDIT-THUC-THI.md): cả 2 constraint dưới đây trỏ `namespaces: ["financial"]`
+# — namespace đó đã bị XOÁ HẲN từ đợt migration crAPI (financial app → OWASP
+# crAPI, xem project_crapi_migration trong memory), không còn pod nào để đối
+# chiếu. `kubectl get constraint` báo TOTAL-VIOLATIONS=0 cho cả 2, NHƯNG đó là
+# "0 vì không có gì để kiểm", không phải "0 vì mọi thứ tuân thủ" — case thứ 3
+# của cùng dạng lỗi "chính sách tồn tại, deploy thành công, không hề được thực
+# thi" (2 case trước: WAF Host-header PassthroughCluster, waf-opa-authz chưa
+# từng được gọi). Retarget sang namespace THẬT đang chạy (`crapi`).
 #
-# → ZTLabRequireNonRoot GIỮ dryrun vĩnh viễn cho tới khi có 1 nỗ lực hardening
-#   riêng, có kiểm soát, cho toàn bộ service (không phải việc làm vội được) —
-#   chuyển sang "deny" ngay bây giờ sẽ chặn luôn việc tạo lại pod cho TẤT CẢ
-#   14 workload đang chạy, coi như tự làm sập hệ thống.
-# → ZTLabRequireImagePolicy an toàn để bật "deny" ngay — 0 vi phạm hiện tại.
+# Kiểm compliance THẬT trước khi quyết định enforcementAction (2026-09-18):
+#   - ZTLabRequireImagePolicy: 0/14 workload dùng tag ":latest"/không ghim
+#     (grep k8s/crapi/*.yaml — hầu hết đã ghim @sha256 digest, số còn lại
+#     dùng tag cụ thể vd redis:7-alpine, ztlab/bff:1.0.0) → AN TOÀN bật
+#     "deny" thật ngay, không có gì bị chặn.
+#   - ZTLabRequireNonRoot: 0/14 Deployment/StatefulSet trong ns crapi có
+#     securityContext.runAsNonRoot — bff/waf/opa (image TỰ BUILD, có thể sửa)
+#     lẫn crapi-web/community/workshop/identity/postgres/mongo/redis/mailhog
+#     (image bên thứ 3/upstream, không tự sửa được ngay) ĐỀU vi phạm. Bật
+#     "deny" ngay = chặn TOÀN BỘ pod của hệ thống được tạo lại (destroy+
+#     redeploy sẽ treo ở bước đầu tiên) — đúng bài học đã ghi lại trước đây
+#     (payment-service, làm gãy Envoy sidecar). GIỮ "dryrun" có chủ đích —
+#     xem KEHOACH-THAYDOI-HETHONG.md/BAOCAO-HOAN-THIEN cho kế hoạch hardening
+#     runAsNonRoot riêng, có kiểm soát, không phải việc làm vội trong task này.
 apiVersion: constraints.gatekeeper.sh/v1beta1
 kind: ZTLabRequireNonRoot
 metadata:
-  name: financial-require-nonroot
+  name: crapi-require-nonroot
 spec:
   enforcementAction: dryrun
   match:
     kinds:
       - apiGroups: [""]
         kinds: ["Pod"]
-    namespaces: ["financial"]
+    namespaces: ["crapi"]
 ---
+# Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) — thoát dryrun
+# cho ĐÚNG các workload TỰ VIẾT/TỰ QUẢN LÝ manifest (bff, waf, opa, incident-
+# analyzer — nhãn `ztlab.io/nonroot-enforced: "true"` gắn trực tiếp ở pod
+# template của từng Deployment). Bật `deny` TOÀN CỤC cho cả ns `crapi` từng
+# được cân nhắc nhưng SẼ chặn crapi-web/community/workshop/identity + mongodb/
+# postgres/redis/mailhog (image upstream OWASP crAPI + bên thứ 3) — SỬA image
+# ứng dụng ĐÍCH để qua được policy sẽ phá vỡ tính tái lập của thực nghiệm (đây
+# là "challenge" cố ý của crAPI, không phải lỗ hổng hạ tầng cần vá — xem
+# HE-THONG-CHI-TIET.md §1 "Ranh giới đóng góp"). Dùng labelSelector thay vì
+# namespace để bật `deny` ĐÚNG PHẠM VI kiểm soát được, không đụng ứng dụng
+# đích, không cần loại trừ tay từng image riêng lẻ (namespaces để trống —
+# nhãn trải cả ns `crapi` lẫn `plg-stack`, nơi incident-analyzer chạy).
+# Trước khi bật: đã kiểm sống TỪNG workload chạy được non-root thật (không chỉ
+# khai securityContext cho có) — xem BAOCAO-VONG-2026-09-19.md mục 1.2.
 apiVersion: constraints.gatekeeper.sh/v1beta1
-kind: ZTLabRequireImagePolicy
+kind: ZTLabRequireNonRoot
 metadata:
-  name: financial-require-image-policy
+  name: selfbuilt-require-nonroot-deny
 spec:
   enforcementAction: deny
   match:
     kinds:
       - apiGroups: [""]
         kinds: ["Pod"]
-    namespaces: ["financial"]
+    labelSelector:
+      matchLabels:
+        ztlab.io/nonroot-enforced: "true"
+---
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: ZTLabRequireImagePolicy
+metadata:
+  name: crapi-require-image-policy
+spec:
+  enforcementAction: deny
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["crapi"]

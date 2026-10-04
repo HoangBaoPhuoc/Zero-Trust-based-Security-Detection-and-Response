@@ -1,0 +1,23 @@
+# Cluster-specific overlay merged on top of istio-operator.yaml when
+# installing on OpenStack (`istioctl install -f istio-operator.yaml -f
+# istio-operator-os-overlay.yaml`, later files override/merge into earlier
+# ones — standard IstioOperator multi-file merge). OpenStack doesn't expose
+# crAPI externally, so it doesn't need istio-ingressgateway — the base file's
+# `components.ingressGateways` entry has no matching SPIRE registration entry
+# for OpenStack (see scripts/spire-entries.generated.sh's
+# OPENSTACK_SPIRE_WORKLOADS, which has no istio-ingressgateway-service-account
+# entry — only AWS_SPIRE_WORKLOADS does), so installing it there left the
+# gateway pod permanently unable to get a cert via the SPIRE Workload API SDS
+# ("workload is not authorized for the requested identities") and stuck
+# NotReady until istioctl's 5-minute wait timed out and rolled the whole
+# install back (confirmed live 2026-09-13). This overlay disables just that
+# component for the OpenStack install; istiod (the actual mesh control plane,
+# needed for the cross-cloud payment-service->core-banking sidecar mTLS) is
+# untouched.
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+spec:
+  components:
+    ingressGateways:
+      - name: istio-ingressgateway
+        enabled: false

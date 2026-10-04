@@ -23,6 +23,11 @@ spec:
       initContainers:
         - name: wait-for-server
           image: cgr.dev/chainguard/wait-for-it:latest
+          # `:latest` mặc định kéo là Always → khi mạng ra ngoài của node chập
+          # chờn (OpenStack AIO — DNS/NAT private subnet không ổn định), pod
+          # spire-agent restart sẽ kẹt ImagePullBackOff → agent không attest lại
+          # được → SVID hết hạn → toàn mesh 503. IfNotPresent: dùng bản đã cache.
+          imagePullPolicy: IfNotPresent
           args:
             - "spire-server.spire.svc.cluster.local:8081"
             - "--"
@@ -37,6 +42,7 @@ spec:
         # before spire-agent starts; the symlink just resolves once it does.
         - name: alias-socket-for-istio
           image: busybox:1.36
+          imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "ln -sfn agent.sock /run/spire/sockets/socket"]
           volumeMounts:
             - name: spire-sockets
@@ -44,6 +50,7 @@ spec:
       containers:
         - name: spire-agent
           image: ghcr.io/spiffe/spire-agent:1.9.4
+          imagePullPolicy: IfNotPresent
           args:
             - "-config"
             - "/run/spire/config/agent.conf"

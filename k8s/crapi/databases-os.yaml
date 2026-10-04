@@ -1,0 +1,85 @@
+# PostgreSQL DUY NHẤT của crAPI — cluster OpenStack (GATE 0 DB-2: community/
+# workshop đọc thẳng bảng user_login/user_details/vehicle_details của identity
+# → không tách được → 1 DB chung, đặt trên hạ tầng chủ quyền OpenStack, khớp
+# Nghị định 53). Infra thuần, KHÔNG SPIRE/sidecar (như finance app).
+#
+# NodePort 30432: để crapi-community/crapi-workshop (AWS) kết nối cross-cloud
+# qua WireGuard (selectorless Service `postgresdb-openstack` trong k8s/crapi/
+# cross-cloud.yaml). Hop này KHÔNG mТLS Istio (Postgres không có sidecar) —
+# mã hoá bằng WireGuard tunnel. Hop HTTP identity vẫn mТLS đầy đủ.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresdb-pvc
+  namespace: crapi
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgresdb
+  namespace: crapi
+  labels: { app: postgresdb }
+spec:
+  serviceName: postgresdb
+  replicas: 1
+  selector:
+    matchLabels: { app: postgresdb }
+  template:
+    metadata:
+      labels: { app: postgresdb }
+      annotations:
+        sidecar.istio.io/inject: "false"
+    spec:
+      containers:
+        - name: postgres
+          image: postgres@sha256:156f0b253fd61366d5fc2107ad45955027d5612f695a8436ce20167f3fa79bff
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "max_connections=500"]
+          ports:
+            - containerPort: 5432
+              name: postgres
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: postgres-data
+              subPath: postgres
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U admin -d crapi"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U admin -d crapi"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 768Mi }
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgresdb-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresdb
+  namespace: crapi
+  labels: { app: postgresdb }
+spec:
+  type: NodePort
+  selector: { app: postgresdb }
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      nodePort: 30432

@@ -1,0 +1,163 @@
+# BFF — edge PEP trước crAPI (services/bff/). Ảnh ztlab/bff:1.0.0 build từ
+# services/Dockerfile (SERVICE_NAME=bff). SPIRE + Istio sidecar như crapi-web.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: bff, namespace: crapi }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: bff-secret, namespace: crapi }
+type: Opaque
+stringData:
+  session-secret: "ZTLab-BFF-Session-2026-change-me"
+---
+# Phần 3.2 (remediation 2026-09-19) — Device CA revocation. ConfigMap
+# `device-revocation-list` (khai + tạo trong scripts/deploy-crapi.sh
+# ensure_device_revocation_configmap(), CỐ Ý KHÔNG ở đây) giữ danh sách
+# device_id bị thu hồi, đọc TƯƠI mỗi request bởi bff. Lý do KHÔNG khai
+# ConfigMap này trong file manifest thường-apply: đây là TRẠNG THÁI VẬN HÀNH
+# động (giống tests/runs.jsonl), không phải cấu hình nguồn tĩnh — nếu nằm
+# trong 1 file bị `kubectl apply` lại mỗi lần redeploy, nội dung sẽ bị RESET
+# theo bất kỳ giá trị nào trong manifest, tự hoàn tác mọi lần thu hồi đã làm.
+# `ensure_device_revocation_configmap()` tạo CHỈ KHI CHƯA TỒN TẠI.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff
+  namespace: crapi
+  labels: { app: bff }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: bff }
+  template:
+    metadata:
+      labels: { app: bff, ztlab.io/nonroot-enforced: "true" }
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/bff"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: bff
+      volumes:
+        - name: crapi-keys
+          secret:
+            secretName: crapi-jwt-key
+        - name: device-revocation
+          configMap:
+            name: device-revocation-list
+            optional: true
+      containers:
+        - name: bff
+          image: ztlab/bff:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) —
+          # ảnh python:3.11-slim tự build, không cần root: cổng 8080 không
+          # đặc quyền, mọi volumeMount đều readOnly. Verify sống: pod chạy
+          # Running/Ready với UID này (không cần sửa Dockerfile).
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: crapi-keys
+              mountPath: /app/crapi-keys
+              readOnly: true
+            - name: device-revocation
+              mountPath: /app/device-revocation
+              readOnly: true
+          env:
+            - name: CLOUD_PROVIDER
+              value: "aws"
+            # A1: Keycloak trên OpenStack — BFF proxy /kc/* + token/authorize qua
+            # selectorless Service cross-cloud (k8s/crapi/cross-cloud-aws.yaml).
+            - name: KEYCLOAK_URL
+              value: "http://keycloak-openstack.crapi.svc.cluster.local:30091"
+            - name: KEYCLOAK_PUBLIC_URL
+              value: "http://keycloak.ztlab.local:8180"
+            - name: KC_EXTERNAL_HOST
+              value: "keycloak.ztlab.local"
+            - name: KEYCLOAK_REALM
+              value: "ztlab"
+            - name: KEYCLOAK_CLIENT_ID
+              value: "crapi-bff"
+            - name: KEYCLOAK_STEPUP_CLIENT_ID
+              value: "crapi-bff-stepup"
+            - name: CRAPI_IDENTITY_URL
+              value: "http://crapi-identity-openstack.crapi.svc.cluster.local:30090"
+            - name: CRAPI_COMMUNITY_URL
+              value: "http://crapi-community.crapi.svc.cluster.local:8087"
+            - name: CRAPI_WORKSHOP_URL
+              value: "http://crapi-workshop.crapi.svc.cluster.local:8000"
+            - name: CRAPI_WEB_URL
+              value: "http://crapi-web.crapi.svc.cluster.local:80"
+            - name: CRAPI_JWT_KEY_PATH
+              value: "/app/crapi-keys/jwks.json"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: redis-auth, key: password }
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis.crapi.svc.cluster.local:6379/0"
+            - name: LOKI_URL
+              value: "http://loki.plg-stack.svc.cluster.local:3100"
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef: { name: bff-secret, key: session-secret }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 300m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bff
+  namespace: crapi
+spec:
+  selector: { app: bff }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+# A2: bff đứng sau waf (Traefik -> waf -> bff, mọi hop trong mesh đều mTLS thật)
+# nên không còn cần nhận traffic không-cert nữa — siết STRICT. Traefik/waf's
+# ext_authz check (waf-opa-authz) vẫn cho untrusted-edge traffic qua tới waf;
+# hop waf->bff thật sự phải mTLS. Prometheus (job crapi-services-aws) scrape
+# /metrics trực tiếp bff:8080 nên phải có SVID riêng — xem
+# k8s/monitoring/prometheus.yaml + scripts/ensure-spire-entries.sh.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: bff-strict
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: bff }
+  mtls:
+    mode: STRICT
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: bff-custom-san
+  namespace: crapi
+spec:
+  host: bff.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/bff"]

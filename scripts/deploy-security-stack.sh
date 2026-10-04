@@ -87,25 +87,16 @@ check_kctl_context() {
   fi
 }
 
-financial_manifests_ready() {
-  local manifests=(
-    "$REPO_ROOT/k8s/financial/aws-services.yaml"
-    "$REPO_ROOT/k8s/financial/os-services.yaml"
-  )
-  for f in "${manifests[@]}"; do
-    if [ ! -f "$f" ] || ! grep -qE '^apiVersion:' "$f"; then
-      return 1
-    fi
-  done
-  return 0
-}
 
 random_secret() {
   openssl rand -base64 32 2>/dev/null || date +%s%N
 }
 
+# A1: Keycloak (+ keycloak-db, openldap) chạy trên cụm OpenStack — Nghị định 53.
+KEYCLOAK_CONTEXT="${KEYCLOAK_CONTEXT:-$OS_CONTEXT}"
+
 ensure_keycloak_secret() {
-  if kubectl --context $AWS_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
+  if kubectl --context $KEYCLOAK_CONTEXT -n identity get secret keycloak-secret >/dev/null 2>&1; then
     log_info "Keycloak secret already exists"
     return
   fi
@@ -114,10 +105,10 @@ ensure_keycloak_secret() {
   admin_password="${KEYCLOAK_ADMIN_PASSWORD:-$(random_secret)}"
   postgres_password="${KEYCLOAK_DB_PASSWORD:-$(random_secret)}"
 
-  kubectl --context $AWS_CONTEXT -n identity create secret generic keycloak-secret \
+  kubectl --context $KEYCLOAK_CONTEXT -n identity create secret generic keycloak-secret \
     --from-literal=admin-password="$admin_password" \
     --from-literal=postgres-password="$postgres_password"
-  log_info "Created keycloak-secret from environment/random values"
+  log_info "Created keycloak-secret from environment/random values (ctx=$KEYCLOAK_CONTEXT)"
 }
 
 deploy_step_1_namespaces() {
@@ -134,16 +125,27 @@ deploy_step_1_namespaces() {
 }
 
 deploy_step_2_keycloak() {
-  log_step "2. Deploy Keycloak (AWS only)"
+  log_step "2. Deploy Keycloak (OpenStack — A1, Nghị định 53)"
 
   log_info "Creating Keycloak secrets..."
   ensure_keycloak_secret
 
+  # Phần 1.2 (remediation 2026-09, BẪY 1) — ServiceAccount riêng cho 5 pod
+  # bootstrap Admin API (kc-crapi-setup, kc-ldap-federation-setup,
+  # kc-audience-mapper-setup, kc-stepup-flow-setup, kc-saml-meta —
+  # scripts/deploy-crapi.sh + deploy-app.sh). Trước bản sửa này chạy hoàn
+  # toàn ngoài mesh (default ServiceAccount, không sidecar). Ns identity đã
+  # bật istio-injection=enabled nên các pod này tự động có sidecar khi dùng
+  # SA này — cần entry SPIRE riêng (scripts/spire-entries.generated.sh,
+  # sinh từ policy/service-graph-crapi.yaml) để sidecar lên Ready.
+  kubectl --context $KEYCLOAK_CONTEXT -n identity create serviceaccount kc-admin-setup \
+    --dry-run=client -o yaml | kubectl --context $KEYCLOAK_CONTEXT apply -f -
+
   log_info "Deploying Keycloak PostgreSQL..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/postgres.yaml"
 
   log_info "Keycloak DB deployment initiated (waiting up to 60s - in lab it may timeout, that's OK)..."
-  kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
+  kubectl --context $KEYCLOAK_CONTEXT wait --for=condition=Ready pod \
     -l app=keycloak-db -n identity --timeout=60s 2>/dev/null || {
     log_info "DB pod still starting (node may be recovering - this is normal in lab environment)"
   }
@@ -156,23 +158,33 @@ deploy_step_2_keycloak() {
   # remembered to edit both. Generate the ConfigMap from the file directly so
   # there is exactly one place to edit.
   log_info "Deploying Keycloak realm config..."
-  kubectl --context $AWS_CONTEXT -n identity create configmap keycloak-realm-config \
+  kubectl --context $KEYCLOAK_CONTEXT -n identity create configmap keycloak-realm-config \
     --from-file=realm-config.json="$REPO_ROOT/k8s/keycloak/realm-config.json" \
-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
+    --dry-run=client -o yaml | kubectl --context $KEYCLOAK_CONTEXT apply -f -
 
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/deployment.yaml"
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/keycloak/service.yaml"
+  # Phần 1.2 (remediation 2026-09) — PeerAuth STRICT + DestinationRule +
+  # AuthorizationPolicy→OPA cho Keycloak. An toàn áp sớm (trước khi SPIRE
+  # entry tồn tại ở bước 3.3 dưới): probe kubelet luôn đi qua cổng trạng thái
+  # riêng của istio-proxy, không bị STRICT chặn; sidecar tự settle khi entry
+  # xuất hiện, giống mọi workload khác trong bản sửa này (đã verify sống
+  # trên AWS — xem BAOCAO-SUA-GOC).
+  kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/keycloak-mesh-policies.yaml"
+  # A1: Keycloak UI ingress theo Keycloak — chuyển sang cụm OpenStack.
+  [[ -f "$REPO_ROOT/k8s/identity/ingress-os.yaml" ]] && \
+    kubectl --context $KEYCLOAK_CONTEXT apply -f "$REPO_ROOT/k8s/identity/ingress-os.yaml"
 
   log_info "Keycloak deployment initiated (can take 5-10 minutes on first startup with DB setup)"
   log_info "Note: Keycloak is not a blocking dependency for SPIRE/OPA, so we proceed with deployment"
   log_info "To wait for Keycloak readiness manually:"
-  log_info "  kubectl --context ctx-aws wait --for=condition=Ready pod -l app=keycloak -n identity --timeout=600s"
+  log_info "  kubectl --context $KEYCLOAK_CONTEXT wait --for=condition=Ready pod -l app=keycloak -n identity --timeout=600s"
   
   # Don't block on Keycloak startup in lab environment
   # kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
   #   -l app=keycloak -n identity --timeout=${TIMEOUT_KEYCLOAK}s || {
   #   log_error "Keycloak Pod failed to start within ${TIMEOUT_KEYCLOAK}s. Checking logs for details..."
-  #   kubectl --context $AWS_CONTEXT logs -l app=keycloak -n identity --tail=50
+  #   kubectl --context $KEYCLOAK_CONTEXT logs -l app=keycloak -n identity --tail=50
   #   exit 1
   # }
 
@@ -218,6 +230,111 @@ provision_spire_root_ca() {
   log_info "spire-upstream-ca secret deployed to both clusters"
 }
 
+# A3 — Device CA (tách bạch với SPIRE root CA: device identity ≠ workload identity).
+# Ký: (1) client certificate cho từng thiết bị (issue-device-cert.sh), (2) server
+# cert cho Traefik biên (crapi.ztlab.local). Khoá riêng của CA sẽ được đẩy vào
+# Vault ở bước deploy_vault_and_seed_secrets (deploy-app.sh) rồi xoá bản local —
+# KHÔNG commit vào repo (deploy/vendor/device-ca/ đã gitignore).
+provision_device_ca() {
+  log_step "3.1 Provision Device CA + edge server cert (A3 — client cert mTLS)"
+
+  local ca_dir="$REPO_ROOT/deploy/vendor/device-ca"
+  mkdir -p "$ca_dir"
+
+  if [[ ! -f "$ca_dir/device-ca.key" || ! -f "$ca_dir/device-ca.crt" ]]; then
+    # Nếu Vault đã có khoá (redeploy giữ Vault) — kéo về để giữ nguyên CA.
+    if kubectl --context "$AWS_CONTEXT" -n vault get pod vault-0 >/dev/null 2>&1 && \
+       _device_ca_from_vault "$ca_dir"; then
+      log_info "Device CA restored from Vault"
+    else
+      log_info "Generating new Device CA (ECDSA P-256, 10y)..."
+      openssl ecparam -name prime256v1 -genkey -noout -out "$ca_dir/device-ca.key" 2>/dev/null
+      openssl req -new -x509 -days 3650 -key "$ca_dir/device-ca.key" \
+        -out "$ca_dir/device-ca.crt" \
+        -subj "/C=VN/O=ZT-Lab/OU=device-identity/CN=ZTLab Device CA" \
+        -addext "basicConstraints=critical,CA:TRUE,pathlen:0" \
+        -addext "keyUsage=critical,keyCertSign,cRLSign" \
+        -addext "subjectKeyIdentifier=hash" 2>/dev/null
+    fi
+  else
+    log_info "Device CA already present locally: $ca_dir/device-ca.crt"
+  fi
+
+  # Edge server cert cho Traefik (Host crapi.ztlab.local) — ký bởi Device CA nên
+  # client `--cacert device-ca.crt` verify được cả server lẫn chain client.
+  if [[ ! -f "$ca_dir/edge.crt" || ! -f "$ca_dir/edge.key" ]]; then
+    log_info "Issuing Traefik edge server cert (crapi.ztlab.local)..."
+    openssl ecparam -name prime256v1 -genkey -noout -out "$ca_dir/edge.key" 2>/dev/null
+    openssl req -new -key "$ca_dir/edge.key" -out "$ca_dir/edge.csr" \
+      -subj "/C=VN/O=ZT-Lab/CN=crapi.ztlab.local" 2>/dev/null
+    openssl x509 -req -in "$ca_dir/edge.csr" -CA "$ca_dir/device-ca.crt" \
+      -CAkey "$ca_dir/device-ca.key" -CAcreateserial -days 825 \
+      -out "$ca_dir/edge.crt" \
+      -extfile <(printf 'subjectAltName=DNS:crapi.ztlab.local,DNS:localhost\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n') 2>/dev/null
+    rm -f "$ca_dir/edge.csr"
+  fi
+
+  # k8s Secrets (cụm AWS):
+  #   device-ca-cert  (ns crapi)        : cert public (BFF không dùng trực tiếp
+  #                                       nữa từ Phần 1.3, giữ cho issue-device-cert.sh
+  #                                       và tương thích ngược script cũ)
+  #   edge-gateway-tls (ns istio-system): server cert + Device CA — Gateway
+  #                                       resource (k8s/crapi/edge-gateway.yaml,
+  #                                       Phần 1.3) đọc secret này qua
+  #                                       credentialName để làm TLS server cert
+  #                                       VÀ verify client cert (mode: MUTUAL).
+  #                                       Secret phải nằm ns của gateway workload
+  #                                       (istio-system), không phải ns Gateway CR.
+  kubectl --context "$AWS_CONTEXT" -n crapi create secret generic device-ca-cert \
+    --from-file=tls.ca="$ca_dir/device-ca.crt" \
+    --from-file=ca.crt="$ca_dir/device-ca.crt" \
+    --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+  kubectl --context "$AWS_CONTEXT" -n istio-system create secret generic edge-gateway-tls \
+    --from-file=tls.crt="$ca_dir/edge.crt" --from-file=tls.key="$ca_dir/edge.key" \
+    --from-file=ca.crt="$ca_dir/device-ca.crt" \
+    --dry-run=client -o yaml | kubectl --context "$AWS_CONTEXT" apply -f -
+
+  chmod 600 "$ca_dir"/*.key
+  log_info "Device CA + edge cert ready. Client certs: scripts/issue-device-cert.sh <user> <compliant|non-compliant>"
+}
+
+_device_ca_from_vault() {
+  local ca_dir="$1" root_token
+  root_token="$(kubectl --context "$AWS_CONTEXT" -n vault get secret vault-unseal-keys -o jsonpath='{.data.root-token}' 2>/dev/null | base64 -d)" || return 1
+  [[ -n "$root_token" ]] || return 1
+  local resp
+  resp="$(kubectl --context "$AWS_CONTEXT" -n vault exec vault-0 -- sh -c \
+    "VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN='$root_token' vault kv get -format=json secret/device-ca" 2>/dev/null)" || return 1
+  echo "$resp" | python3 -c 'import json,sys,base64
+d=json.load(sys.stdin)["data"]["data"]
+open(sys.argv[1]+"/device-ca.key","w").write(d["ca_key"])
+open(sys.argv[1]+"/device-ca.crt","w").write(d["ca_crt"])' "$ca_dir" 2>/dev/null || return 1
+  [[ -s "$ca_dir/device-ca.key" && -s "$ca_dir/device-ca.crt" ]]
+}
+
+# Was `kubectl rollout restart` unconditionally, every single run. Root-cause
+# bug (found live 2026-09-13 on a genuine destroy+redeploy): spire-agent's
+# workload socket is a hostPath of type Socket — any pod that mounted it
+# BEFORE an agent restart keeps a bind-mount to the OLD (now-deleted) socket
+# inode, so its mTLS/SDS connection breaks permanently ("connection refused")
+# until THAT pod is also restarted. deploy_step_2_keycloak (and every other
+# already-running mesh workload on the node) runs earlier in this same
+# main(), so an unconditional restart here silently wedged Keycloak's sidecar
+# mid-deploy, which cascaded into every Keycloak Admin API bootstrap step
+# (LDAP federation, audience mapper, step-up flow, crAPI client setup) failing
+# with HTTP 503 — all of them landed in the few-minute window right after this
+# restart. Standard Kubernetes fix: only actually roll the pods when the
+# config content changed, via a content-hash pod-template annotation — kubectl
+# apply already handles real spec/image changes on its own; this replaces the
+# extra unconditional restart with one that's a no-op when nothing changed.
+_apply_config_hash_annotation() {
+  local ctx="$1" kind="$2" name="$3"; shift 3
+  local hash
+  hash="$(cat "$@" | sha256sum | cut -d' ' -f1)"
+  kubectl --context "$ctx" -n spire patch "$kind" "$name" --type merge \
+    -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ztlab.local/config-hash\":\"$hash\"}}}}}" >/dev/null
+}
+
 deploy_step_3_spire_aws() {
   log_step "3.1 Deploy SPIRE on AWS"
 
@@ -249,7 +366,8 @@ deploy_step_3_spire_aws() {
 
   log_info "Deploying SPIRE server..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
-  kubectl --context $AWS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$AWS_CONTEXT" deployment spire-server \
+    "$REPO_ROOT/spire/server/aws-server.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
   kubectl --context $AWS_CONTEXT wait --for=condition=Ready pod \
@@ -259,7 +377,8 @@ deploy_step_3_spire_aws() {
 
   log_info "Deploying SPIRE agents..."
   kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
-  kubectl --context $AWS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$AWS_CONTEXT" daemonset spire-agent \
+    "$REPO_ROOT/spire/agent/aws-agent.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "SPIRE agents deployment initiated (may take time - skipping strict wait for lab stability)"
 
@@ -296,7 +415,8 @@ deploy_step_3_spire_os() {
 
   log_info "Deploying SPIRE server..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/server-deployment.yaml"
-  kubectl --context $OS_CONTEXT -n spire rollout restart deployment/spire-server >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$OS_CONTEXT" deployment spire-server \
+    "$REPO_ROOT/spire/server/os-server.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "Waiting for SPIRE server to be ready (timeout: 60s, may skip if tunnel unstable)..."
   kubectl --context $OS_CONTEXT wait --for=condition=Ready pod \
@@ -306,7 +426,8 @@ deploy_step_3_spire_os() {
 
   log_info "Deploying SPIRE agents..."
   kubectl --context $OS_CONTEXT apply -f "$REPO_ROOT/spire/k8s/agent-daemonset.yaml"
-  kubectl --context $OS_CONTEXT -n spire rollout restart daemonset/spire-agent >/dev/null 2>&1 || true
+  _apply_config_hash_annotation "$OS_CONTEXT" daemonset spire-agent \
+    "$REPO_ROOT/spire/agent/os-agent.conf" "$REPO_ROOT/spire/root-ca/ca.crt"
 
   log_info "SPIRE agents deployment initiated on OpenStack"
 
@@ -314,29 +435,13 @@ deploy_step_3_spire_os() {
 }
 
 deploy_step_4_opa() {
-  log_step "4. Deploy OPA (Open Policy Agent)"
-
-  log_info "Creating OPA config/policy configmaps on AWS..."
-  kubectl --context $AWS_CONTEXT -n financial create configmap opa-config \
-    --from-file=opa-config.yaml="$REPO_ROOT/opa/config/opa-config.yaml" \
-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
-  kubectl --context $AWS_CONTEXT -n financial create configmap opa-policies \
-    --from-file="$REPO_ROOT/opa/policies" \
-    --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
-
-  log_info "Deploying OPA on AWS..."
-  kubectl --context $AWS_CONTEXT apply -f "$REPO_ROOT/opa/deployment.yaml"
-
-  # OS opa-config ConfigMap is defined inline in os-security.yaml (its
-  # ext_authz path differs from AWS's: zta/crosscloud/allow vs zta/authz/allow).
-  # The rego policies themselves must come from this single --from-file step —
-  # os-security.yaml intentionally does NOT define its own opa-policies
-  # ConfigMap anymore (see comment there) so this is the sole source for OS.
-  kubectl --context $OS_CONTEXT -n financial create configmap opa-policies \
-    --from-file="$REPO_ROOT/opa/policies" \
-    --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
-
-  log_info "OPA deployed on AWS; OS OPA (opa-config) will be configured by os-security.yaml"
+  log_step "4. Deploy OPA — SKIPPED ở đây"
+  # OPA của ứng dụng mục tiêu crAPI được deploy bởi scripts/deploy-crapi.sh
+  # (deploy_crapi_opa): OPA riêng ns crapi, 2 cluster, path zta/crapi/authz/allow
+  # (AWS) / zta/crapi/crosscloud/allow (OpenStack), policy từ opa/crapi-policies/.
+  # opa/policies/ + opa/deployment.yaml + k8s/financial/os-security.yaml là của
+  # finance app (đã gỡ — KE-HOACH-CRAPI.md Phase 5).
+  log_info "OPA sẽ được deploy trong deploy-crapi.sh"
 }
 
 # deploy_step_5_envoy() removed (Phase 6 cleanup): all 8 financial services
@@ -377,13 +482,13 @@ deploy_security_healthcheck() {
     CLOUD_PROVIDER=aws \
     LOKI_PUSH_URL=http://loki.plg-stack.svc.cluster.local:3100/loki/api/v1/push
 
-  # OpenStack promtail cũng dùng chung đường relay này (deploy-app.sh) vì
-  # OpenStack không có Loki riêng — kế thừa cùng giới hạn: relay chạy trên
-  # máy deployer, không phải cluster-native.
+  # OpenStack không có Loki riêng: đẩy thẳng tới NodePort 31000 của Loki AWS
+  # qua WireGuard — cùng đường với Promtail OpenStack (deploy-app.sh, mục 1
+  # vòng 2026-09-29). Trước đây đi qua socat trên máy deployer (172.10.10.1:13099).
   kubectl --context "$OS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-cronjob.yaml"
   kubectl --context "$OS_CONTEXT" -n spire set env cronjob/security-healthcheck \
     CLOUD_PROVIDER=openstack \
-    LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push
+    LOKI_PUSH_URL="${OS_LOKI_PUSH_URL:-http://10.10.1.10:31000/loki/api/v1/push}"
 
   log_info "Security control-plane health-check deployed (chạy mỗi 1 phút trên cả 2 cluster)"
 }
@@ -395,8 +500,8 @@ verify_deployment() {
   kubectl --context $AWS_CONTEXT get ns
 
   log_info ""
-  log_info "Keycloak pods on AWS:"
-  kubectl --context $AWS_CONTEXT get pods -n identity
+  log_info "Keycloak pods on OpenStack (A1):"
+  kubectl --context $KEYCLOAK_CONTEXT get pods -n identity
 
   log_info ""
   log_info "SPIRE pods on AWS:"
@@ -408,26 +513,24 @@ verify_deployment() {
 
   log_info ""
   log_info "OPA pods on AWS:"
-  kubectl --context $AWS_CONTEXT get pods -n financial
+  kubectl --context $AWS_CONTEXT get pods -n crapi
 
   log_info ""
   log_info "OPA pods on OpenStack (expected empty here; deployed later by os-security.yaml):"
-  kubectl --context $OS_CONTEXT get pods -n financial
+  kubectl --context $OS_CONTEXT get pods -n crapi
 
   log_info ""
   log_info "Envoy ConfigMaps on AWS:"
-  kubectl --context $AWS_CONTEXT get cm -n financial
+  kubectl --context $AWS_CONTEXT get cm -n crapi
 
   log_info ""
 
   log_step "6.1 Readiness checks"
-  check_rollout "$AWS_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
+  check_rollout "$KEYCLOAK_CONTEXT" "identity" "deployment" "keycloak" "${TIMEOUT_KEYCLOAK}s" "false"
   check_rollout "$AWS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$AWS_CONTEXT" "spire" "spire-agent" "true"
   check_rollout "$OS_CONTEXT" "spire" "deployment" "spire-server" "${TIMEOUT_WAIT}s" "true"
   check_daemonset_ready "$OS_CONTEXT" "spire" "spire-agent" "true"
-  check_rollout "$AWS_CONTEXT" "financial" "deployment" "opa-server" "${TIMEOUT_WAIT}s" "true"
-  # OS opa-server is deployed later by os-security.yaml (deploy-app.sh Step 5), not here.
 
   if [ "$VERIFY_FAILED" -ne 0 ]; then
     log_error "Security stack verification failed. Check pods/events/logs before continuing."
@@ -450,6 +553,7 @@ main() {
   deploy_step_1_namespaces
   deploy_step_2_keycloak
   provision_spire_root_ca
+  provision_device_ca
   deploy_step_3_spire_aws
   deploy_step_3_spire_os
   register_spire_workloads
@@ -464,19 +568,17 @@ main() {
   log_info "✓ All components deployed successfully!"
   log_info "================================"
   log_info ""
-  log_info "Next steps:"
-  if financial_manifests_ready; then
-    log_info "1. Deploy financial workloads:"
-    log_info "   kubectl --context ctx-aws apply -f k8s/financial/aws-services.yaml"
-    log_info "   kubectl --context ctx-openstack apply -f k8s/financial/os-services.yaml"
-    log_info "2. Deploy PLG stack: ./scripts/deploy-plg-stack.sh"
-    log_info "3. Verify workloads: kubectl --context ctx-aws get pods -A && kubectl --context ctx-openstack get pods -A"
-  else
-    log_info "1. Financial manifests are not ready yet (k8s/financial/*.yaml still TODO/empty)."
-    log_info "2. Populate financial manifests before running kubectl apply on k8s/financial/*.yaml."
-    log_info "3. Deploy PLG stack after workloads are ready: ./scripts/deploy-plg-stack.sh"
-  fi
+  log_info "Next steps (thường do scripts/deploy-app.sh gọi tiếp, không cần chạy tay):"
+  log_info "1. deploy_crapi        → scripts/deploy-crapi.sh (crAPI + OPA + mesh policy + SPIRE entries)"
+  log_info "2. deploy_observability_response → Loki/Grafana/Promtail/Prometheus + SOAR/ai/scorer"
+  log_info "3. Verify: kubectl --context ctx-aws get pods -A && kubectl --context ctx-openstack get pods -A"
   log_info ""
 }
 
-main "$@"
+# Guard so deploy-app.sh can `source` this file to reuse individual functions
+# (e.g. provision_spire_root_ca / deploy_step_3_spire_aws / _os, needed before
+# Istio so the ingressgateway's hard-mounted spire-workload-socket hostPath
+# already exists) without also triggering a full second run of main().
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

@@ -166,6 +166,70 @@
       ansible.builtin.debug:
         msg: "WireGuard tunnel from {{ inventory_hostname }} is operational"
 
+    # ── Watchdog ──────────────────────────────────────────────────────────
+    # PersistentKeepalive=25 giữ tunnel khi mạng ổn định, nhưng nếu uplink của
+    # host aio chập chờn đủ lâu (hotspot/CGNAT drop UDP), handshake chết và
+    # KHÔNG tự phục hồi khi mạng trở lại nếu không có traffic chủ động. Hệ quả
+    # đã gặp: tunnel chết → mọi hop cross-cloud (crapi-community/workshop/bff →
+    # crapi-identity) 503 → SVID/mТLS sập. Watchdog: mỗi 60s, nếu last handshake
+    # cũ hơn 200s VÀ ping peer WG fail → `systemctl restart wg-quick@wg0`.
+    - name: Install WireGuard watchdog script
+      ansible.builtin.copy:
+        dest: /usr/local/sbin/wg-watchdog.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: |
+          #!/usr/bin/env bash
+          set -u
+          IFACE=wg0
+          PEER_IP="{% if inventory_hostname == 'aws_gateway' %}{{ os_gateway_ip }}{% else %}{{ aws_gateway_ip }}{% endif %}"
+          MAX_AGE=200
+          hs=$(wg show "$IFACE" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+          now=$(date +%s)
+          age=$(( now - ${hs:-0} ))
+          if [ "${hs:-0}" -eq 0 ] || [ "$age" -gt "$MAX_AGE" ]; then
+            if ! ping -I "$IFACE" -c2 -W2 "$PEER_IP" >/dev/null 2>&1; then
+              logger -t wg-watchdog "handshake age=${age}s, peer $PEER_IP unreachable — restarting wg-quick@$IFACE"
+              systemctl restart "wg-quick@$IFACE"
+            fi
+          fi
+
+    - name: Install WireGuard watchdog systemd unit + timer
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: wg-watchdog.service
+          content: |
+            [Unit]
+            Description=WireGuard tunnel watchdog
+            After=wg-quick@wg0.service
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/sbin/wg-watchdog.sh
+        - name: wg-watchdog.timer
+          content: |
+            [Unit]
+            Description=Run WireGuard watchdog every 60s
+            [Timer]
+            OnBootSec=90
+            OnUnitActiveSec=60
+            [Install]
+            WantedBy=timers.target
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Enable + start WireGuard watchdog timer
+      ansible.builtin.systemd:
+        name: wg-watchdog.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
   handlers:
     - name: restart wg-quick
       ansible.builtin.systemd:

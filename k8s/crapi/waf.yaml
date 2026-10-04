@@ -1,0 +1,257 @@
+# WAF — ModSecurity3 + OWASP CRS in front of the BFF (A2 of KEHOACH-THAYDOI-HETHONG.md).
+#
+# SecRuleEngine = DetectionOnly: CRS evaluates every request and writes a JSON
+# audit record to stdout on a rule match, but NEVER blocks — so it cannot break
+# a crAPI business flow and does not distort the training telemetry. Its purpose
+# is a control measurement for the thesis: CRS flags SQLi/XSS/traversal but flags
+# NOTHING on a BOLA/BFLA request, which is the whole point of the Zero-Trust
+# authorization layer.
+#
+# Request path after A2:  Traefik ── HTTP ──> waf:8080 ── mTLS (Istio) ──> bff:8080
+# waf runs an Istio sidecar with a real SPIRE SVID (spiffe://ztlab.local/aws/waf),
+# so the waf->bff hop is mТLS and shows up in the OPA decision log / envoy access
+# log like any other in-mesh hop. The waf->bff edge is declared in
+# policy/service-graph-crapi.yaml (regenerate service_acl.rego + pod-segmentation).
+#
+# BUG FOUND during A3 live verification (root cause, not A3-specific — present
+# since A2): the base owasp/modsecurity-crs image's includes/proxy_backend.conf
+# does `proxy_set_header Host $host;` — nginx forwards the EXTERNAL client Host
+# header (`crapi.ztlab.local`) straight to bff instead of bff's own hostname.
+# Envoy's outbound HTTP router picks the target cluster by Host/:authority; that
+# header matches none of bff's known domain aliases, so it falls through to the
+# `allow_any` virtual host → PassthroughCluster — bypassing the DestinationRule
+# entirely (no mTLS upgrade, no SPIFFE principal). Every OPA check that needs
+# `valid_svid` (i.e. anything beyond the explicit `public_path` allowlist) then
+# fails closed with no decision even logged, since the request never carries a
+# principal at all. `waf-proxy-backend-conf` below overrides just that one
+# nginx include to use `$proxy_host` (nginx's own proxy_pass target) instead.
+#
+# Second bug, same root cause, found live 2026-09-13 on the first real login
+# through the new Istio Gateway (Phần 1.3): with Host rewritten to
+# `$proxy_host`, BFF's `_external_base()` (services/bff/main.py) — used to
+# build the OIDC `redirect_uri` and the `/kc/...` authorization URL — saw Host
+# = `bff.crapi.svc.cluster.local:8080` and built an unreachable-from-outside
+# redirect, instead of the real edge host (`crapi.ztlab.local:18444`). Fixed
+# by also sending `X-Forwarded-Host` with the ORIGINAL client Host —
+# `_external_base()` already prefers that header over plain `Host` for
+# exactly this reason, so this needed nginx to actually send it. Uses
+# `$http_host` (raw Host header, keeps a client-sent port) not nginx's `$host`
+# variable (silently drops the port) — the gateway is reached on a non-default
+# port (:18444) so a dropped port breaks the redirect just as badly.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: waf, namespace: crapi }
+---
+# Found live 2026-09-13 running the thesis's BOLA/CRS control measurement
+# (tests/crapi_bola.sh — expects CRS to record ZERO hits on a pure
+# authorization-bypass request, since it carries no injection payload): CRS
+# rule 921140 ("HTTP Header Injection Attack via headers") false-positived on
+# EVERY request through the new Istio Gateway (Phần 1.3), not on anything
+# BOLA-specific. Cause: Envoy's `x-forwarded-client-cert` header carries the
+# client's PEM certificate URL-encoded (`%0A` for each newline); CRS's own
+# `t:urlDecodeUni` transform decodes it back to real `\n` bytes before
+# matching, and rule 921140 flags any raw `[\n\r]` in a header value as CRLF
+# injection — a real PEM certificate legitimately contains dozens. This is a
+# mesh-infrastructure artifact appearing on 100% of requests once the mTLS
+# Gateway started populating XFCC with real cert data, not a WAF weakness or
+# a BOLA-request property, so scope the exclusion to exactly that one
+# rule+header (every other header, and every other 921xxx CRLF check on this
+# one, stays fully active).
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: waf-crs-exclusions, namespace: crapi }
+data:
+  # This image's setup.conf includes owasp-crs/rules/*.conf as ONE flat glob
+  # (confirmed live: no separate before/after phase) — alphabetical order
+  # means a name starting "REQUEST-900-..." loads BEFORE "REQUEST-921-...",
+  # so SecRuleUpdateTargetById against rule 921140 would silently no-op
+  # (target rule doesn't exist yet at that point). Named to sort AFTER every
+  # REQUEST-9xx CRS rule file instead, matching the official CRS example
+  # config's convention for this exact directive.
+  RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf: |
+    SecRuleUpdateTargetById 921140 "!REQUEST_HEADERS:x-forwarded-client-cert"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: waf-proxy-backend-conf, namespace: crapi }
+data:
+  proxy_backend.conf: |
+    proxy_set_header Host $proxy_host;
+    proxy_set_header Proxy "";
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header X-REAL-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Host $http_host;
+
+    proxy_http_version 1.1;
+    proxy_buffering off;
+    proxy_connect_timeout 60s;
+    proxy_read_timeout 36000s;
+    proxy_redirect off;
+
+    proxy_pass_header Authorization;
+    proxy_pass http://bff.crapi.svc.cluster.local:8080;
+
+    set_real_ip_from 127.0.0.1;
+
+    real_ip_header X-REAL-IP;
+    real_ip_recursive on;
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: waf
+  namespace: crapi
+  labels: { app: waf }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: waf }
+  template:
+    metadata:
+      labels: { app: waf, ztlab.io/nonroot-enforced: "true" }
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/aws/waf"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: waf
+      containers:
+        - name: waf
+          image: owasp/modsecurity-crs@sha256:1503b5ab7b8f8799d1525cd2a1690dfcdd5cc251a705523aa5783dd20e038b1b
+          imagePullPolicy: IfNotPresent
+          # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) —
+          # image này ĐÃ chạy như UID 101 (nginx) mặc định (xác nhận sống:
+          # `exec ... id` -> uid=101(nginx)), chỉ thiếu khai báo tường minh để
+          # Gatekeeper ZTLabRequireNonRoot công nhận. Không đổi UID thật đang
+          # chạy — chỉ khai đúng cái đã đúng từ trước.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: PORT,            value: "8080" }
+            - { name: BACKEND,         value: "http://bff.crapi.svc.cluster.local:8080" }
+            - { name: SERVER_NAME,     value: "crapi.ztlab.local" }
+            # DetectionOnly — evaluate + log, never block (thesis control measurement)
+            - { name: MODSEC_RULE_ENGINE,          value: "DetectionOnly" }
+            - { name: MODSEC_REQ_BODY_ACCESS,      value: "on" }
+            - { name: MODSEC_RESP_BODY_ACCESS,     value: "off" }
+            # JSON audit to stdout on any relevant transaction (rule match);
+            # add K = matched-rules section so the flagged CRS rule ids are visible.
+            - { name: MODSEC_AUDIT_ENGINE,         value: "RelevantOnly" }
+            - { name: MODSEC_AUDIT_LOG,            value: "/dev/stdout" }
+            - { name: MODSEC_AUDIT_LOG_FORMAT,     value: "JSON" }
+            - { name: MODSEC_AUDIT_LOG_TYPE,       value: "Serial" }
+            - { name: MODSEC_AUDIT_LOG_PARTS,      value: "ABIJDEFHKZ" }
+            - { name: MODSEC_TAG,                  value: "ztlab-waf" }
+            # CRS in "blocking" paranoia posture but the engine is DetectionOnly,
+            # so the anomaly threshold decides only what gets *logged*, not blocked.
+            - { name: PARANOIA,                    value: "1" }
+            - { name: ANOMALY_INBOUND,             value: "5" }
+            - { name: ANOMALY_OUTBOUND,            value: "4" }
+            # Only the ModSecurity JSON audit stream should land on stdout so the
+            # promtail waf-audit job is clean; nginx access log goes nowhere,
+            # error log to stderr.
+            - { name: ACCESSLOG,                   value: "/dev/null" }
+            - { name: ERRORLOG,                    value: "/dev/stderr" }
+            # nginx must not add its own X-Forwarded-* trust; the edge (Traefik)
+            # and BFF handle forwarded identity. Keep proto/port passthrough only.
+            - { name: NGINX_ALWAYS_TLS_REDIRECT,   value: "off" }
+          volumeMounts:
+            # /etc/nginx/includes/proxy_backend.conf is itself RE-GENERATED from
+            # this template by the image's docker-entrypoint (envsubst) on every
+            # container start — mounting straight over the generated file makes
+            # that regeneration step fail (Read-only file system) and crash-loop.
+            # Override the template source instead; envsubst is a harmless
+            # no-op here since this file has no ${VAR} placeholders.
+            - name: proxy-backend-conf
+              mountPath: /etc/nginx/templates/includes/proxy_backend.conf.template
+              subPath: proxy_backend.conf
+              readOnly: true
+            # Exclusion file, not an envsubst template — this path isn't
+            # touched by the entrypoint's template regeneration, unlike
+            # proxy_backend.conf above, so it's mounted directly.
+            - name: crs-exclusions
+              mountPath: /etc/modsecurity.d/owasp-crs/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+              subPath: RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+              readOnly: true
+          readinessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: proxy-backend-conf
+          configMap: { name: waf-proxy-backend-conf }
+        - name: crs-exclusions
+          configMap: { name: waf-crs-exclusions }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: waf
+  namespace: crapi
+  labels: { app: waf }
+spec:
+  selector: { app: waf }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+# Phần 1.3 (remediation 2026-09): Traefik (không sidecar, plaintext) đã bị
+# THÁO khỏi đường vào crAPI — biên nay là Istio IngressGateway (mТLS thật,
+# spiffe://ztlab.local/aws/edge-gateway). waf không còn lý do nhận plaintext
+# nữa nên siết về STRICT (đã cải thiện phụ đáng giá: hệ quả trực tiếp là mọi
+# EnvoyFilter/AuthorizationPolicy gắn vào waf's inbound giờ áp dụng cho MỌI
+# request — trước đây, PERMISSIVE khiến các filter đó không hề chạy cho
+# traffic plaintext, xem KIEM-KE-HOP.md nhóm (c)-1: waf-opa-authz CHƯA BAO
+# GIỜ được gọi khi waf còn PERMISSIVE).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: waf-strict
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: waf }
+  mtls:
+    mode: STRICT
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: waf-custom-san
+  namespace: crapi
+spec:
+  host: waf.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/waf"]
+---
+# Parity with the other crAPI edge workloads: every request through waf is also
+# evaluated by OPA ext_authz (the waf->bff edge in service_acl.rego allows it).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: waf-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: waf }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]

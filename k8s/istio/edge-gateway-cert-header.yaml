@@ -1,0 +1,61 @@
+# Phần 1.3 (remediation 2026-09) — Gateway trích Subject/URI SAN của client cert
+# (đã verify bằng Device CA ở tầng TLS, k8s/crapi/edge-gateway.yaml) và gắn vào
+# 1 header ứng dụng riêng (x-device-cert-info) cho BFF đọc.
+#
+# TẠI SAO không dùng thẳng x-forwarded-client-cert (XFCC) chuẩn của Envoy: đã
+# verify sống 2026-09-13 — mỗi hop mТLS trong mesh (ở đây là waf->bff) TỰ GHI
+# ĐÈ XFCC bằng thông tin peer CỦA CHÍNH NÓ (SANITIZE_SET là hành vi mặc định
+# của Istio cho mọi sidecar) chứ không nối tiếp (append) hop trước — tới bff,
+# XFCC chỉ còn thấy waf (spiffe://.../aws/waf), thông tin cert thiết bị ở hop
+# Gateway->waf đã bị ghi đè mất. Đổi hành vi XFCC toàn mesh sang APPEND_FORWARD
+# ảnh hưởng MỌI hop mТLS khác — rủi ro vượt phạm vi Phần 1.3. Header riêng này
+# không phải tên đặc biệt của Envoy nên nginx (waf) và mọi hop sau chỉ forward
+# nguyên vẹn — đúng cơ chế "header riêng sống sót qua nginx" mà X-Edge-Marker/
+# X-Edge-Scheme (đường Traefik cũ) đã dùng, thay vì dựa vào bí mật chia sẻ.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: edge-gateway-device-cert-header
+  namespace: istio-system
+spec:
+  workloadSelector:
+    labels:
+      istio: ingressgateway
+  configPatches:
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+            inlineCode: |
+              function envoy_on_request(request_handle)
+                local ssl = request_handle:connection():ssl()
+                if ssl ~= nil and ssl:peerCertificatePresented() then
+                  local subject = ssl:subjectPeerCertificate() or ""
+                  local uris = ssl:uriSanPeerCertificate()
+                  local uri = ""
+                  if uris ~= nil and #uris > 0 then
+                    uri = uris[1]
+                  end
+                  request_handle:headers():remove("x-device-cert-info")
+                  request_handle:headers():add("x-device-cert-info",
+                    "Subject=\"" .. subject .. "\";URI=\"" .. uri .. "\"")
+                end
+                -- waf's nginx ghi đè X-Forwarded-Proto về scheme của chính nó
+                -- (luôn http — TLS đã kết thúc ở Gateway) nên BFF không tin
+                -- được header chuẩn để dựng redirect_uri OIDC (services/bff/
+                -- main.py::_external_base). Header riêng này không bị nginx
+                -- đụng tới, y hệt cơ chế X-Edge-Scheme cũ của Traefik Middleware
+                -- edge-marker (nay đã xoá) — cố định "https" vì Gateway server
+                -- này CHỈ nhận HTTPS (k8s/crapi/edge-gateway.yaml).
+                request_handle:headers():remove("x-edge-scheme")
+                request_handle:headers():add("x-edge-scheme", "https")
+              end
