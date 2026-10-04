@@ -110,11 +110,17 @@ resource "aws_security_group" "sg_private" {
   # OpenStack to AWS NodePort (mailhog SMTP 31025, va bat ky hop OS to AWS nao
   # khac). Finance app chi co AWS to OS nen dai nay chua tung duoc mo.
   # Nguon: OS k3s subnet + WireGuard subnet (tuy os_gateway co SNAT hay khong).
+  # 2026-09-29: aws_gateway MASQUERADE moi traffic ra ens5 (ke ca traffic tu
+  # wg0), nen goi tin OpenStack toi node AWS mang nguon = IP private cua
+  # gateway, KHONG phai 192.168.101.0/24 -> rule nay truoc day chua tung khop
+  # (do: gateway -> 10.10.1.11:31000 bi SG chan). Them IP gateway de duong
+  # Promtail OpenStack -> Loki NodePort 31000 qua WireGuard thong ma khong
+  # can relay nao tren may nguoi dung.
   ingress {
     from_port   = 30000
     to_port     = 32767
     protocol    = "tcp"
-    cidr_blocks = ["192.168.101.0/24", "10.200.0.0/24"]
+    cidr_blocks = ["192.168.101.0/24", "10.200.0.0/24", "${var.gateway_private_ip}/32"]
     description = "crAPI OpenStack to AWS NodePort cross-cloud"
   }
 
@@ -137,7 +143,10 @@ resource "aws_security_group" "sg_restricted" {
     from_port   = 3100
     to_port     = 3100
     protocol    = "tcp"
-    cidr_blocks = [var.private_subnet_cidr, var.management_subnet_cidr, "10.10.4.0/24"]
+    # Vòng 2026-09-29: bỏ "10.10.4.0/24" viết cứng — trùng với
+    # var.management_subnet_cidr, AWS lưu 1 bản nên MỌI `terraform plan` đều báo
+    # "1 to change" (drift vĩnh viễn, che mất drift thật).
+    cidr_blocks = [var.private_subnet_cidr, var.management_subnet_cidr]
     description = "Loki - log collection from all nodes"
   }
 

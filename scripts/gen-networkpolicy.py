@@ -45,10 +45,24 @@ HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph
 # Sinh lại: python3 scripts/gen-networkpolicy.py
 #
 # T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload
-# đích, khớp đúng traffic thật đã đo (T-1.1). Egress không đổi (xem
-# {allow_list_file}). LƯU Ý: NetworkPolicy này hiện KHÔNG được kube-router
-# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — xem
-# KET-QUA-KIEM-TRA.md §T-3.1 trước khi coi đây là lớp bảo vệ đang hoạt động.
+# đích, khớp đúng traffic thật đã đo (T-1.1). Egress do baseline lo (xem
+# {allow_list_file}).
+#
+# HIỆU LỰC THẬT — ĐÃ SỬA CHẨN ĐOÁN (2026-09-25, phiên này đo trực tiếp
+# `nft -a list ruleset` trên node): rule podSelector/namespaceSelector ở đây
+# CÓ hiệu lực thật. Dòng `# match-set ...` trong `nft list ruleset` chỉ là cách
+# nft HIỂN THỊ match xt_set: ipset KUBE-SRC-*/KUBE-DST-* có đủ IP pod (đo
+# trực tiếp `ipset list`), counter `reject` tăng đúng khi thiếu rule cho phép,
+# và k3s tự có sẵn binary ipset ở /var/lib/rancher/k3s/data/current/bin/ipset
+# (không cần cài ipset riêng lên host) — KHÔNG phải rule chết. Chẩn
+# đoán "node thiếu ipset nên rule 0% hiệu lực" (BAOCAO-VONG-2026-09-19.md
+# §1.1/2.2) là SAI.
+#
+# Vì baseline (podSelector: {{}}) default-deny ingress+egress mọi pod trong ns
+# crapi, file này là nơi DUY NHẤT cấp quyền ingress nội ns theo edge — PHẢI
+# được `kubectl apply` (scripts/deploy-crapi.sh::apply_network_policies). Không
+# apply thì mọi hop nội ns (waf->bff, bff->crapi-*, ...) bị kube-router
+# `reject` SYN.
 """
 
 
@@ -62,7 +76,7 @@ def render_policy(
     namespace: str,
     dest_label: str,
     sources: list[tuple[str, list[int], str]],
-    cross_cluster_ingress: list[tuple[str, list[int]]] | None = None,
+    cross_cluster_ingress: list[tuple[str, list[int], str]] | None = None,
 ) -> str:
     # Gộp theo (source, ports, source_namespace) — mỗi source có thể xuất
     # hiện ở nhiều edge (không xảy ra trong graph hiện tại nhưng generator
@@ -117,9 +131,16 @@ def render_policy(
     # since that's its real listening port (a NodePort's l4_ports value is
     # the externally-visible port, already rewritten by kube-proxy DNAT by
     # the time NetworkPolicy admission actually inspects the packet).
-    for cidr, ports in cross_cluster_ingress or []:
+    for cidr, ports, intended_cidr in cross_cluster_ingress or []:
         from_blocks.append(
-            f"""    - from:
+            f"""    # Ý ĐỊNH thật: {intended_cidr} (private_cidr của cụm đích) — kube-router
+    # (iptables v1.8.7 nf_tables) không match được ipBlock CIDR cụ thể cho
+    # traffic NAT qua gateway cross-cloud (đã thử /24 lẫn /32 chính xác, đều
+    # fail; chỉ 0.0.0.0/0 chạy) nên dòng dưới PHẢI dùng {cidr}, giới hạn đúng
+    # port — bảo vệ thật cho hop này là L7 (STRICT mТLS + OPA ext_authz), xem
+    # scripts/gen-networkpolicy.py cho lý do đầy đủ (Phần 1.6 remediation
+    # 2026-09-18: workaround của CNI, không phải ý định thiết kế).
+    - from:
         - ipBlock:
             cidr: {cidr}
       ports:
@@ -217,9 +238,17 @@ def gen_for_cluster(graph: dict, cluster: str, prefix: str, allow_list_file: str
     # segmentation policy's own documented caveat ("L7 là lớp phân đoạn
     # thật") — this is exactly that path, made explicit instead of silently
     # broken.
-    cross_ingress: dict[str, list[tuple[str, list[int]]]] = {}
+    # Phần 1.6 remediation (2026-09-18): ngoại lệ 0.0.0.0/0 ở trên chỉ ghi
+    # con số (CIDR workaround), không ghi Ý ĐỊNH thật (CIDR đúng lẽ ra phải
+    # dùng nếu kube-router match được ipBlock) — khai cả hai, để generator
+    # vẫn emit workaround THẬT (0.0.0.0/0, chạy được) nhưng ý định vẫn grep
+    # ra được ngay trong chính manifest sinh ra, không chỉ trong comment của
+    # file generator này. intended_cidr = private_cidr của CỤM ĐÍCH (đúng
+    # theo lý luận CIDR gotcha ở trên) — đây LÀ CIDR đáng lẽ phải dùng.
+    intended_cidr = graph["clusters"][cluster]["private_cidr"]
+    cross_ingress: dict[str, list[tuple[str, list[int], str]]] = {}
     for dest, ports in cross_ingress_raw.items():
-        cross_ingress.setdefault(dest, []).append(("0.0.0.0/0", sorted(ports)))
+        cross_ingress.setdefault(dest, []).append(("0.0.0.0/0", sorted(ports), intended_cidr))
 
     policies = [HEADER.format(allow_list_file=allow_list_file)]
     for dest in sorted(by_dest):
@@ -241,10 +270,17 @@ BASELINE_HEADER = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/serv
 # (gộp l4_ports theo cặp cluster nguồn->đích) để không còn trôi khi một
 # workload đổi cloud (đúng bug đã xảy ra với Keycloak ở A1).
 #
-# LƯU Ý (như pod-segmentation): NetworkPolicy này hiện KHÔNG được kube-router
-# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — L7 (OPA
-# service_acl) là lớp phân đoạn thật. File này đúng về khai báo/ý định + có
-# hiệu lực cho path không-sidecar (opa:8181, DNS, cross-cloud ipBlock).
+# HIỆU LỰC THẬT — ĐÃ SỬA CHẨN ĐOÁN (2026-09-25, đo trực tiếp bằng counter
+# `reject` trong chain KUBE-POD-FW-* của node): baseline này CÓ hiệu lực thật
+# (cả ipBlock lẫn namespaceSelector). Với `podSelector: {}` + policyTypes
+# Ingress/Egress, MỌI pod ns crapi bị default-deny cả 2 chiều; chỉ traffic khớp
+# rule ở đây (hoặc rule ingress per-destination trong *-pod-segmentation.yaml)
+# mới qua. Hệ quả đã gặp thật: rule egress "nội bộ crapi" viết tay từng thiếu
+# cổng 8080 -> SYN waf->bff bị reject tại chain firewall của pod waf (503
+# "delayed connect error: 111"). Nay cổng egress nội ns được TÍNH RA từ edge
+# service-graph (_intra_ns_egress_ports) và hợp vào danh sách viết tay.
+# Chẩn đoán cũ "node thiếu ipset nên rule vô hiệu" là SAI (xem
+# aws-pod-segmentation.yaml).
 """
 
 
@@ -299,11 +335,58 @@ def _cross_cloud_egress_rules(graph: dict, source_cluster: str) -> list[dict]:
     return rules
 
 
+def _intra_ns_egress_ports(graph: dict, cluster: str) -> set[int]:
+    """l4_ports của mọi edge NỘI CỤM (không cross_cluster) mà cả nguồn lẫn đích
+    đều nằm trong ns NS. Baseline có `podSelector: {}` + policyTypes Egress nên
+    MỌI pod trong NS bị default-deny egress; cổng đích của các edge này PHẢI có
+    mặt trong rule egress `to_ns: NS`, nếu không kube-router `reject` SYN ngay
+    tại chain firewall của pod NGUỒN.
+
+    Quan sát sống 2026-09-25: danh sách cổng viết tay từng thiếu 8080 (cổng của
+    bff/waf) -> waf->bff luôn 503 "delayed connect error: 111" dù ingress,
+    mTLS, OPA đều đúng (counter `reject` tăng trong KUBE-POD-FW-* của waf).
+    Tính ra từ edge để không thể trôi khỏi service-graph nữa."""
+    ports: set[int] = set()
+    for edge in graph["edges"]:
+        if edge.get("cross_cluster"):
+            continue
+        src = graph["workloads"].get(edge["from"])
+        dst = graph["workloads"].get(edge["to"])
+        if not src or not dst:
+            continue
+        if src["cluster"] != cluster or dst["cluster"] != cluster:
+            continue
+        if src.get("namespace") != NS or dst.get("namespace") != NS:
+            continue
+        ports.update(edge.get("l4_ports") or [])
+    return ports
+
+
+def _merge_intra_ns_egress(rules: list[dict], derived: set[int]) -> list[dict]:
+    """Hợp cổng tính ra vào rule egress `to_ns: NS` viết tay (giữ phần viết tay
+    làm nền: DB/opa/... không có sidecar). Không có rule đó thì thêm mới."""
+    merged, done = [], False
+    for rule in rules:
+        if rule.get("to_ns") == NS and rule.get("ports") and not done:
+            rule = dict(rule)
+            static = [p for p in rule["ports"] if not isinstance(p, dict)]
+            extra = [p for p in rule["ports"] if isinstance(p, dict)]
+            rule["ports"] = sorted(set(static) | derived) + extra
+            done = True
+        merged.append(rule)
+    if not done and derived:
+        merged.append({"to_ns": NS, "ports": sorted(derived),
+                       "comment": "noi bo crapi (tinh ra tu edge service-graph)"})
+    return merged
+
+
 def gen_baseline(graph: dict, cluster: str) -> str:
     baseline = graph["netpol_baseline"][cluster]
     name = "aws" if cluster == "aws" else "os"
     ingress_rules = list(baseline.get("ingress", []))
-    egress_rules = list(baseline.get("egress", [])) + _cross_cloud_egress_rules(graph, cluster)
+    egress_rules = _merge_intra_ns_egress(list(baseline.get("egress", [])),
+                                          _intra_ns_egress_ports(graph, cluster))
+    egress_rules += _cross_cloud_egress_rules(graph, cluster)
 
     parts = [BASELINE_HEADER, "---",
               "apiVersion: networking.k8s.io/v1",

@@ -97,6 +97,16 @@ spec:
               port: 8200
             initialDelaySeconds: 5
             periodSeconds: 5
+          livenessProbe:
+            # Chỉ kiểm process Vault CÒN TRẢ LỜI HTTP (sealed vẫn OK — sealed
+            # không phải lý do để kubelet giết container, postStart tự unseal
+            # đã lo việc đó) — khác readinessProbe ở chỗ không đòi sealedcode
+            # cụ thể, chỉ cần server sống.
+            httpGet:
+              path: /v1/sys/health?standbyok=true&sealedcode=200&uninitcode=200
+              port: 8200
+            initialDelaySeconds: 15
+            periodSeconds: 15
           resources:
             requests:
               cpu: 50m

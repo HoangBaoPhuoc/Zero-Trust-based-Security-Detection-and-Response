@@ -1,426 +1,319 @@
 #!/usr/bin/env python3
-"""ZTLab Security Metrics Collector.
+"""ZTLab MTTD — Mean Time To Detect (Phần 1.5, remediation 2026-09-18).
 
-    ⚠️  VẪN CHƯA CHẠY ĐƯỢC VỚI crAPI (kiểm lại 2026-09-13, Phần 3.3 remediation).
-    Khác với tests/perf_overhead.py (đã sửa xong, chạy được) — script NÀY không
-    chỉ cần đổi tên. Nó gọi thẳng API của `ai-analyzer`/`soar-engine`
-    (`/analyze`, `/pending`, `/pending/{id}/approve`) để đo MTTR bằng cách TỰ
-    APPROVE một playbook — nhưng A4 (KEHOACH-THAYDOI-HETHONG.md) đã XOÁ HẲN
-    3 service đó và gộp thành `incident-analyzer` với API hoàn toàn khác
-    (`/grafana-webhook`, `/evidence`, `/evidence/{id}/risk-score`) và — quan
-    trọng hơn — KHÔNG còn khái niệm "approve playbook" nữa (A4: không có hành
-    động thực thi tự động nào). MTTR như định nghĩa cũ ("thời gian từ AI verdict
-    tới SOAR playbook thực thi") không còn ý nghĩa trong kiến trúc hiện tại.
-    Cần THIẾT KẾ LẠI (không phải sửa tên) trước khi chạy: MTTD có thể đo qua
-    thời điểm evidence bundle xuất hiện ở incident-analyzer; MTTR nên bỏ hẳn
-    hoặc định nghĩa lại thành "thời gian tới khi admin nhận được email bằng
-    chứng". Chưa làm trong lần sửa này — xem BAOCAO-SUA-GOC-2026-09-13.md.
+Bản CŨ đo MTTR bằng cách TỰ APPROVE một playbook qua API của `ai-analyzer`/
+`soar-engine` — cả 2 service đó đã bị A4 (KEHOACH-THAYDOI-HETHONG.md) XOÁ HẲN
+và gộp thành `incident-analyzer` với API khác hẳn, KHÔNG còn khái niệm
+"approve playbook" (A4: hệ thống không có hành động phản ứng tự động nào —
+MTTR như định nghĩa cũ không còn ý nghĩa). Xoá hẳn công cụ đo MTTR/FPR/FNR/OVH
+cũ (FPR/FNR chưa từng đo được — cần dataset gán nhãn của Giai đoạn B, ngoài
+phạm vi; OVH nay đo đúng ở tests/perf_overhead.py, Phần 1.4) — không giữ lại
+code chết gọi API không còn tồn tại.
 
-Measures four key security performance indicators:
-  MTTD  — Mean Time To Detect     (seconds from attack log injection to AI verdict)
-  MTTR  — Mean Time To Respond    (seconds from AI verdict to SOAR playbook execution)
-  FPR   — False Positive Rate     (benign logs flagged malicious / total benign logs)
-  FNR   — False Negative Rate     (attack logs not detected / total attack logs)
-  OVH   — Security Overhead       (extra latency introduced by Envoy+OPA mTLS pipeline)
+MTTD vẫn rất có nghĩa và đo được: từ lúc tấn công XẢY RA tới lúc evidence
+bundle được incident-analyzer GỬI ĐI. Công cụ này chạy 1 kịch bản tấn công
+THẬT (mặc định: crapi_lateral_movement.sh — chọn vì Grafana rule "Lateral
+Movement" đã verify sống bắn thật, xem BAOCAO-SUA-GOC-2026-09-13.md) rồi đo
+đúng CHUỖI THẬT của hệ thống:
+
+    T0 tấn công xảy ra
+      -> T1 OPA ghi decision log deny (Loki job=opa-decisions, timestamp
+         THẬT của chính dòng log, không phải lúc script query)
+      -> T2 incident-analyzer tạo evidence bundle (đã bao hàm độ trễ Grafana
+         eval theo chu kỳ + webhook + build bundle — không tách riêng được
+         thời điểm Grafana chuyển Firing qua 1 lệnh gọi đơn giản, xem
+         methodology_note)
+      -> T3 email THẬT tới hộp thư SOC (MailHog, Created timestamp của chính
+         message — xác nhận đầu-cuối, không phải suy đoán từ rec.email_sent)
+
+MTTD báo cáo CHÍNH (đúng định nghĩa "attack -> evidence bundle được gửi đi"):
+    MTTD_to_evidence_s = T2 - T0
+Số bổ sung (đầu-cuối thật, tới khi mail nằm trong hộp thư):
+    MTTD_to_email_delivered_s = T3 - T0
+Và breakdown từng chặng (T1-T0, T2-T1, T3-T2) để thấy chặng nào chiếm phần lớn.
 
 Usage:
-  python3 tests/collect_metrics.py [--output results/metrics.json]
-
-Environment variables:
-  GW_URL    API Gateway base URL       (default: http://localhost:18080)
-  KC_URL    Keycloak base URL          (default: http://localhost:8180)
-  AI_URL    AI Analyzer base URL       (default: http://localhost:18082)
-  SOAR_URL  SOAR Engine base URL       (default: http://localhost:18091)
-  LOKI_URL  Loki base URL              (default: http://localhost:13100)
+  python3 tests/collect_metrics.py [--scenario crapi_lateral_movement.sh]
+                                    [--timeout 180] [--output results/mttd.json]
 """
 from __future__ import annotations
 
-import json
-import os
+import argparse
 import statistics
-import sys
+import json
+import subprocess
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field, asdict
+from email.header import decode_header
 from pathlib import Path
-from typing import Optional
 
-GW_URL   = os.environ.get("GW_URL",   "http://localhost:18080").rstrip("/")
-KC_URL   = os.environ.get("KC_URL",   "http://localhost:8180").rstrip("/")
-AI_URL   = os.environ.get("AI_URL",   "http://localhost:18082").rstrip("/")
-SOAR_URL = os.environ.get("SOAR_URL", "http://localhost:18091").rstrip("/")
-LOKI_URL = os.environ.get("LOKI_URL", "http://localhost:13100").rstrip("/")
-
-OUTPUT_PATH = Path(os.environ.get("METRICS_OUTPUT", "results/metrics.json"))
+REPO_ROOT = Path(__file__).resolve().parent.parent
+LOKI_URL = "http://localhost:13100"
+INCIDENT_ANALYZER_URL = "http://localhost:8091"
+MAILHOG_SOC_URL = "http://localhost:8026"
+GRAFANA_URL = "http://localhost:3000"
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _post(url: str, body: dict) -> dict:
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
-
-
-def _get(url: str) -> dict:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
-
-
-KC_ADMIN_PASS = os.environ.get("KEYCLOAK_ADMIN_PASSWORD", "ztlab-admin-2026")
-_api_gateway_secret_cache: str = ""
-
-
-def _api_gateway_client_secret() -> str:
-    # web-portal client has directAccessGrantsEnabled=false (Zero Trust hardening —
-    # browser PKCE flow only), so scripted token grants must use api-gateway instead,
-    # which requires its client secret fetched via the Keycloak admin API.
-    global _api_gateway_secret_cache
-    if _api_gateway_secret_cache:
-        return _api_gateway_secret_cache
-    data = urllib.parse.urlencode({
-        "grant_type": "password",
-        "client_id": "admin-cli",
-        "username": "admin",
-        "password": KC_ADMIN_PASS,
-    }).encode()
-    req = urllib.request.Request(
-        f"{KC_URL}/realms/master/protocol/openid-connect/token",
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            admin_token = json.loads(resp.read()).get("access_token", "")
-        if not admin_token:
-            return ""
-        req = urllib.request.Request(
-            f"{KC_URL}/admin/realms/ztlab/clients?clientId=api-gateway",
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            clients = json.loads(resp.read())
-        _api_gateway_secret_cache = clients[0]["secret"] if clients else ""
-    except Exception:
-        return ""
-    return _api_gateway_secret_cache
-
-
-def _keycloak_token(username: str = "testuser01", password: str = "Test1234!") -> str:
-    secret = _api_gateway_client_secret()
-    if not secret:
-        return ""
-    data = urllib.parse.urlencode({
-        "grant_type": "password",
-        "client_id": "api-gateway",
-        "client_secret": secret,
-        "username": username,
-        "password": password,
-    }).encode()
-    req = urllib.request.Request(
-        f"{KC_URL}/realms/ztlab/protocol/openid-connect/token",
-        data=data,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read()).get("access_token", "")
-    except Exception:
-        return ""
-
-
-def _inject_attack_log(source: str, message: str) -> tuple[float, dict]:
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    t0 = time.time()
-    result = _post(f"{AI_URL}/analyze", {
-        "source": source,
-        "logs": [{
-            "timestamp": ts,
-            "message": message,
-            "labels": {"namespace": "financial", "app": "api-gateway", "job": "kubernetes-pods"},
-        }],
+def _loki_first_ts(query: str, start_s: int, end_s: int) -> float | None:
+    """Timestamp (epoch giây, float) của dòng log SỚM NHẤT khớp query trong
+    [start_s, end_s] — dùng timestamp THẬT của log (Loki trả nanosecond epoch
+    làm key của mỗi value), không phải lúc script gọi Loki."""
+    qs = urllib.parse.urlencode({
+        "query": query, "start": f"{start_s}000000000", "end": f"{end_s}000000000",
+        "limit": 1000, "direction": "forward",
     })
-    elapsed = time.time() - t0
-    return elapsed, result
-
-
-# ── MTTD ─────────────────────────────────────────────────────────────────────
-
-ATTACK_PROBES = [
-    ("mttd_brute_force",
-     "login_failed invalid_credentials attempt=21 username=admin source_ip=10.9.8.1"),
-    ("mttd_lateral_movement",
-     "lateral_movement invalid_svid spiffe://ztlab.local/ns/financial/sa/wrong source denied"),
-    ("mttd_port_scan",
-     "port scan nmap detected syn scan source_ip=10.9.8.99 ports_tried=1024"),
-    ("mttd_fraud_bypass",
-     "fraud_gate_bypass payment_blocked score=85 source_ip=10.9.8.50 amount=800000000"),
-    ("mttd_exfiltration",
-     "bytes_sent=8388608 path=/accounts/ACC-1001/history method=GET source_ip=10.9.8.77"),
-]
-
-
-def measure_mttd() -> dict:
-    print("  [MTTD] injecting attack logs and timing AI detection...")
-    times: list[float] = []
-    detected = 0
-    for source, msg in ATTACK_PROBES:
-        elapsed, result = _inject_attack_log(source, msg)
-        verdict = result.get("verdict", "clean")
-        if verdict in ("malicious", "suspicious"):
-            times.append(elapsed)
-            detected += 1
-        else:
-            print(f"    WARNING: {source} not detected (verdict={verdict})")
-    if not times:
-        return {"error": "no attacks detected", "detected": 0, "total": len(ATTACK_PROBES)}
-    return {
-        "detected": detected,
-        "total": len(ATTACK_PROBES),
-        "mean_seconds": round(statistics.mean(times), 3),
-        "median_seconds": round(statistics.median(times), 3),
-        "min_seconds": round(min(times), 3),
-        "max_seconds": round(max(times), 3),
-    }
-
-
-# ── MTTR ─────────────────────────────────────────────────────────────────────
-
-def measure_mttr() -> dict:
-    print("  [MTTR] checking SOAR pending→approval→execution cycle...")
-    # Inject a high-severity attack to create a pending alert
-    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    t_inject = time.time()
-    result = _post(f"{AI_URL}/analyze", {
-        "source": "mttr_probe",
-        "logs": [{
-            "timestamp": ts,
-            "message": "critical lateral_movement invalid_svid spiffe://ztlab.local/ns/financial/sa/attacker blocked privilege escalation cap_sys_admin",
-            "labels": {"namespace": "financial", "app": "api-gateway", "job": "kubernetes-pods"},
-        }],
-    })
-
-    severity = result.get("severity", "")
-    alert_id = result.get("alert_id", "")
-
-    if not alert_id:
-        # Check latest pending alert
-        try:
-            pending_list = _get(f"{AI_URL}/pending")
-            if pending_list:
-                alert_id = pending_list[0].get("alert_id", "")
-        except Exception:
-            pass
-
-    if not alert_id:
-        return {
-            "note": "no pending alert created (severity may be below threshold or SOAR in dry-run)",
-            "inject_to_verdict_seconds": round(time.time() - t_inject, 3),
-        }
-
-    t_pending = time.time()
-    # Simulate admin approval
     try:
-        approved = _post(f"{AI_URL}/pending/{alert_id}/approve", {"note": "mttr measurement"})
-        t_approved = time.time()
-        status = approved.get("status", "unknown")
-        return {
-            "alert_id": alert_id,
-            "severity": severity,
-            "inject_to_pending_seconds": round(t_pending - t_inject, 3),
-            "pending_to_approved_seconds": round(t_approved - t_pending, 3),
-            "inject_to_approved_seconds": round(t_approved - t_inject, 3),
-            "final_status": status,
-        }
-    except Exception as exc:
-        return {
-            "alert_id": alert_id,
-            "error": str(exc),
-            "inject_to_pending_seconds": round(t_pending - t_inject, 3),
-        }
+        with urllib.request.urlopen(f"{LOKI_URL}/loki/api/v1/query_range?{qs}", timeout=10) as r:
+            data = json.load(r)
+    except Exception:
+        return None
+    best = None
+    for stream in data.get("data", {}).get("result", []):
+        for ts_ns, _line in stream.get("values", []):
+            t = int(ts_ns) / 1e9
+            if best is None or t < best:
+                best = t
+    return best
 
 
-# ── FPR / FNR ─────────────────────────────────────────────────────────────────
-
-BENIGN_LOGS = [
-    "payment processed amount=50000 from=ACC-1001 to=ACC-2001 status=ok",
-    "health check GET /health 200 duration_ms=2",
-    "jwt_verified user=testuser01 exp_in=3540s",
-    "opa_allow path=/payments method=POST spiffe=payment-service",
-    "transaction committed txn_id=TXN-9999 duration_ms=50",
-    "prometheus_scrape /metrics 200 15k",
-    "liveness_probe GET /health 200",
-    "spire_svid_renewed ttl=3600 workload=core-banking",
-]
-
-ATTACK_LOGS = [
-    ("attack_01", "login_failed attempt=25 username=admin brute_force source_ip=10.0.0.1"),
-    ("attack_02", "fraud_gate_bypass score=90 amount=999000000 channel=tor"),
-    ("attack_03", "lateral_movement invalid_svid denied spiffe://bad/path"),
-    ("attack_04", "port scan nmap syn scan source_ip=10.9.8.2 ports=65535"),
-    ("attack_05", "privilege escalation setuid /bin/sh cap_sys_admin"),
-    ("attack_06", "bytes_sent=16777216 data_exfiltration path=/accounts/export"),
-    ("attack_07", "xmrig cryptomining cpu=98% stratum+tcp://pool.example.com"),
-    ("attack_08", "sqlmap union select * from accounts where 1=1 --"),
-]
-
-
-def measure_fpr_fnr() -> dict:
-    print("  [FPR/FNR] testing detection accuracy on benign and attack samples...")
-    false_positives = 0
-    for msg in BENIGN_LOGS:
+def _poll_evidence_bundle(attack_type_hint: str, alert_name_hint: str, after_s: float, timeout: float) -> dict | None:
+    """Poll GET /evidence tới khi thấy bản ghi mới có ts > after_s khớp
+    attack_type/alert_name — trả về cả record lẫn thời điểm client-side lần
+    đầu thấy nó (không dùng để tính MTTD, chỉ để log tiến độ)."""
+    deadline = time.time() + timeout
+    seen_ids: set[str] = set()
+    while time.time() < deadline:
         try:
-            _, result = _inject_attack_log("fpr_test", msg)
-            if result.get("verdict") in ("malicious", "suspicious"):
-                false_positives += 1
-                print(f"    FP: benign log flagged: {msg[:60]}")
+            with urllib.request.urlopen(f"{INCIDENT_ANALYZER_URL}/evidence", timeout=8) as r:
+                items = json.load(r)
         except Exception:
-            pass
+            items = []
+        for rec in items:
+            if rec["evidence_id"] in seen_ids:
+                continue
+            seen_ids.add(rec["evidence_id"])
+            ts_epoch = _iso_to_epoch(rec["ts"])
+            if ts_epoch is None or ts_epoch < after_s - 5:
+                continue  # bundle cũ từ trước lần chạy này
+            if attack_type_hint and attack_type_hint not in rec.get("attack_type", ""):
+                continue
+            return rec
+        time.sleep(3)
+    return None
 
-    true_positives = 0
-    false_negatives = 0
-    for source, msg in ATTACK_LOGS:
+
+def _iso_to_epoch(iso: str) -> float | None:
+    try:
+        import datetime
+        return datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _find_mailhog_message(alert_name_hint: str, after_s: float, timeout: float) -> dict | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         try:
-            _, result = _inject_attack_log(source, msg)
-            if result.get("verdict") in ("malicious", "suspicious"):
-                true_positives += 1
-            else:
-                false_negatives += 1
-                print(f"    FN: attack not detected: {msg[:60]}")
+            with urllib.request.urlopen(f"{MAILHOG_SOC_URL}/api/v2/messages?limit=20", timeout=8) as r:
+                data = json.load(r)
         except Exception:
-            false_negatives += 1
+            data = {"items": []}
+        for m in data.get("items", []):
+            created = _iso_to_epoch(m.get("Created", ""))
+            if created is None or created < after_s - 5:
+                continue
+            raw_subj = m["Content"]["Headers"].get("Subject", [""])[0]
+            try:
+                subj = str(decode_header(raw_subj)[0][0])
+                if isinstance(decode_header(raw_subj)[0][0], bytes):
+                    subj = decode_header(raw_subj)[0][0].decode(decode_header(raw_subj)[0][1] or "utf-8")
+            except Exception:
+                subj = raw_subj
+            if alert_name_hint.lower() in subj.lower():
+                return {"created_epoch": created, "subject": subj}
+        time.sleep(3)
+    return None
 
-    total_benign = len(BENIGN_LOGS)
-    total_attack = len(ATTACK_LOGS)
-    fpr = round(false_positives / total_benign, 4) if total_benign else 0.0
-    fnr = round(false_negatives / total_attack, 4) if total_attack else 0.0
-
-    return {
-        "benign_tested": total_benign,
-        "attack_tested": total_attack,
-        "false_positives": false_positives,
-        "false_negatives": false_negatives,
-        "true_positives": true_positives,
-        "fpr": fpr,
-        "fnr": fnr,
-        "precision": round(true_positives / (true_positives + false_positives), 4) if (true_positives + false_positives) > 0 else 1.0,
-        "recall": round(true_positives / total_attack, 4) if total_attack else 0.0,
-    }
-
-
-# ── Security Overhead ─────────────────────────────────────────────────────────
-
-def measure_security_overhead() -> dict:
-    print("  [OVH] measuring latency contribution of security pipeline...")
-    token = _keycloak_token()
-    if not token:
-        return {"note": "Keycloak unavailable, skipping overhead measurement"}
-
-    headers_with_auth = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    samples_auth: list[float] = []
-    samples_noauth: list[float] = []
-
-    # Authenticated path (goes through Envoy mTLS + OPA + JWT verification)
-    for _ in range(10):
-        req = urllib.request.Request(f"{GW_URL}/accounts/ACC-1001", headers=headers_with_auth)
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=5) as _:
-                pass
-        except urllib.error.HTTPError:
-            pass
-        except Exception:
-            pass
-        samples_auth.append(time.time() - t0)
-        time.sleep(0.05)
-
-    # Health endpoint (minimal security path)
-    for _ in range(10):
-        req = urllib.request.Request(f"{GW_URL}/health")
-        t0 = time.time()
-        try:
-            with urllib.request.urlopen(req, timeout=5) as _:
-                pass
-        except Exception:
-            pass
-        samples_noauth.append(time.time() - t0)
-        time.sleep(0.05)
-
-    if not samples_auth or not samples_noauth:
-        return {"note": "no samples collected"}
-
-    mean_auth    = statistics.mean(samples_auth)
-    mean_noauth  = statistics.mean(samples_noauth)
-    overhead_ms  = round((mean_auth - mean_noauth) * 1000, 2)
-
-    return {
-        "samples": 10,
-        "auth_path_mean_ms":    round(mean_auth * 1000, 2),
-        "health_path_mean_ms":  round(mean_noauth * 1000, 2),
-        "security_overhead_ms": overhead_ms,
-        "overhead_pct": round((mean_auth - mean_noauth) / mean_auth * 100, 1) if mean_auth > 0 else 0.0,
-    }
-
-
-# ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    print("ZTLab Security Metrics Collection")
-    print(f"  GW_URL  : {GW_URL}")
-    print(f"  AI_URL  : {AI_URL}")
-    print()
+    ap = argparse.ArgumentParser(description="ZTLab MTTD — chuỗi thật OPA deny -> Loki -> Grafana -> incident-analyzer -> email")
+    ap.add_argument("--scenario", default="crapi_lateral_movement.sh",
+                     help="script trong tests/ tạo tấn công THẬT (mặc định: Lateral Movement, đã verify sống bắn alert)")
+    ap.add_argument("--attack-type-hint", default="lateral_movement")
+    ap.add_argument("--alert-name-hint", default="Lateral Movement")
+    ap.add_argument("--opa-deny-query", default='{job="opa-decisions", opa_result="false"} |~ "/workshop/api/shop/orders"',
+                     help="LogQL cho MỐC T1 (dòng log SỚM NHẤT xác nhận tín hiệu tấn công đã tới Loki) — "
+                          "mặc định là opa-decisions cho kịch bản OPA-based; đổi thành query Keycloak "
+                          "LOGIN_ERROR (job=envoy-access hoặc namespace=identity) cho brute_force, v.v.")
+    ap.add_argument("--timeout", type=float, default=180.0, help="giây chờ evidence bundle + email xuất hiện")
+    ap.add_argument("--output", default="results/mttd.json")
+    ap.add_argument("--runs", type=int, default=1,
+                    help="số lượt (vòng 2026-09-29: >= 10); mỗi lượt chờ rule về inactive trước khi tấn công")
+    ap.add_argument("--rule-title", default="",
+                    help="tiền tố tiêu đề rule Grafana để chờ về inactive giữa các lượt (vd 'crAPI — Lateral Movement')")
+    ap.add_argument("--settle-timeout", type=float, default=900.0,
+                    help="giây tối đa chờ rule về inactive trước mỗi lượt")
+    args = ap.parse_args()
 
-    # Verify AI Analyzer is reachable
+    print("ZTLab MTTD — đo chuỗi thật (Phần 1.5; nhiều lượt: vòng 2026-09-29)")
+    print(f"  kịch bản: {args.scenario}  runs={args.runs}  rule={args.rule_title or '-'}")
+    runs = []
+    for i in range(1, args.runs + 1):
+        print(f"\n── lượt {i}/{args.runs} ──")
+        if args.rule_title:
+            st = _wait_rule_inactive(args.rule_title, args.settle_timeout)
+            print(f"  rule trước lượt: {st}")
+        r = run_once(args)
+        r["run"] = i
+        runs.append(r)
+        Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.output).write_text(json.dumps(_summary(args, runs), indent=2, ensure_ascii=False))
+    summ = _summary(args, runs)
+    print(f"\nGhi kết quả vào {args.output}")
+    print("\n=== MTTD (trung vị [min–max], n lượt có bundle) ===")
+    for k, v in summ["summary"].items():
+        print(f"  {k:<42}: {v}")
+    return 0 if summ["summary"]["mttd_to_evidence_s"]["n"] == args.runs else 1
+
+
+def _grafana_pass() -> str:
+    import base64
+    out = subprocess.run(["kubectl", "--context", "ctx-aws", "-n", "plg-stack", "get", "secret",
+                          "grafana-admin-secret", "-o", "jsonpath={.data.admin-password}"],
+                         capture_output=True, text=True, timeout=30)
+    return base64.b64decode(out.stdout.strip()).decode()
+
+
+def _rule_state(title_prefix: str) -> str:
+    import base64
+    req = urllib.request.Request(f"{GRAFANA_URL}/api/prometheus/grafana/api/v1/rules")
+    req.add_header("Authorization", "Basic " + base64.b64encode(f"admin:{_grafana_pass()}".encode()).decode())
     try:
-        _get(f"{AI_URL}/health")
-    except Exception as exc:
-        print(f"ERROR: AI Analyzer unreachable at {AI_URL}: {exc}", file=sys.stderr)
-        return 1
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.load(r)
+    except Exception as e:  # noqa: BLE001
+        return f"error:{e}"
+    for g in data["data"]["groups"]:
+        for rule in g["rules"]:
+            if rule["name"].startswith(title_prefix):
+                return rule["state"]
+    return "missing"
 
-    results: dict = {"collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 
-    print("[1/4] MTTD — Mean Time To Detect")
-    results["mttd"] = measure_mttd()
-    print(f"      → {results['mttd']}\n")
+def _wait_rule_inactive(title_prefix: str, timeout: float) -> str:
+    """H14: hai lượt cùng kịch bản chỉ tách được thành 2 thông báo khi lượt trước
+    đã về inactive (rule sum() không nhãn → cùng alert instance; nếu còn firing,
+    lượt sau KHÔNG sinh bundle mới cho tới repeat_interval)."""
+    deadline = time.time() + timeout
+    st = _rule_state(title_prefix)
+    while st != "inactive" and time.time() < deadline:
+        time.sleep(15)
+        st = _rule_state(title_prefix)
+    if st == "inactive":
+        time.sleep(35)  # > group_interval 30 s: nhóm Alertmanager cũ đã flush resolved và bị xoá
+    return st
 
-    print("[2/4] MTTR — Mean Time To Respond")
-    results["mttr"] = measure_mttr()
-    print(f"      → {results['mttr']}\n")
 
-    print("[3/4] FPR/FNR — Detection Accuracy")
-    results["detection_accuracy"] = measure_fpr_fnr()
-    print(f"      → {results['detection_accuracy']}\n")
+def _stat(vals: list) -> dict:
+    v = sorted(x for x in vals if x is not None)
+    if not v:
+        return {"n": 0}
+    return {"n": len(v), "median": round(statistics.median(v), 2), "min": round(v[0], 2), "max": round(v[-1], 2)}
 
-    print("[4/4] Security Overhead — Latency Impact")
-    results["security_overhead"] = measure_security_overhead()
-    print(f"      → {results['security_overhead']}\n")
 
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(json.dumps(results, indent=2))
-    print(f"Results written to {OUTPUT_PATH}")
+def _summary(args, runs: list[dict]) -> dict:
+    return {
+        "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "scenario": args.scenario,
+        "runs_requested": args.runs,
+        "summary": {
+            "mttd_to_evidence_s": _stat([r["mttd_to_evidence_s"] for r in runs]),
+            "attack_duration_s": _stat([r["attack_duration_s"] for r in runs]),
+            "detect_after_attack_end_s": _stat([r["detect_after_attack_end_s"] for r in runs]),
+            "detect_after_first_signal_s": _stat([r["breakdown_s"]["opa_deny_to_evidence_bundle"] for r in runs]),
+            "mttd_to_email_delivered_s": _stat([r["mttd_to_email_delivered_s"] for r in runs]),
+        },
+        "runs": runs,
+    }
 
-    # Print summary table
-    print("\n=== METRICS SUMMARY ===")
-    mttd = results["mttd"]
-    if "mean_seconds" in mttd:
-        print(f"  MTTD          : {mttd['mean_seconds']}s mean  ({mttd['detected']}/{mttd['total']} detected)")
-    mttr = results["mttr"]
-    if "inject_to_approved_seconds" in mttr:
-        print(f"  MTTR          : {mttr['inject_to_approved_seconds']}s (inject→approve)")
-    acc = results["detection_accuracy"]
-    print(f"  FPR           : {acc.get('fpr', 'n/a')} ({acc.get('false_positives',0)}/{acc.get('benign_tested',0)} benign flagged)")
-    print(f"  FNR           : {acc.get('fnr', 'n/a')} ({acc.get('false_negatives',0)}/{acc.get('attack_tested',0)} attacks missed)")
-    print(f"  Precision     : {acc.get('precision', 'n/a')}")
-    print(f"  Recall        : {acc.get('recall', 'n/a')}")
-    ovh = results["security_overhead"]
-    if "security_overhead_ms" in ovh:
-        print(f"  Sec Overhead  : +{ovh['security_overhead_ms']}ms ({ovh['overhead_pct']}%)")
 
-    return 0
+def run_once(args) -> dict:
+    t0 = time.time()
+    proc = subprocess.run(["bash", str(REPO_ROOT / "tests" / args.scenario)],
+                           capture_output=True, text=True, timeout=120)
+    t0_attack_end = time.time()
+    print(f"  [T0={t0:.0f}] tấn công chạy xong lúc {t0_attack_end:.0f} (exit={proc.returncode})")
+    if proc.returncode != 0:
+        print("  CẢNH BÁO: script tấn công thoát khác 0 — vẫn tiếp tục đo (có thể vẫn sinh đủ log để Grafana fire)")
+
+    print("  chờ OPA decision log (deny) xuất hiện trên Loki...")
+    time.sleep(5)
+    t1 = _loki_first_ts(args.opa_deny_query, int(t0) - 5, int(time.time()) + 5)
+    if t1:
+        print(f"  [T1={t1:.2f}] OPA decision log (deny) đầu tiên — độ trễ tới đây: {t1 - t0:.2f}s")
+    else:
+        print("  KHÔNG tìm thấy OPA decision log deny khớp query trong cửa sổ — MTTD từng chặng sẽ thiếu T1")
+
+    print(f"  chờ evidence bundle (incident-analyzer, timeout={args.timeout:.0f}s)...")
+    rec = _poll_evidence_bundle(args.attack_type_hint, args.alert_name_hint, t0, args.timeout)
+    t2 = _iso_to_epoch(rec["ts"]) if rec else None
+    if t2:
+        print(f"  [T2={t2:.2f}] evidence bundle {rec['evidence_id']} — MTTD (attack->evidence) = {t2 - t0:.2f}s")
+    else:
+        print("  KHÔNG thấy evidence bundle mới trong timeout — kiểm tra Grafana alert rule có Firing không "
+              "(http://localhost:3000/alerting/list) và incident-analyzer có nhận webhook không.")
+
+    email = None
+    t3 = None
+    if t2:
+        print("  chờ email tới hộp thư SOC (MailHog)...")
+        email = _find_mailhog_message(args.alert_name_hint, t2, min(args.timeout, 60))
+        t3 = email["created_epoch"] if email else None
+        if t3:
+            print(f"  [T3={t3:.2f}] email nhận được — MTTD đầu-cuối (attack->email) = {t3 - t0:.2f}s")
+        else:
+            print("  KHÔNG thấy email khớp trong MailHog trong thời gian chờ (rec.email_sent có thể vẫn true — "
+                  "kiểm tra SMTP tới MailHog riêng)")
+
+    result = {
+        "collected_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "scenario": args.scenario,
+        "methodology": (
+            "Đo chuỗi THẬT: T0=tấn công script chạy xong (crapi_*.sh thật, không "
+            "phải log giả) -> T1=timestamp THẬT của dòng OPA decision log deny đầu "
+            "tiên trên Loki (xác nhận OPA+Promtail+Loki) -> T2=trường `ts` của "
+            "evidence bundle mới trên incident-analyzer GET /evidence (đã bao hàm "
+            "chu kỳ eval Grafana + webhook + build bundle, KHÔNG tách riêng được "
+            "thời điểm Grafana chuyển Firing bằng 1 lệnh gọi đơn giản) -> "
+            "T3=Created timestamp THẬT của email trên MailHog SOC (xác nhận SMTP "
+            "dispatch thành công, không suy đoán từ cờ email_sent). MTTD chính "
+            "(đúng định nghĩa đề cương 'attack -> evidence bundle được gửi đi') = "
+            "T2-T0. MTTR CŨ đã bị bỏ hẳn — A4 xoá soar-engine/ai-analyzer, không "
+            "còn hành động phản ứng tự động nào để đo 'thời gian tới thực thi'."
+        ),
+        "t0_attack_epoch": t0,
+        "t1_opa_deny_epoch": t1,
+        "t2_evidence_created_epoch": t2,
+        "t3_email_received_epoch": t3,
+        "evidence_id": rec["evidence_id"] if rec else None,
+        "alert_name": rec["alert_name"] if rec else None,
+        "email_subject": email["subject"] if email else None,
+        "mttd_to_evidence_s": round(t2 - t0, 2) if t2 else None,
+        "mttd_to_email_delivered_s": round(t3 - t0, 2) if t3 else None,
+        # Vòng 2026-09-29 (H14): tách thời gian bản thân script tấn công chạy (Brute
+        # Force ~37 s) khỏi thời gian hệ thống phát hiện.
+        "t0_attack_end_epoch": t0_attack_end,
+        "attack_duration_s": round(t0_attack_end - t0, 2),
+        "detect_after_attack_end_s": round(t2 - t0_attack_end, 2) if t2 else None,
+        "breakdown_s": {
+            "attack_to_opa_deny": round(t1 - t0, 2) if t1 else None,
+            "opa_deny_to_evidence_bundle": round(t2 - t1, 2) if (t1 and t2) else None,
+            "evidence_bundle_to_email": round(t3 - t2, 2) if (t2 and t3) else None,
+        },
+    }
+
+    return result
 
 
 if __name__ == "__main__":

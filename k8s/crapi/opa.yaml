@@ -26,7 +26,7 @@ spec:
     matchLabels: { app: opa }
   template:
     metadata:
-      labels: { app: opa }
+      labels: { app: opa, ztlab.io/nonroot-enforced: "true" }
       annotations:
         # Phần 1.2 (remediation 2026-09, BẪY 2 KEHOACH-THAYDOI-HETHONG.md):
         # opa-server AWS gọi Keycloak (JWKS + OIDC discovery, http.send) —
@@ -38,10 +38,18 @@ spec:
         # k8s:ns/k8s:sa selector (scripts/ensure-spire-entries.sh), không
         # phải theo annotation này (annotation ở bff/waf chỉ có giá trị tài
         # liệu hoá, không có tác dụng chức năng — verify sống Phần 1.3).
-        # opa-service-plaintext DestinationRule + PeerAuthentication PERMISSIVE
-        # dưới đây GIỮ NGUYÊN hành vi INBOUND (mọi caller ext_authz hiện tại
-        # vẫn plaintext, không phá vỡ chuỗi PDP đang chạy) — chỉ EGRESS của
-        # opa (tới Keycloak, DestinationRule riêng phía AWS) mới đổi sang mТLS.
+        #
+        # Phần 1.2 remediation (2026-09-18 — sửa lỗ thật): INBOUND của opa
+        # (cổng 9191, kênh ext_authz — chính là "PDP") nay STRICT mТLS +
+        # AuthorizationPolicy action:ALLOW liệt kê đúng SPIFFE ID được phép
+        # gọi (opa-strict/opa-service-mtls/opa-inbound-allow dưới đây). Lý do
+        # trước đây để plaintext ("bọc hop gọi PDP bằng chính PDP là vòng lặp
+        # logic") CHỈ đúng cho AuthorizationPolicy action: CUSTOM (ext_authz —
+        # bọc bằng CUSTOM thật sự gọi lại chính OPA, vòng lặp thật) — KHÔNG
+        # áp dụng cho action: ALLOW, loại này Envoy đánh giá NATIVE tại chỗ
+        # (khớp SPIFFE trong cert đã có sẵn từ mТLS handshake), không gọi ra
+        # ngoài, nên không có vòng lặp. Cổng 8181 (REST/health/management API)
+        # GIỮ PERMISSIVE có chủ đích — xem opa-strict portLevelMtls bên dưới.
         sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
         sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
     spec:
@@ -49,6 +57,13 @@ spec:
       containers:
         - name: opa
           image: openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517
+          # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) — OPA
+          # chỉ đọc ConfigMap readOnly + ghi decision log ra console (stdout),
+          # không cần ghi đĩa/root. Verify sống: pod Running/Ready với UID này.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
           args:
             - "run"
             - "--server"
@@ -103,34 +118,101 @@ spec:
     - { name: http, port: 8181, targetPort: 8181 }
     - { name: grpc-authz, port: 9191, targetPort: 9191 }
 ---
-# opa-service KHÔNG chấp nhận mТLS ở chiều INBOUND (client istio-proxy phải
-# đi plaintext tới nó, như trước Phần 1.2) — chỉ EGRESS của opa (Phần 1.2,
-# tới Keycloak) mới có SVID thật.
+# Phần 1.2 remediation (2026-09-18): opa-service nay đòi mТLS ở INBOUND cho
+# cổng 9191 (kênh ext_authz — "PDP thật") — mọi caller (bff/waf/crapi-community/
+# crapi-workshop/crapi-identity) đã ở trong mesh từ Phần 1.2 trước nên tự động
+# dùng ISTIO_MUTUAL (không cần đổi gì ở phía caller). subjectAltNames liệt kê
+# CẢ 2 định danh vì file này dùng chung 2 cluster (aws/opa khi áp trên AWS,
+# openstack/opa khi áp trên OpenStack — DestinationRule chỉ thật sự cần
+# validate định danh của cluster đang áp, liệt kê thêm cái còn lại vô hại).
+# portLevelSettings cho 8181: GIỮ plaintext có chủ đích — security-healthcheck
+# CronJob (ns=spire, KHÔNG vào mesh — control-plane bootstrap, xem lý do
+# spire/spire-agent tự thân không mesh hoá) gọi GET /health trần qua L4
+# NetworkPolicy (aws/os-allow-list.yaml) từ trước A1. Đưa CronJob 45s này vào
+# mesh chỉ để lấy mТLS cho 1 lệnh GET /health rủi ro hơn lợi ích (race sidecar
+# readiness trong vòng đời pod rất ngắn của CronJob). Thay vào đó khoá đúng
+# thứ task 1.2 gọi tên là rủi ro thật — quyền GHI qua REST API — bằng
+# AuthorizationPolicy bên dưới (opa-inbound-allow): cổng 8181 chỉ nhận GET
+# /health, mọi method khác (đặc biệt PUT/POST /v1/policies, /v1/data — đường
+# chiếm mặt phẳng chính sách) bị từ chối vô điều kiện, kể cả nguồn có SPIFFE
+# hợp lệ. Chính sách OPA thật nạp qua ConfigMap + pod restart
+# (scripts/deploy-crapi.sh deploy_crapi_opa), không qua REST API, nên khoá
+# ghi không mất tính năng nào.
 apiVersion: networking.istio.io/v1
 kind: DestinationRule
 metadata:
-  name: opa-service-plaintext
+  name: opa-service-mtls
   namespace: crapi
 spec:
   host: opa-service.crapi.svc.cluster.local
   trafficPolicy:
     tls:
-      mode: DISABLE
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/aws/opa"
+        - "spiffe://ztlab.local/openstack/opa"
+    portLevelSettings:
+      - port: { number: 8181 }
+        tls:
+          mode: DISABLE
 ---
-# Phần 1.2: opa-server nay có sidecar (egress tới Keycloak) nhưng INBOUND
-# (ext_authz gRPC/HTTP từ bff/waf/crapi-web/community/workshop/identity) phải
-# GIỮ NGUYÊN plaintext — nếu không override, ns default STRICT sẽ áp cho
-# opa's inbound và làm gãy toàn bộ PDP (mọi caller đang cấu hình DestinationRule
-# DISABLE cho host này, gửi plaintext, sẽ bị STRICT từ chối → fail-closed 503
-# toàn hệ thống). PERMISSIVE ở đây chấp nhận CẢ plaintext (mọi caller hiện tại,
-# không đổi) lẫn mТLS (nếu tương lai có caller khác chọn mã hoá hop này).
 apiVersion: security.istio.io/v1
 kind: PeerAuthentication
 metadata:
-  name: opa-permissive
+  name: opa-strict
   namespace: crapi
 spec:
   selector:
     matchLabels: { app: opa }
   mtls:
-    mode: PERMISSIVE
+    mode: STRICT
+  portLevelMtls:
+    8181:
+      mode: PERMISSIVE
+---
+# action: ALLOW — Envoy đánh giá NATIVE tại chỗ (khớp SPIFFE trong cert mТLS
+# đã bắt tay xong), KHÔNG gọi ra ngoài → không có vòng lặp logic với chính
+# PDP (khác action: CUSTOM/ext_authz). Danh sách principals KHÔNG suy từ
+# service-graph-crapi.yaml (graph có 1 edge sai — aws/crapi-web -> aws/opa —
+# không khớp traffic thật, xem AUDIT-THUC-THI.md Phần 2) mà đo TRỰC TIẾP
+# trên Loki job=envoy-access, path="/envoy.service.auth.v3.Authorization/Check",
+# đối chiếu source_ip -> pod thật (2026-09-18): bff/waf/crapi-community/
+# crapi-workshop (AWS) + crapi-identity/keycloak (OpenStack — keycloak có
+# CUSTOM ext_authz riêng của chính nó, k8s/identity/keycloak-mesh-policies.yaml
+# keycloak-opa-authz, suýt bị bỏ sót nếu chỉ đọc istio-policies.yaml/waf.yaml).
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: opa-inbound-allow
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: opa }
+  action: ALLOW
+  rules:
+    # Kênh ext_authz gRPC thật (9191) — chỉ consumer OPA thật, qua SPIFFE.
+    - to:
+        - operation: { ports: ["9191"] }
+      from:
+        - source:
+            # LƯU Ý (bug thật gặp khi verify sống 2026-09-18): field này KHÔNG
+            # nhận URI "spiffe://..." đầy đủ — Istio tự thêm scheme "spiffe://"
+            # khi biên dịch sang Envoy RBAC, viết cả scheme ở đây ra
+            # "spiffe://spiffe://..." (double-prefix), KHÔNG khớp principal
+            # thật trình bởi mТLS → mọi request bị RBAC deny câm lặng (403,
+            # không log lý do rõ ràng — đúng lớp lỗi "chính sách tồn tại
+            # nhưng không thực thi đúng ý" mà Phần 2 cảnh báo). Chỉ ghi
+            # "<trust-domain>/<cloud>/<service>", không có scheme.
+            principals:
+              - "ztlab.local/aws/waf"
+              - "ztlab.local/aws/bff"
+              - "ztlab.local/aws/crapi-community"
+              - "ztlab.local/aws/crapi-workshop"
+              - "ztlab.local/openstack/crapi-identity"
+              - "ztlab.local/openstack/keycloak"
+    # Cổng 8181 — CHỈ GET /health (xem giải thích portLevelSettings ở
+    # DestinationRule opa-service-mtls). Không "from" tức áp cho mọi nguồn kể
+    # cả plaintext chưa xác thực (security-healthcheck) — nhưng CHỈ đúng 1
+    # path/1 method này, mọi request khác tới 8181 bị từ chối vô điều kiện.
+    - to:
+        - operation: { ports: ["8181"], methods: ["GET"], paths: ["/health"] }

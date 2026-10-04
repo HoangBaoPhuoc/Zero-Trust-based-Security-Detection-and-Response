@@ -113,7 +113,7 @@ spec:
     matchLabels: { app: waf }
   template:
     metadata:
-      labels: { app: waf }
+      labels: { app: waf, ztlab.io/nonroot-enforced: "true" }
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/waf"
         sidecar.istio.io/inject: "true"
@@ -125,6 +125,15 @@ spec:
         - name: waf
           image: owasp/modsecurity-crs@sha256:1503b5ab7b8f8799d1525cd2a1690dfcdd5cc251a705523aa5783dd20e038b1b
           imagePullPolicy: IfNotPresent
+          # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) —
+          # image này ĐÃ chạy như UID 101 (nginx) mặc định (xác nhận sống:
+          # `exec ... id` -> uid=101(nginx)), chỉ thiếu khai báo tường minh để
+          # Gatekeeper ZTLabRequireNonRoot công nhận. Không đổi UID thật đang
+          # chạy — chỉ khai đúng cái đã đúng từ trước.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            allowPrivilegeEscalation: false
           ports:
             - { name: http, containerPort: 8080 }
           env:

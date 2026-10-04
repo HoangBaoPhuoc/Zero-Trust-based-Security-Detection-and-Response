@@ -2,10 +2,24 @@
 # Sinh lại: python3 scripts/gen-networkpolicy.py
 #
 # T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload
-# đích, khớp đúng traffic thật đã đo (T-1.1). Egress không đổi (xem
-# aws-allow-list.yaml). LƯU Ý: NetworkPolicy này hiện KHÔNG được kube-router
-# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — xem
-# KET-QUA-KIEM-TRA.md §T-3.1 trước khi coi đây là lớp bảo vệ đang hoạt động.
+# đích, khớp đúng traffic thật đã đo (T-1.1). Egress do baseline lo (xem
+# aws-allow-list.yaml).
+#
+# HIỆU LỰC THẬT — ĐÃ SỬA CHẨN ĐOÁN (2026-09-25, phiên này đo trực tiếp
+# `nft -a list ruleset` trên node): rule podSelector/namespaceSelector ở đây
+# CÓ hiệu lực thật. Dòng `# match-set ...` trong `nft list ruleset` chỉ là cách
+# nft HIỂN THỊ match xt_set: ipset KUBE-SRC-*/KUBE-DST-* có đủ IP pod (đo
+# trực tiếp `ipset list`), counter `reject` tăng đúng khi thiếu rule cho phép,
+# và k3s tự có sẵn binary ipset ở /var/lib/rancher/k3s/data/current/bin/ipset
+# (không cần cài ipset riêng lên host) — KHÔNG phải rule chết. Chẩn
+# đoán "node thiếu ipset nên rule 0% hiệu lực" (BAOCAO-VONG-2026-09-19.md
+# §1.1/2.2) là SAI.
+#
+# Vì baseline (podSelector: {}) default-deny ingress+egress mọi pod trong ns
+# crapi, file này là nơi DUY NHẤT cấp quyền ingress nội ns theo edge — PHẢI
+# được `kubectl apply` (scripts/deploy-crapi.sh::apply_network_policies). Không
+# apply thì mọi hop nội ns (waf->bff, bff->crapi-*, ...) bị kube-router
+# `reject` SYN.
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

@@ -82,7 +82,16 @@ start_tunnels() {
       echo "AWS tunnel already listening on 127.0.0.1:${AWS_LOCAL_PORT}; skipping."
     else
       local aws_log="/tmp/ztlab-aws-k8s-tunnel.log"
-      setsid ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o BatchMode=yes         -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"         -o ConnectionAttempts=1         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o UserKnownHostsFile=/dev/null         -o StrictHostKeyChecking=no         -L "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443"         -J "${SSH_USER}@${AWS_BASTION_IP}"         "${SSH_USER}@${AWS_MASTER_IP}" >"$aws_log" 2>&1 < /dev/null &
+      # Vòng 2026-09-30: tunnel AWS chết 2 lần trong 3 giờ (ServerAlive 3×30 s hết khi
+      # đường tới Singapore chập chờn) và KHÔNG có gì dựng lại → mọi kubectl/port-forward
+      # hỏng, chuỗi đo chạy vào khoảng không. Vòng lặp tự khởi động lại ssh; PID vòng
+      # lặp lưu để `down` giết được (pkill theo chuỗi -L chỉ trúng ssh, không trúng vòng).
+      ( trap '' HUP; set +e  # subshell thừa hưởng set -e: ssh rc≠0 sẽ giết cả vòng lặp
+        while true; do
+          ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o BatchMode=yes         -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"         -o ConnectionAttempts=1         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o UserKnownHostsFile=/dev/null         -o StrictHostKeyChecking=no         -L "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443"         -J "${SSH_USER}@${AWS_BASTION_IP}"         "${SSH_USER}@${AWS_MASTER_IP}" </dev/null
+          rc=$?; echo "$(date -Is) ssh tunnel thoát (rc=$rc) — khởi động lại sau 5 s"; sleep 5
+        done ) >"$aws_log" 2>&1 &
+      echo $! > "/tmp/ztlab-k8s-tunnel-aws.loop.pid"
       if ! wait_for_local_port "$AWS_LOCAL_PORT" 20; then
         cat "$aws_log" >&2 2>/dev/null || true
         echo "Failed to start AWS tunnel on 127.0.0.1:${AWS_LOCAL_PORT}" >&2
@@ -96,7 +105,16 @@ start_tunnels() {
       echo "OpenStack tunnel already listening on 127.0.0.1:${OS_LOCAL_PORT}; skipping."
     else
       local os_log="/tmp/ztlab-openstack-k8s-tunnel.log"
-      setsid ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o BatchMode=yes         -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"         -o ConnectionAttempts=1         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o UserKnownHostsFile=/dev/null         -o StrictHostKeyChecking=no         -o ProxyCommand="ssh -i ${SSH_KEY} -o BatchMode=yes -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -o ConnectionAttempts=1 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -W %h:%p ${SSH_USER}@${OS_GATEWAY_IP}"         -L "127.0.0.1:${OS_LOCAL_PORT}:127.0.0.1:6443"         "${SSH_USER}@${OS_MASTER_IP}" >"$os_log" 2>&1 < /dev/null &
+      # Vòng 2026-09-30: tunnel AWS chết 2 lần trong 3 giờ (ServerAlive 3×30 s hết khi
+      # đường tới Singapore chập chờn) và KHÔNG có gì dựng lại → mọi kubectl/port-forward
+      # hỏng, chuỗi đo chạy vào khoảng không. Vòng lặp tự khởi động lại ssh; PID vòng
+      # lặp lưu để `down` giết được (pkill theo chuỗi -L chỉ trúng ssh, không trúng vòng).
+      ( trap '' HUP; set +e  # subshell thừa hưởng set -e: ssh rc≠0 sẽ giết cả vòng lặp
+        while true; do
+          ssh -N         -i "$SSH_KEY"         -o ExitOnForwardFailure=yes         -o BatchMode=yes         -o ConnectTimeout="$SSH_CONNECT_TIMEOUT"         -o ConnectionAttempts=1         -o ServerAliveInterval=30         -o ServerAliveCountMax=3         -o UserKnownHostsFile=/dev/null         -o StrictHostKeyChecking=no         -o ProxyCommand="ssh -i ${SSH_KEY} -o BatchMode=yes -o ConnectTimeout=${SSH_CONNECT_TIMEOUT} -o ConnectionAttempts=1 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -W %h:%p ${SSH_USER}@${OS_GATEWAY_IP}"         -L "127.0.0.1:${OS_LOCAL_PORT}:127.0.0.1:6443"         "${SSH_USER}@${OS_MASTER_IP}" </dev/null
+          rc=$?; echo "$(date -Is) ssh tunnel thoát (rc=$rc) — khởi động lại sau 5 s"; sleep 5
+        done ) >"$os_log" 2>&1 &
+      echo $! > "/tmp/ztlab-k8s-tunnel-os.loop.pid"
       if ! wait_for_local_port "$OS_LOCAL_PORT" 20; then
         cat "$os_log" >&2 2>/dev/null || true
         echo "Failed to start OpenStack tunnel on 127.0.0.1:${OS_LOCAL_PORT}" >&2
@@ -222,6 +240,7 @@ stop_cloud_tunnel() {
 
   case "$cloud" in
     aws)
+      [[ -f /tmp/ztlab-k8s-tunnel-aws.loop.pid ]] && { kill "$(cat /tmp/ztlab-k8s-tunnel-aws.loop.pid)" 2>/dev/null || true; rm -f /tmp/ztlab-k8s-tunnel-aws.loop.pid; }
       pkill -f "127.0.0.1:${AWS_LOCAL_PORT}:127.0.0.1:6443" || true
       pkill -f "${AWS_LOCAL_PORT}:${AWS_MASTER_IP}:6443" || true
       pkill -f "127.0.0.1:${AWS_LOCAL_PORT}:${AWS_MASTER_IP}:6443" || true
@@ -231,6 +250,7 @@ stop_cloud_tunnel() {
       }
       ;;
     openstack)
+      [[ -f /tmp/ztlab-k8s-tunnel-os.loop.pid ]] && { kill "$(cat /tmp/ztlab-k8s-tunnel-os.loop.pid)" 2>/dev/null || true; rm -f /tmp/ztlab-k8s-tunnel-os.loop.pid; }
       pkill -f "127.0.0.1:${OS_LOCAL_PORT}:127.0.0.1:6443" || true
       pkill -f "${OS_LOCAL_PORT}:${OS_MASTER_IP}:6443" || true
       pkill -f "127.0.0.1:${OS_LOCAL_PORT}:${OS_MASTER_IP}:6443" || true

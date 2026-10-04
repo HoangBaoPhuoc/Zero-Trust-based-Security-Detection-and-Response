@@ -36,6 +36,13 @@ spec:
     # existing alert rules' LogQL keeps working unchanged — see the matching
     # Promtail scrape job rename in k8s/plg-stack/promtail-daemonset.yaml
     # (container_name regex "envoy" → "istio-proxy").
+    # Mục 4 vòng 2026-09-29 (H2): +upstream_cluster ("inbound|..." hoặc
+    # "outbound|..."/PassthroughCluster — phân biệt dòng log phía server với
+    # phía client của cùng sidecar; `svid` = DOWNSTREAM_PEER_URI_SAN chỉ có
+    # nghĩa ở phía inbound), +response_flags (NR = không filter chain nào khớp,
+    # vd plaintext vào cổng STRICT) và +transport_failure (lý do bắt tay TLS
+    # phía downstream thất bại). Promtail suy ra nhãn `direction` từ
+    # upstream_cluster; rule mesh-integrity chỉ xét direction="inbound".
     accessLogFile: /dev/stdout
     accessLogEncoding: JSON
     accessLogFormat: |
@@ -49,7 +56,10 @@ spec:
         "source_ip": "%DOWNSTREAM_REMOTE_ADDRESS_WITHOUT_PORT%",
         "bytes_sent": "%BYTES_SENT%",
         "trace_id": "%REQ(X-REQUEST-ID)%",
-        "svid": "%DOWNSTREAM_PEER_URI_SAN%"
+        "svid": "%DOWNSTREAM_PEER_URI_SAN%",
+        "upstream_cluster": "%UPSTREAM_CLUSTER%",
+        "response_flags": "%RESPONSE_FLAGS%",
+        "transport_failure": "%DOWNSTREAM_TRANSPORT_FAILURE_REASON%"
       }
     extensionProviders:
       # OPA ext_authz cho crAPI (ns crapi). Path zta/crapi/authz/allow (AWS) /

@@ -41,19 +41,36 @@ metadata:
   labels: { app: incident-analyzer }
 spec:
   replicas: 1
+  # Phần 3.6 remediation (2026-09-19) — cùng lý do loki/grafana: PVC evidence
+  # data là ReadWriteOnce, RollingUpdate mặc định có thể deadlock lúc node ít
+  # tài nguyên trống (verify sống đúng bug này ở loki cùng phiên).
+  strategy:
+    type: Recreate
   selector:
     matchLabels: { app: incident-analyzer }
   template:
     metadata:
-      labels: { app: incident-analyzer }
+      labels: { app: incident-analyzer, ztlab.io/nonroot-enforced: "true" }
     spec:
       serviceAccountName: incident-analyzer
       automountServiceAccountToken: false
+      # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) —
+      # fsGroup ở pod level (không phải container) để kubelet chown/chmod PVC
+      # `incident-analyzer-data` cho group này — cùng mẫu ĐÃ verify sống ở
+      # k8s/plg-stack/grafana.yaml (fsGroup/runAsUser: 472). Không set fsGroup
+      # thì /data (EVIDENCE_STORE_PATH) sẽ do root sở hữu, UID non-root không
+      # ghi được — verify sống: pod Running/Ready + ghi evidence.jsonl thật.
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: incident-analyzer
           image: ztlab/incident-analyzer:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
           ports:
             - { name: http, containerPort: 8080 }
           env:
@@ -102,7 +119,11 @@ spec:
   ports:
     - { name: http, port: 8080, targetPort: http }
 ---
-# In-cluster MailHog notification sink for incident-analyzer (see header note).
+# [TEST DOUBLE — Phần 3.8] In-cluster MailHog notification sink for
+# incident-analyzer (see header note) — fake SMTP catcher standing in for a
+# real mail relay (Grafana's own alert channel uses a real SMTP secret
+# instead, see grafana-smtp-secret; this one is SOC evidence-bundle mail only,
+# intentionally never wired to a real outbound relay).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -130,6 +151,10 @@ spec:
             tcpSocket: { port: 1025 }
             initialDelaySeconds: 10
             periodSeconds: 15
+          livenessProbe:
+            tcpSocket: { port: 1025 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
           resources:
             requests: { cpu: 25m, memory: 48Mi }
             limits: { cpu: 200m, memory: 192Mi }

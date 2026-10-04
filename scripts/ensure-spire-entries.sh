@@ -40,11 +40,61 @@ log_error() { echo "[SPIRE-ENTRIES][ERROR] $*" >&2; }
 
 # Real failures must surface immediately (exit non-zero) — only "this exact
 # entry already exists" is safe to treat as success on a re-run.
+# --- Transient K8s API connectivity -------------------------------------------
+# ctx-aws/ctx-openstack đi qua SSH tunnel (scripts/k8s-tunnel.sh) trên uplink
+# hotspot của máy aio. Uplink chập chờn vài chục giây là chuyện thường: tunnel
+# SSH vẫn sống (ServerAlive 30s x3) nhưng request kubectl trong lúc đó chết với
+# "Unable to connect to the server: net/http: TLS handshake timeout" — k3s phía
+# sau hoàn toàn khỏe (xác nhận live 2026-09-26: NRestarts=0, load 0.1). Trước
+# đây mọi lệnh kubectl ở script này coi lỗi đó là lỗi thật: wait_rollout đốt
+# hết 2 lượt thử trong ~20s và cả deploy chết, dù rollout đã xong từ lâu.
+# Các lỗi dưới đây nghĩa là "chưa nói chuyện được với API server", KHÔNG phải
+# "workload hỏng" — retry an toàn (entry create lặp lại → AlreadyExists = OK).
+TRANSIENT_API_RE='Unable to connect to the server|The connection to the server .* was refused|TLS handshake timeout|i/o timeout|connection refused|connection reset by peer|context deadline exceeded|client connection lost|unexpected EOF|error dialing backend|http2: server sent GOAWAY|the server is currently unable to handle the request'
+API_RETRIES="${API_RETRIES:-6}"
+
+is_transient_api_error() { grep -Eq "$TRANSIENT_API_RE" <<<"$1"; }
+
+# Kiểm tra API qua tunnel; nếu không trả lời thì nhờ k8s-tunnel.sh dựng lại
+# tunnel của đúng cloud đó (nó chỉ restart khi /readyz thật sự fail). Không
+# bao giờ làm script chết — vòng retry của caller mới quyết định bỏ cuộc.
+heal_api() {
+  local ctx="$1" scope
+  kubectl --context "$ctx" get --raw=/readyz --request-timeout=10s >/dev/null 2>&1 && return 0
+  case "$ctx" in
+    "$AWS_CONTEXT") scope=aws ;;
+    "$OS_CONTEXT")  scope=openstack ;;
+    *) return 0 ;;
+  esac
+  log_info "K8s API $ctx không phản hồi — kiểm tra/dựng lại tunnel ($scope)..."
+  "$ROOT_DIR/scripts/k8s-tunnel.sh" up "$scope" >&2 || log_error "k8s-tunnel.sh up $scope thất bại (sẽ thử lại)"
+}
+
+# spire-server CLI qua kubectl exec, retry khi lỗi kết nối tạm thời.
+# In stdout+stderr ra stdout; exit code = của lượt cuối.
+spire_server_exec() {
+  local ctx="$1"; shift
+  local out rc attempt
+  for ((attempt = 1; attempt <= API_RETRIES; attempt++)); do
+    rc=0
+    out=$(kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server "$@" \
+      -socketPath /tmp/spire-server/private/api.sock 2>&1) || rc=$?
+    if [ "$rc" -eq 0 ] || ! is_transient_api_error "$out"; then
+      printf '%s\n' "$out"
+      return "$rc"
+    fi
+    log_error "kubectl exec spire-server ($ctx) lỗi kết nối tạm thời (lượt $attempt/$API_RETRIES): $(head -1 <<<"$out")"
+    heal_api "$ctx"
+    sleep $((attempt * 5))
+  done
+  printf '%s\n' "$out"
+  return "$rc"
+}
+
 _spire_entry_create() {
   local ctx="$1"; shift
   local out
-  if out=$(kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry create \
-    -socketPath /tmp/spire-server/private/api.sock "$@" 2>&1); then
+  if out=$(spire_server_exec "$ctx" entry create "$@"); then
     return 0
   fi
   if echo "$out" | grep -q "AlreadyExists\|similar entry already exists"; then
@@ -54,11 +104,36 @@ _spire_entry_create() {
   return 1
 }
 
+# TTL X.509-SVID của workload (giây). Entry mang TTL riêng thì GHI ĐÈ
+# default_x509_svid_ttl của server.conf — nên phải đặt ở đây, không chỉ ở server.
+# 2026-10-04 (mục 2.2 đóng sổ): 1h → 4h. Quyết định cụm chịu được gián đoạn
+# SPIRE/WireGuard bao lâu trước khi SVID hết hạn và mТLS STRICT sập dây chuyền
+# (§10.2 sự cố số một). Đánh đổi: cert workload bị lộ sống lâu hơn (H17).
+SPIRE_X509_SVID_TTL="${SPIRE_X509_SVID_TTL:-14400}"
+
 register_spire_entry() {
-  local ctx="$1" spiffe_id="$2" parent_id="$3" ns="$4" sa="$5"
-  _spire_entry_create "$ctx" \
+  local ctx="$1" spiffe_id="$2" parent_id="$3" ns="$4" sa="$5" out rc=0
+  out=$(spire_server_exec "$ctx" entry create \
     -spiffeID "$spiffe_id" -parentID "$parent_id" \
-    -selector "k8s:ns:${ns}" -selector "k8s:sa:${sa}" -ttl 3600
+    -selector "k8s:ns:${ns}" -selector "k8s:sa:${sa}" -x509SVIDTTL "$SPIRE_X509_SVID_TTL") || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if ! echo "$out" | grep -q "AlreadyExists\|similar entry already exists"; then
+    log_error "spire-server entry create failed (ctx=$ctx): $out"
+    return 1
+  fi
+  # Entry đã có (cụm đang chạy): hội tụ TTL nếu lệch, không thì giữ nguyên.
+  local cur
+  cur=$(spire_server_exec "$ctx" entry show -spiffeID "$spiffe_id" -parentID "$parent_id" -output json 2>/dev/null \
+    | python3 -c 'import json,sys
+e=(json.load(sys.stdin).get("entries") or [{}])[0]
+print(e.get("id",""), e.get("x509_svid_ttl",""))' 2>/dev/null) || true
+  local eid="${cur%% *}" ttl="${cur##* }"
+  [ -z "$eid" ] && return 0
+  [ "$ttl" = "$SPIRE_X509_SVID_TTL" ] && return 0
+  spire_server_exec "$ctx" entry update -entryID "$eid" \
+    -spiffeID "$spiffe_id" -parentID "$parent_id" \
+    -selector "k8s:ns:${ns}" -selector "k8s:sa:${sa}" -x509SVIDTTL "$SPIRE_X509_SVID_TTL" >/dev/null \
+    || { log_error "entry update TTL thất bại ($ctx $spiffe_id)"; return 1; }
 }
 
 # Đăng ký toàn bộ workload của một cluster từ mảng "<spiffe_id>:<ns>:<sa>" sinh
@@ -88,25 +163,49 @@ register_node_alias() {
 # of surfacing later as an unrelated-looking pod readiness failure.
 count_entries_matching() {
   local ctx="$1" pattern="$2"
-  kubectl --context "$ctx" -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server entry show \
-    -socketPath /tmp/spire-server/private/api.sock 2>/dev/null | grep -c "$pattern" || true
+  local out
+  # Lỗi (kể cả sau khi đã retry) → in 0 để gate bên dưới báo lỗi rõ ràng,
+  # thay vì grep nhầm trên thông báo lỗi.
+  out=$(spire_server_exec "$ctx" entry show) || { echo 0; return 0; }
+  grep -c "$pattern" <<<"$out" || true
 }
 
 # A single slow-to-attest spire-agent pod (lab nodes are resource-constrained
 # and the OpenStack cluster's uplink is a phone hotspot — see docs on uplink
-# fragility) can occasionally take longer than one TIMEOUT_WAIT window to go
-# Ready even though the rollout is progressing normally, not stuck. Retrying
-# the same wait once before failing absorbs that without masking a real hang
-# (a truly stuck rollout still fails after both attempts).
+# fragility) can take longer than one TIMEOUT_WAIT window to go Ready even
+# though the rollout is progressing normally, so the overall budget is
+# 2 × TIMEOUT_WAIT. Within that budget, a kubectl failure caused by the API
+# tunnel (TLS handshake timeout, …) is NOT counted as a rollout failure: heal
+# the tunnel and keep watching. Only running out of the deadline — or a
+# non-connectivity error (e.g. the object doesn't exist) — fails the step, so
+# a truly stuck rollout still fails.
 wait_rollout() {
-  local ctx="$1" kind="$2" name="$3" attempt
-  for attempt in 1 2; do
-    if kubectl --context "$ctx" -n spire rollout status "$kind/$name" --timeout="${TIMEOUT_WAIT}s"; then
-      return 0
+  local ctx="$1" kind="$2" name="$3"
+  local deadline=$(( $(date +%s) + 2 * TIMEOUT_WAIT ))
+  local out rc remaining
+  while :; do
+    remaining=$(( deadline - $(date +%s) ))
+    if [ "$remaining" -le 0 ]; then
+      log_error "rollout status $kind/$name on $ctx not complete after $((2 * TIMEOUT_WAIT))s"
+      return 1
     fi
-    log_error "rollout status $kind/$name timed out on $ctx (attempt $attempt/2)"
+    rc=0
+    out=$(kubectl --context "$ctx" -n spire rollout status "$kind/$name" --timeout="${remaining}s" 2>&1) || rc=$?
+    printf '%s\n' "$out"
+    [ "$rc" -eq 0 ] && return 0
+    if is_transient_api_error "$out"; then
+      log_error "rollout status $kind/$name on $ctx: API tunnel lỗi tạm thời, dựng lại và chờ tiếp ($((deadline - $(date +%s)))s còn lại)"
+      heal_api "$ctx"
+      sleep 5
+      continue
+    fi
+    # Hết --timeout (rollout chưa xong) hoặc lỗi thật (object không tồn tại…).
+    if grep -q "timed out waiting" <<<"$out"; then
+      continue   # vòng lặp sẽ tự dừng ở deadline
+    fi
+    log_error "rollout status $kind/$name on $ctx failed: $out"
+    return 1
   done
-  return 1
 }
 
 log_info "Waiting for spire-server/spire-agent on both clusters..."

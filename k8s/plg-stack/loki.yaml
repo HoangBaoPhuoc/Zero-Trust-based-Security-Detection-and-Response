@@ -5,6 +5,15 @@ metadata:
   namespace: plg-stack
 spec:
   replicas: 1
+  # Phần 3.6 remediation (2026-09-19) — phát hiện thêm khi verify retention
+  # fix: thiếu strategy: Recreate làm rollout TREO VĨNH VIỄN — RollingUpdate
+  # mặc định cố tạo pod MỚI trước khi xoá pod CŨ, nhưng cả 2 cùng cần PVC
+  # ReadWriteOnce (loki-data-pvc), nên pod mới kẹt "Pending" (không schedule
+  # được, volume đang gắn ở node của pod cũ) trong khi pod cũ không bị xoá
+  # (chưa có pod mới Ready) — deadlock thật, verify sống. Cùng pattern đã
+  # đúng ở spire-server (spire/k8s/server-deployment.yaml).
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: loki
@@ -39,6 +48,18 @@ spec:
               port: http
             initialDelaySeconds: 30
             periodSeconds: 20
+          # Phần 3.5 remediation (2026-09-19) — Loki là điểm ingest DUY NHẤT
+          # cho toàn bộ log hệ thống (kể cả dataset Giai đoạn B sắp tới, xem
+          # Phần 3.6) — limit quá sát sẽ làm rớt log khi traffic tăng, không
+          # phải chỉ ảnh hưởng 1 workload phụ.
+          # Phần 3.6 remediation, điều chỉnh lại (2026-09-19): request 512Mi ban
+          # đầu làm pod "Pending" thật (node local-path PV bị ghim vào ĐÚNG 1
+          # node, node đó không đủ 512Mi trống lúc verify sống trên lab node
+          # nhỏ ~3.7Gi RAM/node dùng chung nhiều workload) — hạ request, giữ
+          # limit cao để vẫn có biên burst khi ingest tăng.
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 1000m, memory: 1536Mi }
       volumes:
         - name: loki-config
           configMap:
@@ -52,6 +73,29 @@ kind: PersistentVolumeClaim
 metadata:
   name: loki-data-pvc
   namespace: plg-stack
+  # Phần 3.6 remediation (2026-09-19) — tính dung lượng cho 150 giờ traffic
+  # nền cộng dồn (Giai đoạn B) dựa trên tốc độ THẬT đo được trên cụm sống
+  # (metric loki_distributor_bytes_received_total / uptime pod, phiên đo có
+  # traffic tấn công/test nặng hơn traffic nền thật — số liệu vì vậy là biên
+  # trên, an toàn để tính dư): ~5.5 KB/s ~= 20 MB/h RAW nhận vào →
+  # 150h × 20 MB ≈ 3 GB raw; sau nén chunk (~4.4x đo được từ
+  # loki_ingester_chunk_stored_bytes_total / bytes_received_total) ≈ 680 MB
+  # LƯU TRỮ THẬT + index TSDB (nhỏ hơn nhiều so với chunks) → tổng ước lượng
+  # < 1 GB cho 150h. 10Gi hiện tại đã dư ~10x — GIỮ NGUYÊN dung lượng, chỉ cần
+  # đảm bảo retention_period (loki-configmap.yaml) đủ dài để không XOÁ trước
+  # khi đủ 150h — đó là rủi ro thật đã tìm thấy (table_manager cũ không áp
+  # dụng cho schema tsdb, retention_period đúng chỗ từng thiếu), không phải
+  # dung lượng đĩa.
+  #
+  # Mục 2.3 đóng sổ 2026-10-04 — ĐO 1,02 giờ dưới tải lưu lượng lành tính (tests/benign_traffic_403.sh,
+  # ~0,56 req/s người dùng, ~5,7 decision OPA/s; results/closeout/log-volume/summary.txt): đĩa thư mục PVC
+  # tăng 51,6 MB/h (thô vào Loki 71,2 MB/h). Các số đo 2026-09-29 (15,1 MB/h) là lúc cụm nhàn rỗi — đã bỏ.
+  #   - 150 h dữ liệu × 2 (biên 100 %): ~15,5 GB.
+  #   - NHƯNG Loki ghi mọi lúc cụm chạy và giữ 720 h (retention_period): chạy 24/7 thì trạng thái ổn định
+  #     ≈ 720 h × 51,6 MB/h ≈ 37 GB, × 2 biên ≈ 74 GB. Đây là con số quyết định, không phải 150 h.
+  # storageClass local-path KHÔNG cưỡng chế con số `storage` dưới đây — giới hạn thật là đĩa gốc của node
+  # chứa PV: đã nâng 30 → 100 GB (terraform/aws/main.tf, sửa tại chỗ + ansible k3s.yml tag growfs) →
+  # còn ~88 GB trống. Giữ `10Gi` vì PVC của local-path không mở rộng được trên cụm đang chạy (apply sẽ lỗi).
 spec:
   accessModes:
     - ReadWriteOnce

@@ -482,13 +482,13 @@ deploy_security_healthcheck() {
     CLOUD_PROVIDER=aws \
     LOKI_PUSH_URL=http://loki.plg-stack.svc.cluster.local:3100/loki/api/v1/push
 
-  # OpenStack promtail cũng dùng chung đường relay này (deploy-app.sh) vì
-  # OpenStack không có Loki riêng — kế thừa cùng giới hạn: relay chạy trên
-  # máy deployer, không phải cluster-native.
+  # OpenStack không có Loki riêng: đẩy thẳng tới NodePort 31000 của Loki AWS
+  # qua WireGuard — cùng đường với Promtail OpenStack (deploy-app.sh, mục 1
+  # vòng 2026-09-29). Trước đây đi qua socat trên máy deployer (172.10.10.1:13099).
   kubectl --context "$OS_CONTEXT" apply -f "$REPO_ROOT/k8s/security-monitoring/healthcheck-cronjob.yaml"
   kubectl --context "$OS_CONTEXT" -n spire set env cronjob/security-healthcheck \
     CLOUD_PROVIDER=openstack \
-    LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push
+    LOKI_PUSH_URL="${OS_LOKI_PUSH_URL:-http://10.10.1.10:31000/loki/api/v1/push}"
 
   log_info "Security control-plane health-check deployed (chạy mỗi 1 phút trên cả 2 cluster)"
 }

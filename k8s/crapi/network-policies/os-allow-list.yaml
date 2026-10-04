@@ -7,10 +7,17 @@
 # (gộp l4_ports theo cặp cluster nguồn->đích) để không còn trôi khi một
 # workload đổi cloud (đúng bug đã xảy ra với Keycloak ở A1).
 #
-# LƯU Ý (như pod-segmentation): NetworkPolicy này hiện KHÔNG được kube-router
-# enforce cho traffic có Istio sidecar trên hạ tầng đang dùng — L7 (OPA
-# service_acl) là lớp phân đoạn thật. File này đúng về khai báo/ý định + có
-# hiệu lực cho path không-sidecar (opa:8181, DNS, cross-cloud ipBlock).
+# HIỆU LỰC THẬT — ĐÃ SỬA CHẨN ĐOÁN (2026-09-25, đo trực tiếp bằng counter
+# `reject` trong chain KUBE-POD-FW-* của node): baseline này CÓ hiệu lực thật
+# (cả ipBlock lẫn namespaceSelector). Với `podSelector: {}` + policyTypes
+# Ingress/Egress, MỌI pod ns crapi bị default-deny cả 2 chiều; chỉ traffic khớp
+# rule ở đây (hoặc rule ingress per-destination trong *-pod-segmentation.yaml)
+# mới qua. Hệ quả đã gặp thật: rule egress "nội bộ crapi" viết tay từng thiếu
+# cổng 8080 -> SYN waf->bff bị reject tại chain firewall của pod waf (503
+# "delayed connect error: 111"). Nay cổng egress nội ns được TÍNH RA từ edge
+# service-graph (_intra_ns_egress_ports) và hợp vào danh sách viết tay.
+# Chẩn đoán cũ "node thiếu ipset nên rule vô hiệu" là SAI (xem
+# aws-pod-segmentation.yaml).
 
 ---
 apiVersion: networking.k8s.io/v1
@@ -22,7 +29,7 @@ spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
   ingress:
-    # cross-cloud AWS k3s nodes + pod CIDR -> identity/postgres NodePort
+    # cross-cloud AWS k3s nodes + pod CIDR -> identity/postgres NodePort + opa ext_authz
     - from:
         - ipBlock: { cidr: 10.10.1.0/24 }
         - ipBlock: { cidr: 10.10.0.0/24 }
@@ -34,6 +41,7 @@ spec:
         - { port: 5432, protocol: TCP }
         - { port: 15006, protocol: TCP }
         - { port: 8181, protocol: TCP }
+        - { port: 9191, protocol: TCP }
     # Prometheus scrape
     - from:
         - namespaceSelector:
@@ -47,10 +55,6 @@ spec:
             matchLabels: { kubernetes.io/metadata.name: spire }
       ports:
         - { port: 8181, protocol: TCP }
-    # noi bo ns crapi
-    - from:
-        - namespaceSelector:
-            matchLabels: { kubernetes.io/metadata.name: crapi }
   egress:
     # DNS
     - to:
@@ -64,8 +68,8 @@ spec:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: crapi }
       ports:
-        - { port: 5432, protocol: TCP }
         - { port: 1025, protocol: TCP }
+        - { port: 5432, protocol: TCP }
         - { port: 8025, protocol: TCP }
         - { port: 8181, protocol: TCP }
         - { port: 9191, protocol: TCP }

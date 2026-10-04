@@ -137,6 +137,29 @@ HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
 _DEVICE_URI_PREFIX = "spiffe://ztlab.local/device/"
 _DEVICE_CERT_HEADER_V2 = "x-device-cert-info"
 
+# Phần 3.2 (remediation 2026-09-19) — Device CA không có đường thu hồi: cert
+# hết hạn thì chặn được, nhưng cert bị lộ TRƯỚC HẠN thì trước đây không có
+# cách vô hiệu hoá. TTL ngắn hơn (đổi mặc định issue-device-cert.sh) chỉ giới
+# hạn CỬA SỔ rủi ro, không cho thu hồi NGAY — chọn CRL-kiểu-denylist làm cơ
+# chế chính vì đáp ứng đúng yêu cầu "thu hồi ngay lập tức", không cần đợi hết
+# hạn, và không đụng vào tầng TLS của Istio Gateway (rủi ro cao hơn nhiều nếu
+# vá CRL thật ở đó — đây là con đường bắt buộc của TOÀN hệ thống, một cấu
+# hình sai làm gãy hoàn toàn lối vào). File JSON mount từ ConfigMap
+# `device-revocation-list` (k8s/crapi/bff.yaml) — kubelet tự đồng bộ khi
+# ConfigMap đổi (~60-90s, không cần restart bff). Phát hành bởi
+# scripts/revoke-device-cert.sh.
+DEVICE_REVOCATION_PATH = os.getenv("DEVICE_REVOCATION_PATH", "/app/device-revocation/revoked.json")
+
+
+def _revoked_device_ids() -> set[str]:
+    try:
+        with open(DEVICE_REVOCATION_PATH) as f:
+            data = json.load(f)
+        return set(data.get("revoked_device_ids", []))
+    except Exception:
+        return set()
+
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis.crapi.svc.cluster.local:6379/0")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki.plg-stack.svc.cluster.local:3100").rstrip("/")
 
@@ -248,6 +271,58 @@ async def _clear_session(response: Response, request: Request) -> None:
     response.delete_cookie(SESSION_COOKIE)
 
 
+def _session_sid(request: Request) -> str | None:
+    env = _load(request.cookies.get(SESSION_COOKIE), SESSION_MAX_AGE)
+    return env.get("sid") if env else None
+
+
+# Vòng 2026-09-29 — phát hiện khi chạy tải nền 10 phút: access token Keycloak sống
+# 300 s nhưng BFF chưa từng làm mới nó (refresh_token được lưu mà không dùng). Sau
+# 5 phút, MỌI request của phiên tới workshop/community mang X-Access-Token đã hết
+# hạn → OPA (keycloak_gate, io.jwt.decode_verify kiểm exp) từ chối ĐÚNG → 403.
+# Quan sát: 75/405 request 403 trong một phiên 10 phút. Với Giai đoạn B (phiên
+# người dùng tổng hợp kéo dài), đây là nguồn "access denied" GIẢ làm bẩn dataset và
+# bắn alert Access Denied Spike. Làm mới bằng refresh_token của CHÍNH client đã cấp
+# (crapi-bff hoặc crapi-bff-stepup), cập nhật cả acr theo token mới.
+_REFRESH_MARGIN_S = 30
+
+
+async def _ensure_fresh_access_token(request: Request, session: dict) -> bool:
+    """True = session có access token còn hạn (đã làm mới nếu cần). False = hết
+    hạn và không làm mới được → caller trả 401 để client đăng nhập lại."""
+    exp = _decode_jwt_payload(session.get("access_token", "")).get("exp", 0)
+    if exp - time.time() > _REFRESH_MARGIN_S:
+        return True
+    sid = _session_sid(request)
+    if not session.get("refresh_token") or not sid:
+        return False
+    try:
+        r = await _http.post(_kc_token_url(), data={
+            "grant_type": "refresh_token", "refresh_token": session["refresh_token"],
+            "client_id": session.get("client_id", KEYCLOAK_CLIENT_ID)})
+    except Exception as exc:
+        await _audit("token_refresh_failed", username=session.get("username"), error=str(exc)[:200])
+        return False
+    if r.status_code != 200:
+        await _audit("token_refresh_failed", username=session.get("username"),
+                     status=r.status_code, body=r.text[:200])
+        return False
+    td = r.json()
+    session["access_token"] = td.get("access_token", "")
+    session["refresh_token"] = td.get("refresh_token", session["refresh_token"])
+    session["acr"] = _decode_jwt_payload(session["access_token"]).get("acr", session.get("acr", ""))
+    rec = await _session_store_get(sid)
+    if rec:  # giữ created_at gốc — làm mới token KHÔNG kéo dài tuổi phiên (SESSION_MAX_AGE)
+        rec["data"] = session
+        try:
+            ttl = max(1, int(SESSION_MAX_AGE - (time.time() - rec.get("created_at", time.time()))))
+            await redis_client.setex(_SESSION_PREFIX + sid, ttl, json.dumps(rec))
+        except Exception:
+            _sessions[sid] = rec
+    await _audit("token_refreshed", username=session.get("username"), acr=session["acr"])
+    return True
+
+
 def _decode_jwt_payload(token: str) -> dict:
     try:
         p = token.split(".")[1]
@@ -304,6 +379,13 @@ def _cert_fields_to_device(fields: dict[str, str]) -> dict:
         return {"device_id": None, "posture": "unknown", "device_trust": "suspicious"}
 
     device_trust = "trusted" if posture == "compliant" else "suspicious"
+    if device_id in _revoked_device_ids():
+        # Tái dùng đúng giá trị "suspicious" (không thêm state mới) — mọi nơi
+        # gate ghi/OPA rego device_trust_compliant đã kiểm != "suspicious",
+        # thêm state riêng "revoked" sẽ vô tình lọt qua các kiểm tra đó
+        # (rủi ro hồi quy âm thầm). Log riêng device_revoked để phân biệt lý
+        # do khi cần điều tra.
+        device_trust = "suspicious"
     return {"device_id": device_id, "posture": posture, "device_trust": device_trust}
 
 
@@ -462,6 +544,7 @@ async def auth_callback(request: Request, code: str = "", state: str = "", error
         "email": email, "username": username, "roles": realm_roles, "acr": acr,
         "access_token": access_token, "refresh_token": td.get("refresh_token", ""),
         "crapi_token": crapi_token, "crapi_token_exp": int(time.time()) + CRAPI_JWT_TTL,
+        "client_id": client_id,
         "device_id": device["device_id"], "device_trust": device["device_trust"],
         "device_posture": device["posture"],
         "logged_in_at": time.time(),
@@ -568,12 +651,26 @@ async def api_proxy(svc: str, path: str, request: Request):
     session = await _get_session(request)
     if not session:
         return JSONResponse({"error": "unauthenticated", "login_url": "/auth/start"}, status_code=401)
+    if not await _ensure_fresh_access_token(request, session):
+        return JSONResponse({"error": "unauthenticated", "reason": "token_expired",
+                             "login_url": "/auth/start"}, status_code=401)
 
     # device trust: suspicious → chặn ghi (gương device_trust_compliant của OPA;
     # OPA OpenStack không kiểm cái này cho hop identity)
-    if session.get("device_trust") == "suspicious" and request.method in ("POST", "PUT", "PATCH", "DELETE"):
-        await _audit("device_trust_denied", username=session.get("username"), path=full_path)
-        return JSONResponse({"error": "forbidden", "reason": "suspicious_device"}, status_code=403)
+    #
+    # Phần 3.2 (remediation 2026-09-19): device_trust ở session được chốt MỘT
+    # LẦN lúc /auth/callback (login) — một phiên đã đăng nhập TRƯỚC KHI cert
+    # bị thu hồi sẽ giữ nguyên "trusted" trong session dù cert đã vào
+    # revocation list SAU đó, nếu chỉ đọc session. Kiểm LẠI danh sách thu hồi
+    # TƯƠI trên MỖI request ghi (không cache theo session) để thu hồi có hiệu
+    # lực ngay cho phiên đang hoạt động, không phải chỉ chặn được lần đăng
+    # nhập tiếp theo.
+    device_id = session.get("device_id")
+    live_revoked = bool(device_id) and device_id in _revoked_device_ids()
+    if (session.get("device_trust") == "suspicious" or live_revoked) and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        await _audit("device_trust_denied", username=session.get("username"), path=full_path,
+                     reason="revoked" if live_revoked else "suspicious")
+        return JSONResponse({"error": "forbidden", "reason": "device_revoked" if live_revoked else "suspicious_device"}, status_code=403)
 
     # RBAC (gương của OPA — cần cho hop cross-cloud bff→identity)
     if not _rbac_ok(session.get("roles", []), request.method, full_path):

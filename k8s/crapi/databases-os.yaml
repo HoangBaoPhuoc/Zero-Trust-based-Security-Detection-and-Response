@@ -56,6 +56,14 @@ spec:
               command: ["sh", "-c", "pg_isready -U admin -d crapi"]
             initialDelaySeconds: 10
             periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U admin -d crapi"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 768Mi }
       volumes:
         - name: postgres-data
           persistentVolumeClaim:

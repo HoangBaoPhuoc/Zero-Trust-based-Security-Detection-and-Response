@@ -17,11 +17,11 @@ Bài test (Phần 2, remediation 2026-09 mở rộng từ bản gốc 2 bài):
    thật) không được khai `spiffe: false` — nếu không thì rego sinh ra sẽ đòi
    `valid_svid` cho một workload không hề có SVID, tự khoá chết chính nó.
 
-LƯU Ý (đọc trước khi diễn giải test #2 là "L4 thực sự chặn"): test này chỉ
-xác nhận tính nhất quán giữa các FILE KHAI BÁO, không xác nhận enforcement
-thật ở hạ tầng. Trên k3s/kube-router đang dùng, NetworkPolicy sinh ra từ đây
-KHÔNG được enforce cho traffic có Istio sidecar — L7 (OPA, service_acl.rego)
-mới là lớp đang chặn thật (xem KET-QUA-CRAPI.md PHASE 4).
+LƯU Ý: test này chỉ xác nhận tính nhất quán giữa các FILE KHAI BÁO. NetworkPolicy
+sinh ra CÓ hiệu lực thật ở kube-router (đo 2026-09-25: counter `reject` trong
+chain KUBE-POD-FW-* tăng khi thiếu rule cho phép) — chẩn đoán cũ "không được
+enforce"/"node thiếu ipset" là sai. Vì vậy thiếu 1 cổng ở baseline là làm
+đứt traffic thật, xem test_baseline_egress_covers_every_intra_namespace_edge_port.
 
 Chạy: python3 -m pytest tests/test_service_graph_consistency.py -v
       (hoặc: python3 tests/test_service_graph_consistency.py)
@@ -183,6 +183,47 @@ def test_every_l7_workload_has_spire_entry_and_real_spiffe():
     )
 
 
+def _baseline_intra_ns_egress_ports(allowlist_path: Path) -> set:
+    """Cổng của rule egress `namespaceSelector: crapi` trong baseline sinh ra."""
+    ports = set()
+    for doc in yaml.safe_load_all(allowlist_path.read_text()):
+        if not doc or doc.get("kind") != "NetworkPolicy":
+            continue
+        for rule in doc["spec"].get("egress", []):
+            for peer in rule.get("to", []):
+                sel = peer.get("namespaceSelector", {}).get("matchLabels", {})
+                if sel.get("kubernetes.io/metadata.name") == "crapi":
+                    ports.update(p["port"] for p in rule.get("ports", []))
+    return ports
+
+
+def test_baseline_egress_covers_every_intra_namespace_edge_port():
+    """Baseline có `podSelector: {}` + Egress => mọi pod ns crapi default-deny
+    egress. Cổng đích của MỌI edge nội cụm (nguồn và đích cùng ns crapi) phải có
+    trong rule egress `to_ns: crapi`, nếu không kube-router reject SYN tại chain
+    firewall của pod nguồn (bug thật 2026-09-25: thiếu 8080 => waf->bff 503,
+    'delayed connect error: 111' dù ingress/mTLS/OPA đều đúng)."""
+    graph = yaml.safe_load(GRAPH_FILE.read_text())
+    for cluster, allowlist in (("aws", ALLOWLIST_AWS), ("openstack", ALLOWLIST_OS)):
+        needed = set()
+        for edge in graph["edges"]:
+            if edge.get("cross_cluster"):
+                continue
+            src, dst = graph["workloads"].get(edge["from"]), graph["workloads"].get(edge["to"])
+            if not src or not dst:
+                continue
+            if src["cluster"] != cluster or dst["cluster"] != cluster:
+                continue
+            if src.get("namespace") != "crapi" or dst.get("namespace") != "crapi":
+                continue
+            needed.update(edge.get("l4_ports") or [])
+        missing = needed - _baseline_intra_ns_egress_ports(allowlist)
+        assert not missing, (
+            f"{allowlist.name}: egress nội ns crapi thiếu cổng {sorted(missing)} mà "
+            f"edge nội cụm ({cluster}) cần — chạy lại python3 scripts/gen-networkpolicy.py."
+        )
+
+
 if __name__ == "__main__":
     test_generated_files_match_source_of_truth()
     print("test_generated_files_match_source_of_truth: PASS")
@@ -190,3 +231,5 @@ if __name__ == "__main__":
     print("test_every_business_edge_present_in_both_layers: PASS")
     test_every_l7_workload_has_spire_entry_and_real_spiffe()
     print("test_every_l7_workload_has_spire_entry_and_real_spiffe: PASS")
+    test_baseline_egress_covers_every_intra_namespace_edge_port()
+    print("test_baseline_egress_covers_every_intra_namespace_edge_port: PASS")

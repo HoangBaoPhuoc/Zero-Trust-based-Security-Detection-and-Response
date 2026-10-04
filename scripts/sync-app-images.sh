@@ -222,19 +222,51 @@ ensure_tunnels_up() {
 }
 
 restart_financial_deployments() {
-  # Chỉ restart nếu deploy đã có (chạy độc lập sau khi sửa ảnh); trong luồng
-  # deploy-app.sh đầy đủ, deploy_crapi/deploy_observability_response tự apply sau.
-  for ns in crapi; do
-    kubectl --context ctx-aws -n "$ns" rollout restart deployment 2>/dev/null || true
-    [[ "$SKIP_PUSH_OPENSTACK" != "true" ]] && kubectl --context ctx-openstack -n "$ns" rollout restart deployment 2>/dev/null || true
+  # Phần 1.1 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) — TRƯỚC bản
+  # sửa này: `rollout restart deployment` (không tên cụ thể) restart TẤT CẢ
+  # deployment trong ns cùng lúc — đúng kịch bản gây ra
+  # diagnostics/2026-09-19-mesh-connectivity-incident (7 workload restart
+  # đồng thời -> cx_connect_fail không tự phục hồi). Xác nhận sống lại
+  # 2026-09-19: root cause là lỗi nền tảng iptables-legacy/nf_tables của
+  # network-policy controller nhúng trong k3s (kube-router) — CÙNG họ lỗi đã
+  # ghi ở AUDIT-THUC-THI.md §3.2, nhưng nặng hơn: có lúc chặn nhầm cả traffic
+  # HỢP LỆ (không chỉ "không chặn được traffic trái phép"), không tự phục hồi
+  # bằng xoá/tạo lại 1 pod hay resync NetworkPolicy — SSH xác nhận tận iptables
+  # trên node. Không vá được lỗi nền tảng đó (ngoài phạm vi hợp lý), nên giảm
+  # ĐIỀU KIỆN KÍCH HOẠT: restart TUẦN TỰ từng deployment, chờ rollout xong
+  # THẬT (không chỉ gửi lệnh) trước khi sang deployment kế tiếp — giảm số pod
+  # churn đồng thời trên cùng node, dù không chứng minh được nhân-quả tuyệt
+  # đối với lỗi nền tảng kia.
+  local ns="crapi"
+  local deployments
+  deployments="$(kubectl --context ctx-aws -n "$ns" get deployment -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+  for d in $deployments; do
+    log "Restart tuần tự (AWS): deployment/$d"
+    kubectl --context ctx-aws -n "$ns" rollout restart "deployment/$d" 2>/dev/null || true
+    kubectl --context ctx-aws -n "$ns" rollout status "deployment/$d" --timeout=180s 2>/dev/null \
+      || err "rollout deployment/$d (AWS) chưa xong trong 180s — tiếp tục nhưng KHÔNG coi là đã verify"
   done
+  if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
+    deployments="$(kubectl --context ctx-openstack -n "$ns" get deployment -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
+    for d in $deployments; do
+      log "Restart tuần tự (OpenStack): deployment/$d"
+      kubectl --context ctx-openstack -n "$ns" rollout restart "deployment/$d" 2>/dev/null || true
+      kubectl --context ctx-openstack -n "$ns" rollout status "deployment/$d" --timeout=180s 2>/dev/null \
+        || err "rollout deployment/$d (OpenStack) chưa xong trong 180s — tiếp tục nhưng KHÔNG coi là đã verify"
+    done
+  fi
   kubectl --context ctx-aws -n plg-stack rollout restart deployment/incident-analyzer 2>/dev/null || true
+  kubectl --context ctx-aws -n plg-stack rollout status deployment/incident-analyzer --timeout=180s 2>/dev/null || true
 }
 
 verify_quick() {
   log "Quick check (crapi pods)"
   kubectl --context ctx-aws get pods -n crapi 2>/dev/null || true
-  [[ "$SKIP_PUSH_OPENSTACK" != "true" ]] && { echo "---"; kubectl --context ctx-openstack get pods -n crapi 2>/dev/null || true; }
+  # `if` thay vì `[[ ]] && {}`: với --aws-only biểu thức && trả 1 làm hàm trả 1 →
+  # set -e thoát 1 SAU KHI sync đã thành công (quan sát 2026-09-29).
+  if [[ "$SKIP_PUSH_OPENSTACK" != "true" ]]; then
+    echo "---"; kubectl --context ctx-openstack get pods -n crapi 2>/dev/null || true
+  fi
 }
 
 main() {
