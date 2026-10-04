@@ -1,0 +1,88 @@
+# crapi-identity (Java/Spring Boot) — cluster OpenStack. "Nơi cấp phát danh
+# tính" (Nghị định 53: identity + dữ liệu định danh trên hạ tầng chủ quyền).
+#
+# NodePort 30090: bff / crapi-community / crapi-workshop (AWS) gọi cross-cloud
+# qua selectorless Service `crapi-identity-openstack` (mТLS ISTIO_MUTUAL vì 2
+# đầu đều có sidecar — mẫu core-banking-openstack của finance app).
+#
+# Secret crapi-jwt-key (jwks.json — RSA key upstream của crAPI, IDENTICAL với
+# default_jwks.json nhúng trong ảnh — cùng kid MKMZkDenUfuDF2byYowDj7tW5Ox6XG4Y1THTEGScRg8).
+# entrypoint.sh của ảnh: `if [ -f /app/keys/jwks.json ]; then JWKS=base64(...)`.
+# Mount ở /app/keys (KHÔNG phải /.keys — k8s base gốc của crAPI mount sai chỗ,
+# thực tế fallback về default_jwks.json). bff dùng cùng key này để mint token.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crapi-identity, namespace: crapi }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crapi-identity
+  namespace: crapi
+  labels:
+    app: crapi-identity
+    cloud: openstack
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: crapi-identity }
+  template:
+    metadata:
+      labels:
+        app: crapi-identity
+        cloud: openstack
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/crapi-identity"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+        # mailhog (inject=false, OpenStack) SMTP 1025 — bỏ qua istio-proxy
+        # (server-first protocol, sidecar làm hỏng handshake).
+        traffic.sidecar.istio.io/excludeOutboundPorts: "1025"
+    spec:
+      serviceAccountName: crapi-identity
+      volumes:
+        - name: jwt-key-secret
+          secret:
+            secretName: crapi-jwt-key
+      containers:
+        - name: crapi-identity
+          image: crapi/crapi-identity@sha256:5d1db5b3ba8e02bc68711ec6fc4e35ed7cd8b87e63785ece9e7ff5b5e36c5260
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: crapi-identity-configmap
+          volumeMounts:
+            - name: jwt-key-secret
+              mountPath: /app/keys
+              readOnly: true
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 200m, memory: 384Mi }
+            limits: { cpu: 1000m, memory: 1024Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crapi-identity
+  namespace: crapi
+  labels: { app: crapi-identity }
+spec:
+  type: NodePort
+  selector: { app: crapi-identity }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30090

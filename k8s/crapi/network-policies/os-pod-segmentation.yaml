@@ -1,0 +1,125 @@
+# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
+# Sinh lại: python3 scripts/gen-networkpolicy.py
+#
+# T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload
+# đích, khớp đúng traffic thật đã đo (T-1.1). Egress do baseline lo (xem
+# os-allow-list.yaml).
+#
+# HIỆU LỰC THẬT — ĐÃ SỬA CHẨN ĐOÁN (2026-09-25, phiên này đo trực tiếp
+# `nft -a list ruleset` trên node): rule podSelector/namespaceSelector ở đây
+# CÓ hiệu lực thật. Dòng `# match-set ...` trong `nft list ruleset` chỉ là cách
+# nft HIỂN THỊ match xt_set: ipset KUBE-SRC-*/KUBE-DST-* có đủ IP pod (đo
+# trực tiếp `ipset list`), counter `reject` tăng đúng khi thiếu rule cho phép,
+# và k3s tự có sẵn binary ipset ở /var/lib/rancher/k3s/data/current/bin/ipset
+# (không cần cài ipset riêng lên host) — KHÔNG phải rule chết. Chẩn
+# đoán "node thiếu ipset nên rule 0% hiệu lực" (BAOCAO-VONG-2026-09-19.md
+# §1.1/2.2) là SAI.
+#
+# Vì baseline (podSelector: {}) default-deny ingress+egress mọi pod trong ns
+# crapi, file này là nơi DUY NHẤT cấp quyền ingress nội ns theo edge — PHẢI
+# được `kubectl apply` (scripts/deploy-crapi.sh::apply_network_policies). Không
+# apply thì mọi hop nội ns (waf->bff, bff->crapi-*, ...) bị kube-router
+# `reject` SYN.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-pod-keycloak
+  namespace: identity
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kc-admin-setup
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+    # Ý ĐỊNH thật: 192.168.101.0/24 (private_cidr của cụm đích) — kube-router
+    # (iptables v1.8.7 nf_tables) không match được ipBlock CIDR cụ thể cho
+    # traffic NAT qua gateway cross-cloud (đã thử /24 lẫn /32 chính xác, đều
+    # fail; chỉ 0.0.0.0/0 chạy) nên dòng dưới PHẢI dùng 0.0.0.0/0, giới hạn đúng
+    # port — bảo vệ thật cho hop này là L7 (STRICT mТLS + OPA ext_authz), xem
+    # scripts/gen-networkpolicy.py cho lý do đầy đủ (Phần 1.6 remediation
+    # 2026-09-18: workaround của CNI, không phải ý định thiết kế).
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-pod-opa
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: opa
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-identity
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: identity }
+          podSelector:
+            matchLabels:
+              app: keycloak
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: os-pod-postgresdb
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: postgresdb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-identity
+      ports:
+        - port: 5432
+          protocol: TCP
+    # Ý ĐỊNH thật: 192.168.101.0/24 (private_cidr của cụm đích) — kube-router
+    # (iptables v1.8.7 nf_tables) không match được ipBlock CIDR cụ thể cho
+    # traffic NAT qua gateway cross-cloud (đã thử /24 lẫn /32 chính xác, đều
+    # fail; chỉ 0.0.0.0/0 chạy) nên dòng dưới PHẢI dùng 0.0.0.0/0, giới hạn đúng
+    # port — bảo vệ thật cho hop này là L7 (STRICT mТLS + OPA ext_authz), xem
+    # scripts/gen-networkpolicy.py cho lý do đầy đủ (Phần 1.6 remediation
+    # 2026-09-18: workaround của CNI, không phải ý định thiết kế).
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 5432
+          protocol: TCP

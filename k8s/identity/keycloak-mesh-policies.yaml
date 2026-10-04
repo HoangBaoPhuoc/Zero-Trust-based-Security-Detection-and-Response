@@ -1,0 +1,45 @@
+# Phần 1.2 (remediation 2026-09) — Keycloak vào mesh thật (ns identity, cụm
+# OpenStack). Trước bản sửa này: không sidecar, không SPIFFE, không qua OPA
+# (KIEM-KE-HOP.md nhóm (c)-2/(c)-4). PeerAuthentication STRICT tuyệt đối —
+# KHÔNG có ngoại lệ PERMISSIVE nào (khác `waf`): mọi caller thật (bff, opa
+# AWS, 5 pod bootstrap Admin API) đều đã được đưa vào mesh, không còn ai cần
+# gọi plaintext nữa.
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: keycloak-strict
+  namespace: identity
+spec:
+  selector:
+    matchLabels: { app: keycloak }
+  mtls:
+    mode: STRICT
+---
+# 2 DestinationRule — 2 tên DNS khác nhau trỏ cùng pod Keycloak:
+#   keycloak.identity.svc.cluster.local:8080       (nội cụm OpenStack — kc-admin-setup, probe)
+#   keycloak-openstack.crapi.svc.cluster.local:30091 (cross-cloud từ AWS — xem cross-cloud-aws.yaml)
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: keycloak-custom-san
+  namespace: identity
+spec:
+  host: keycloak.identity.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/keycloak"
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: keycloak-opa-authz
+  namespace: identity
+spec:
+  selector:
+    matchLabels: { app: keycloak }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]

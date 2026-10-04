@@ -9,9 +9,7 @@ AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 LOKI_URL="${LOKI_URL:-http://127.0.0.1:13100}"
 GRAFANA_URL="${GRAFANA_URL:-http://127.0.0.1:3000}"
-AI_URL="${AI_URL:-http://127.0.0.1:8090}"
-SOAR_URL="${SOAR_URL:-http://127.0.0.1:8091}"
-SOAR_API_TOKEN="${SOAR_API_TOKEN:-}"
+INCIDENT_ANALYZER_URL="${INCIDENT_ANALYZER_URL:-http://127.0.0.1:8091}"
 RUN_REMOTE="${RUN_REMOTE:-0}"
 RUN_K8S="${RUN_K8S:-1}"
 RUN_LOCAL="${RUN_LOCAL:-1}"
@@ -76,16 +74,6 @@ http_check() {
   run_warn_check "$description" curl -fsS --max-time 5 "$url"
 }
 
-soar_http_check() {
-  local description="$1"
-  local url="$2"
-  if [[ -n "$SOAR_API_TOKEN" ]]; then
-    run_warn_check "$description" curl -fsS --max-time 5 -H "Authorization: Bearer $SOAR_API_TOKEN" "$url"
-  else
-    run_warn_check "$description" curl -fsS --max-time 5 "$url"
-  fi
-}
-
 loki_query_has_results() {
   local query="$1"
   python3 - "$LOKI_URL" "$query" <<\PY_LOKI
@@ -120,7 +108,7 @@ section() {
 check_files() {
   section "Repository Files"
   [[ -f "$INVENTORY_FILE" ]] && pass "inventory exists: $INVENTORY_FILE" || fail "inventory missing: $INVENTORY_FILE"
-  [[ -f "$ROOT_DIR/.env.ai" ]] && pass ".env.ai exists and is gitignored" || warn ".env.ai missing; AI/SOAR will use defaults/placeholders"
+  [[ -f "$ROOT_DIR/.env.ai" ]] && pass ".env.ai exists and is gitignored" || warn ".env.ai missing; ignored (no external AI provider after A4)"
   [[ -f "$ROOT_DIR/.env" ]] && pass ".env exists and is gitignored" || warn ".env missing; Terraform/Ansible may need env vars"
   [[ -f "$SSH_KEY" ]] && pass "SSH key exists: $SSH_KEY" || warn "SSH key missing: $SSH_KEY"
 }
@@ -186,12 +174,12 @@ check_k8s() {
   run_warn_check "kubectl context reachable: $OS_CONTEXT" kubectl --context "$OS_CONTEXT" get nodes -o wide
   run_warn_check "AWS pods overview" kubectl --context "$AWS_CONTEXT" get pods -A
   run_warn_check "OpenStack pods overview" kubectl --context "$OS_CONTEXT" get pods -A
-  run_warn_check "AWS financial workloads" kubectl --context "$AWS_CONTEXT" -n financial get deploy,svc,pods
-  run_warn_check "OpenStack financial workloads" kubectl --context "$OS_CONTEXT" -n financial get deploy,svc,pods
+  run_warn_check "AWS crapi workloads" kubectl --context "$AWS_CONTEXT" -n crapi get deploy,svc,pods
+  run_warn_check "OpenStack crapi workloads" kubectl --context "$OS_CONTEXT" -n crapi get deploy,svc,pods
 }
 
 check_local_stack() {
-  section "Local PLG / AI / SOAR (port-forward required)"
+  section "Local PLG / incident-analyzer (port-forward required)"
   if [[ "$RUN_LOCAL" != "1" ]]; then
     warn "local PLG checks skipped"
     return
@@ -199,18 +187,15 @@ check_local_stack() {
   http_check "Loki ready              (port 13100)" "$LOKI_URL/ready"
   http_check "Loki API labels         (port 13100)" "$LOKI_URL/loki/api/v1/labels"
   http_check "Grafana health          (port 3000)"  "$GRAFANA_URL/api/health"
-  http_check "AI Analyzer health      (port 8090)"  "$AI_URL/health"
-  http_check "SOAR health             (port 8091)"  "$SOAR_URL/health"
-  soar_http_check "SOAR incidents      (port 8091)" "$SOAR_URL/incidents"
+  http_check "Incident Analyzer health (port 8091)" "$INCIDENT_ANALYZER_URL/health"
+  http_check "Incident Analyzer evidence (port 8091)" "$INCIDENT_ANALYZER_URL/evidence"
   if [[ "$RUN_K8S" == "1" ]]; then
-    _check_api_gw_jwks() {
+    _check_bff_health() {
       local d
-      d=$(curl -fsS --max-time 5 http://127.0.0.1:18080/health 2>&1) || return 1
-      echo "$d" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('jwks_keys_loaded',0)>0,'jwks=0 — restart api-gateway pod'; print(d)" 2>&1
+      d=$(curl -fsS --max-time 5 http://127.0.0.1:18081/health 2>&1) || return 1
+      echo "$d" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status')=='ok','bff status != ok'; print(d)" 2>&1
     }
-    run_warn_check "API Gateway health (jwks loaded)" _check_api_gw_jwks
-    run_warn_check "Security Scorer health (port 18092)" \
-      curl -fsS --max-time 5 http://127.0.0.1:18092/health
+    run_warn_check "BFF health (crAPI edge, port 18081)" _check_bff_health
     run_warn_check "Keycloak realm reachable (port 8180)" \
       curl -fsS --max-time 5 "http://127.0.0.1:8180/realms/ztlab/.well-known/openid-configuration"
   fi
@@ -218,8 +203,9 @@ check_local_stack() {
 
 check_loki_data() {
   section "SIEM Log Evidence"
-  run_warn_check "Loki has SOAR action stream" loki_query_has_results '{job="soar-engine"} |= "soar_action"'
-  run_warn_check "Loki has raw demo stream" loki_query_has_results '{job="demo-raw"}'
+  run_warn_check "Loki has incident-analyzer evidence stream" loki_query_has_results '{job="incident-analyzer"} |= "evidence_bundle"'
+  run_warn_check "Loki has security-healthcheck stream" loki_query_has_results '{job="security-healthcheck"}'
+  run_warn_check "Loki has OPA decision stream" loki_query_has_results '{job="opa-decisions"}'
 }
 
 usage() {
@@ -229,11 +215,11 @@ Usage: $(basename "$0") [--full] [--local-only] [--no-k8s]
 Modes:
   default       Check local stack + kubectl contexts if available. Remote SSH checks are skipped.
   --full        Also run Ansible SSH ping checks against AWS/OpenStack inventory.
-  --local-only  Only check Docker/Loki/Grafana/AI/SOAR local demo stack.
+  --local-only  Only check Docker/Loki/Grafana/incident-analyzer local demo stack.
   --no-k8s      Skip kubectl checks.
 
 Env overrides:
-  INVENTORY_FILE, AWS_CONTEXT, OS_CONTEXT, LOKI_URL, GRAFANA_URL, AI_URL, SOAR_URL
+  INVENTORY_FILE, AWS_CONTEXT, OS_CONTEXT, LOKI_URL, GRAFANA_URL, INCIDENT_ANALYZER_URL
   VERBOSE=1      Print successful command output too.
 USAGE
 }

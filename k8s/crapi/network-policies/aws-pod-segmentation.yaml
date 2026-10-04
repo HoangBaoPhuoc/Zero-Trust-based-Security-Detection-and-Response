@@ -1,0 +1,239 @@
+# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
+# Sinh lại: python3 scripts/gen-networkpolicy.py
+#
+# T-3.1/T-3.2 — mỗi NetworkPolicy chỉ siết chiều INGRESS của một workload
+# đích, khớp đúng traffic thật đã đo (T-1.1). Egress do baseline lo (xem
+# aws-allow-list.yaml).
+#
+# HIỆU LỰC THẬT — ĐÃ SỬA CHẨN ĐOÁN (2026-09-25, phiên này đo trực tiếp
+# `nft -a list ruleset` trên node): rule podSelector/namespaceSelector ở đây
+# CÓ hiệu lực thật. Dòng `# match-set ...` trong `nft list ruleset` chỉ là cách
+# nft HIỂN THỊ match xt_set: ipset KUBE-SRC-*/KUBE-DST-* có đủ IP pod (đo
+# trực tiếp `ipset list`), counter `reject` tăng đúng khi thiếu rule cho phép,
+# và k3s tự có sẵn binary ipset ở /var/lib/rancher/k3s/data/current/bin/ipset
+# (không cần cài ipset riêng lên host) — KHÔNG phải rule chết. Chẩn
+# đoán "node thiếu ipset nên rule 0% hiệu lực" (BAOCAO-VONG-2026-09-19.md
+# §1.1/2.2) là SAI.
+#
+# Vì baseline (podSelector: {}) default-deny ingress+egress mọi pod trong ns
+# crapi, file này là nơi DUY NHẤT cấp quyền ingress nội ns theo edge — PHẢI
+# được `kubectl apply` (scripts/deploy-crapi.sh::apply_network_policies). Không
+# apply thì mọi hop nội ns (waf->bff, bff->crapi-*, ...) bị kube-router
+# `reject` SYN.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-bff
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: bff
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: waf
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-crapi-community
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: crapi-community
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bff
+      ports:
+        - port: 8087
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-crapi-web
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: crapi-web
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bff
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-crapi-workshop
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: crapi-workshop
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bff
+      ports:
+        - port: 8000
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-mongodb
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: mongodb
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-community
+      ports:
+        - port: 27017
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-workshop
+      ports:
+        - port: 27017
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-opa
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: opa
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bff
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: waf
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-web
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-community
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-workshop
+      ports:
+        - port: 9191
+          protocol: TCP
+        - port: 8181
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-redis
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bff
+      ports:
+        - port: 6379
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aws-pod-waf
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: waf
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: istio-system }
+          podSelector:
+            matchLabels:
+              app: istio-ingressgateway-service-account
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP

@@ -15,6 +15,16 @@
       - nftables
       - auditd
       - iptables-persistent
+    # Neutron DHCP đẩy host route tới từng DNS server của subnet qua gateway_ip
+    # của subnet. Trên os_gateway, gateway_ip của zta-private/identity chính là
+    # ens4/ens5 của nó → route on-link vào hố đen, DNS chết cả cụm OpenStack.
+    # Phải khớp terraform/openstack var.subnet_dns_nameservers (giữ cả 8.8.x
+    # để dọn route cũ nếu đổi qua lại).
+    os_dns_upstreams:
+      - "1.1.1.1"
+      - "1.0.0.1"
+      - "8.8.8.8"
+      - "8.8.4.4"
 
   tasks:
     - name: Wait for cloud-init to finish (may still be running apt-get from package_upgrade)
@@ -164,21 +174,15 @@
         - gateway_nat_rule_check.rc != 0
 
     - name: Remove stale DNS host routes from os_gateway private interfaces
-      ansible.builtin.command: ip route del {{ item.ip }} dev {{ item.dev }}
-      loop:
-        - { ip: "8.8.8.8", dev: "ens4" }
-        - { ip: "8.8.4.4", dev: "ens4" }
-        - { ip: "8.8.8.8", dev: "ens5" }
-        - { ip: "8.8.4.4", dev: "ens5" }
+      ansible.builtin.command: ip route del {{ item.0 }} dev {{ item.1 }}
+      loop: "{{ os_dns_upstreams | product(['ens4', 'ens5']) | list }}"
       changed_when: false
       failed_when: false
       when: inventory_hostname == "os_gateway"
 
     - name: Force DNS upstream routes via DMZ on os_gateway
       ansible.builtin.command: ip route replace {{ item }} via 192.168.100.1 dev ens3 metric 10
-      loop:
-        - "8.8.8.8"
-        - "8.8.4.4"
+      loop: "{{ os_dns_upstreams }}"
       changed_when: false
       failed_when: false
       when: inventory_hostname == "os_gateway"

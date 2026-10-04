@@ -1,0 +1,146 @@
+# Istio mesh policy cho ns crapi — mẫu k8s/financial/istio-policies.yaml.
+#
+# PeerAuthentication (STRICT + PERMISSIVE cho điểm vào) + DestinationRule
+# custom-SAN (bắt buộc: SPIRE cấp SPIFFE scheme riêng spiffe://ztlab.local/
+# <cloud>/<svc>) + CUSTOM AuthorizationPolicy → opa-ext-authz-crapi (PHASE 3).
+---
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: default
+  namespace: crapi
+spec:
+  mtls:
+    mode: STRICT
+---
+# crapi-web: nhận traffic từ bff (in-mesh, Phase 2) và — trong Phase 1 —
+# từ kubectl port-forward khi test. PERMISSIVE để cả 2 chạy được.
+# Phase 2: giữ PERMISSIVE (bff vẫn gọi qua, và đây không phải điểm enforce authz).
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: crapi-web-permissive
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-web }
+  mtls:
+    mode: PERMISSIVE
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-web-custom-san
+  namespace: crapi
+spec:
+  host: crapi-web.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/crapi-web"]
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-community-custom-san
+  namespace: crapi
+spec:
+  host: crapi-community.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/crapi-community"]
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-workshop-custom-san
+  namespace: crapi
+spec:
+  host: crapi-workshop.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/aws/crapi-workshop"]
+---
+# Tên trực tiếp crapi-identity.crapi.svc.cluster.local (dùng nội cluster OpenStack:
+# seed job, và bất kỳ caller nào không qua selectorless -openstack). Bắt buộc —
+# SPIRE cấp scheme riêng, thiếu DR này client-side validation reject → 503.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-identity-custom-san
+  namespace: crapi
+spec:
+  host: crapi-identity.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames: ["spiffe://ztlab.local/openstack/crapi-identity"]
+---
+# ══ PHASE 3: CUSTOM AuthorizationPolicy → OPA ext_authz ══
+# fail-closed (Istio deny nếu ext_authz không tới được, trừ khi failOpen).
+# Provider `opa-ext-authz-crapi` → opa-service.crapi:9191 (istio-operator.yaml).
+# Selector không match trên cluster không chạy workload đó → cùng file apply
+# được cho cả 2 cluster.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: bff-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: bff }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: crapi-community-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-community }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: crapi-workshop-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-workshop }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]
+---
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: crapi-identity-opa-authz
+  namespace: crapi
+spec:
+  selector:
+    matchLabels: { app: crapi-identity }
+  action: CUSTOM
+  provider: { name: opa-ext-authz }
+  rules: [ {} ]
+---
+# mailhog (OpenStack, inject=false) — identity có sidecar STRICT → phải tắt
+# mТLS origination cho host này (như opa-service-plaintext). Cũng cho phép
+# istio-proxy của identity gọi SMTP 1025 dạng TCP thuần.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: mailhog-plaintext
+  namespace: crapi
+spec:
+  host: mailhog.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE

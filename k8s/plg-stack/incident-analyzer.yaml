@@ -1,0 +1,172 @@
+# Incident Analyzer — detection-side evidence & notification service (A4).
+#
+# Replaces k8s/plg-stack/{ai-soar,ai-analyzer,security-scorer}.yaml and
+# k8s/rbac/{soar-rbac,web-portal-response-rbac}.yaml. The thesis scope stops at
+# detection + analysed evidence + prioritised notification, so this service has
+# NO Kubernetes client and its ServiceAccount is bound to no Role/ClusterRole —
+# it cannot patch, scale, isolate or delete anything.
+#
+# Notification sink is an in-cluster MailHog (below, same ns) rather than the
+# OpenStack crapi/mailhog: that one is ClusterIP-only and plg-stack (AWS) has no
+# route to it, and adding a cross-cloud NodePort hop just for mail would change
+# the very telemetry A-phase is trying to freeze. MailHog needs no credentials,
+# so no Vault secret is wired (deviation from the plan's "secret từ Vault" — see
+# BAOCAO). Set SMTP_HOST/SMTP_USER + a Vault-provided SMTP_PASS to use a real
+# relay instead.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: incident-analyzer
+  namespace: plg-stack
+  # intentionally bound to no RBAC — read-only, Loki-only
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: incident-analyzer-data
+  namespace: plg-stack
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: incident-analyzer
+  namespace: plg-stack
+  labels: { app: incident-analyzer }
+spec:
+  replicas: 1
+  # Phần 3.6 remediation (2026-09-19) — cùng lý do loki/grafana: PVC evidence
+  # data là ReadWriteOnce, RollingUpdate mặc định có thể deadlock lúc node ít
+  # tài nguyên trống (verify sống đúng bug này ở loki cùng phiên).
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: incident-analyzer }
+  template:
+    metadata:
+      labels: { app: incident-analyzer, ztlab.io/nonroot-enforced: "true" }
+    spec:
+      serviceAccountName: incident-analyzer
+      automountServiceAccountToken: false
+      # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) —
+      # fsGroup ở pod level (không phải container) để kubelet chown/chmod PVC
+      # `incident-analyzer-data` cho group này — cùng mẫu ĐÃ verify sống ở
+      # k8s/plg-stack/grafana.yaml (fsGroup/runAsUser: 472). Không set fsGroup
+      # thì /data (EVIDENCE_STORE_PATH) sẽ do root sở hữu, UID non-root không
+      # ghi được — verify sống: pod Running/Ready + ghi evidence.jsonl thật.
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: incident-analyzer
+          image: ztlab/incident-analyzer:1.0.0
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - name: LOKI_URL
+              value: http://loki.plg-stack.svc.cluster.local:3100
+            - name: EVIDENCE_STORE_PATH
+              value: /data/evidence.jsonl
+            - name: EVIDENCE_WINDOW_SECONDS
+              value: "300"
+            - name: SMTP_HOST
+              value: mailhog.plg-stack.svc.cluster.local
+            - name: SMTP_PORT
+              value: "1025"
+            - name: SMTP_STARTTLS
+              value: "false"
+            - name: MAIL_FROM
+              value: incident-analyzer@ztlab.local
+            - name: MAIL_TO
+              value: soc@ztlab.local
+          volumeMounts:
+            - { name: data, mountPath: /data }
+          readinessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 96Mi }
+            limits: { cpu: 400m, memory: 384Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: incident-analyzer-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: incident-analyzer
+  namespace: plg-stack
+  labels: { app: incident-analyzer }
+spec:
+  selector: { app: incident-analyzer }
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+# [TEST DOUBLE — Phần 3.8] In-cluster MailHog notification sink for
+# incident-analyzer (see header note) — fake SMTP catcher standing in for a
+# real mail relay (Grafana's own alert channel uses a real SMTP secret
+# instead, see grafana-smtp-secret; this one is SOC evidence-bundle mail only,
+# intentionally never wired to a real outbound relay).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mailhog
+  namespace: plg-stack
+  labels: { app: mailhog }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: mailhog }
+  template:
+    metadata:
+      labels: { app: mailhog }
+    spec:
+      containers:
+        - name: mailhog
+          image: crapi/mailhog@sha256:015c23f79d40c9dc1800cd0a458503b89aeda3b585a12c37d53829d6c7d61fdd
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: MH_STORAGE, value: memory }
+          ports:
+            - { containerPort: 1025, name: smtp }
+            - { containerPort: 8025, name: web }
+          readinessProbe:
+            tcpSocket: { port: 1025 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            tcpSocket: { port: 1025 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 25m, memory: 48Mi }
+            limits: { cpu: 200m, memory: 192Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mailhog
+  namespace: plg-stack
+  labels: { app: mailhog }
+spec:
+  selector: { app: mailhog }
+  ports:
+    - { name: tcp-smtp, port: 1025, targetPort: 1025 }
+    - { name: web, port: 8025, targetPort: 8025 }

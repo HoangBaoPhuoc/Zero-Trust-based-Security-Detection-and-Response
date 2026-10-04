@@ -1,0 +1,40 @@
+apiVersion: 1
+
+# crAPI (KE-HOACH-CRAPI.md Phase 7). THAY kịch bản "fraud gate bypass" (đặc thù
+# ngân hàng, đã bỏ) bằng BFLA — Broken Function Level Authorization: user thường
+# (crapi-user) cố gọi endpoint admin/management. BFF `_rbac_ok` từ chối → log
+# audit event="rbac_denied" (job bff-audit), đồng thời OPA cũng deny.
+groups:
+  - orgId: 1
+    name: bfla
+    folder: ZTLab
+    interval: 1m
+    rules:
+      - uid: bfla-crapi-admin-endpoint
+        title: "crAPI — BFLA: user thường gọi endpoint admin/management"
+        for: 0s
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Loki
+            model:
+              datasource: { type: loki, uid: Loki }
+              expr: 'sum(count_over_time({job="bff-audit"} | json | event="rbac_denied" [10m]))'
+              instant: true
+              queryType: instant
+              refId: A
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "BFF từ chối RBAC — user thiếu quyền gọi admin/management endpoint (BFLA)"
+          description: >
+            OWASP API5:2023 BFLA. crapi-user hoặc soc-analyst cố gọi
+            /identity/api/v2/admin/* hoặc /workshop/api/management/* hoặc ghi dữ liệu
+            khi chỉ có quyền đọc. BFF `_rbac_ok` (gương OPA zta_crapi.rego) từ chối.
+          recommended_response: |
+            🔎 Đề xuất cho người vận hành: chặn IP nguồn + rà soát tài khoản (thủ công — không tự thực thi)
+        labels:
+          severity: high
+          category: security
+          attack_type: access_denied

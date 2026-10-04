@@ -153,7 +153,7 @@
       "targets": [
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({job=~\"kubernetes-pods\", app=\"soar-engine\"} |~ \"(?i)(isolate|quarantine|restrict)\" [24h]))",
+          "expr": "sum(count_over_time({app=\"incident-analyzer\"} |= \"evidence_bundle\" [24h]))",
           "instant": true,
           "legendFormat": "Actions",
           "refId": "A"
@@ -201,21 +201,21 @@
       "targets": [
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({app=\"soar-engine\"} |= \"\\\"status\\\": \\\"executed\\\"\" [$__range]))",
+          "expr": "sum(count_over_time({app=\"incident-analyzer\"} |= \"evidence_bundle\" [$__range]))",
           "instant": true,
           "legendFormat": "Executed",
           "refId": "A"
         },
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({app=\"soar-engine\"} |= \"\\\"status\\\": \\\"skipped\\\"\" [$__range]))",
+          "expr": "sum(count_over_time({app=\"incident-analyzer\"} |= \"\\\"status\\\": \\\"skipped\\\"\" [$__range]))",
           "instant": true,
           "legendFormat": "Skipped",
           "refId": "B"
         },
         {
           "datasource": {"type": "loki", "uid": "${DS_LOKI}"},
-          "expr": "sum(count_over_time({app=\"soar-engine\"} |= \"\\\"status\\\": \\\"failed\\\"\" [$__range]))",
+          "expr": "sum(count_over_time({app=\"incident-analyzer\"} |= \"\\\"status\\\": \\\"failed\\\"\" [$__range]))",
           "instant": true,
           "legendFormat": "Failed",
           "refId": "C"

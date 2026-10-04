@@ -26,6 +26,13 @@ spec:
     metadata:
       labels:
         app: keycloak-db
+      annotations:
+        # Ns identity nay bật istio-injection=enabled (Phần 1.2, cho Keycloak) —
+        # keycloak-db là hop L4 dữ liệu thuần (nhóm (b), KIEM-KE-HOP.md), cố ý
+        # KHÔNG vào mesh, giống postgresdb/mongodb/redis. Không tắt annotation
+        # này thì mọi pod trong ns tự động bị tiêm sidecar, cần SPIRE entry
+        # riêng mới lên Ready — không cần thiết cho một CSDL nội bộ.
+        sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: postgres
@@ -46,6 +53,19 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U keycloak -d keycloak"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U keycloak -d keycloak"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
       volumes:
         - name: data
           persistentVolumeClaim:

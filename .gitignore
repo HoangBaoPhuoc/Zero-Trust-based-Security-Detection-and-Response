@@ -6,6 +6,10 @@
 *.p12
 *.pfx
 .keys/
+# A3 device CA: private key + issued device certs/p12 are regenerated locally
+# (or restored from Vault, see scripts/deploy-security-stack.sh::provision_device_ca)
+# — never meant to live in git, per that function's own comment.
+deploy/vendor/device-ca/
 
 # Terraform state & plans (sensitive infra state)
 **/.terraform/
@@ -24,6 +28,9 @@ __pycache__/
 # Runtime artifacts
 logs/
 results/
+tests/runs.jsonl
+tests/chunks.jsonl
+tests/chunks.jsonl.progress
 models/*.pkl
 models/*.keras
 models/*.npy
@@ -34,3 +41,9 @@ models/*.npy
 # istioctl auto-downloaded by scripts/deploy-app.sh (deploy_istio) if not
 # already on PATH — pinned version, not project source
 .istio-*/
+
+# Metadata SAML Keycloak do deploy-app.sh bước 3c sinh (trạng thái, như tfstate)
+terraform/aws/keycloak-saml-metadata.xml
+
+# Bản chụp diff/tfstate cục bộ theo từng vòng — không đưa lên repo
+snapshots/

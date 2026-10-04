@@ -20,8 +20,12 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-GRAPH_FILE = REPO_ROOT / "policy" / "service-graph.yaml"
-OUT_FILE = REPO_ROOT / "opa" / "policies" / "service_acl.rego"
+
+# --crapi: sinh cho ứng dụng mục tiêu crAPI (package + file riêng, KHÔNG đụng
+# service_acl.rego của finance app cho tới Phase 5 của KE-HOACH-CRAPI.md).
+GRAPH_FILE = REPO_ROOT / "policy" / "service-graph-crapi.yaml"
+OUT_FILE = REPO_ROOT / "opa" / "crapi-policies" / "service_acl.rego"
+PACKAGE = "zta.crapi.generated"
 
 
 def spiffe_id(trust_domain: str, workload: str) -> str:
@@ -59,20 +63,20 @@ def main() -> None:
         blocks.append(f'  "{source_id}": {{\n' + "\n".join(dest_blocks) + "\n  },")
 
     body = "\n".join(blocks)
-    content = f"""package zta.generated
-
-# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph.yaml
+    header = """# GENERATED FILE — KHÔNG SỬA TAY. Nguồn: policy/service-graph-crapi.yaml
 # Sinh lại: python3 scripts/gen-rego-acl.py
 #
-# Ma trận phân quyền service-to-service (L7) — nguồn sự thật duy nhất, dùng
-# chung bởi zta_policy.rego (cluster AWS) và cross_cloud.rego (cluster
-# OpenStack) qua `import data.zta.generated`. Xem policy/service-graph.yaml
-# để biết dữ liệu gốc + traffic thật đã đo (T-1.1, KET-QUA-KIEM-TRA.md).
+# Ma trận phân quyền service-to-service (L7) cho crAPI — import bởi
+# opa/crapi-policies/{zta_crapi,crosscloud_crapi}.rego qua data.zta.crapi.generated."""
+    content = f"""package {PACKAGE}
+
+{header}
 
 service_acl := {{
 {body}
 }}
 """
+    OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     OUT_FILE.write_text(content)
     print(f"Sinh xong: {OUT_FILE.relative_to(REPO_ROOT)}")
 

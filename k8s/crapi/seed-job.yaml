@@ -1,0 +1,102 @@
+# Seed dữ liệu ỨNG DỤNG crAPI — KHÔNG phải provision hạ tầng.
+# Chạy 1 lần sau deploy (deploy-crapi.sh::run_seed). Idempotent (reset-test-users
+# + signup đều idempotent — user đã có → identity trả lỗi, script bỏ qua).
+#
+#   1. reset-test-users → tạo adam007/pogba006/robot001/test/admin @example.com
+#      + vehicles (dữ liệu BOLA có sẵn).
+#   2. signup từng user demo Keycloak (<username>@ztlab.local, password trong
+#      Secret crapi-seed) → user crAPI khớp email để bff-minted token resolve
+#      (community/workshop: User.objects.get(email=...)).
+#
+# Chạy trên OpenStack cạnh identity (local :8080). Có istio sidecar + SPIRE SVID
+# `spiffe://ztlab.local/openstack/crapi-seed` để qua STRICT mТLS. Cuối script
+# gọi localhost:15020/quitquitquit để istio-proxy thoát → Job complete được.
+# restartPolicy: Never + backoffLimit → mỗi lần retry là pod mới (tránh kẹt
+# sidecar/app đã exit).
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: crapi-seed, namespace: crapi }
+---
+apiVersion: v1
+kind: Secret
+metadata: { name: crapi-seed, namespace: crapi }
+type: Opaque
+stringData:
+  password: "CrapiSeed123!"
+  # stepup-demo (vòng 2026-09-29): thiếu user crAPI khớp email → mọi request của
+  # stepup-demo bị chính crapi-workshop trả 401 (token bff-minted không resolve
+  # được user) dù Zero-Trust (OPA) đã cho qua — step-up không demo trọn được.
+  users: "testuser01,testuser02,merchant01,analyst01,demoadmin,stepup-demo"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: crapi-seed
+  namespace: crapi
+spec:
+  backoffLimit: 5
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      annotations:
+        spiffe.io/spiffeid: "spiffe://ztlab.local/openstack/crapi-seed"
+        sidecar.istio.io/inject: "true"
+        sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+        sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+    spec:
+      serviceAccountName: crapi-seed
+      restartPolicy: Never
+      containers:
+        - name: seed
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: SEED_PASSWORD
+              valueFrom: { secretKeyRef: { name: crapi-seed, key: password } }
+            - name: SEED_USERS
+              valueFrom: { secretKeyRef: { name: crapi-seed, key: users } }
+          command: ["python3", "-c"]
+          args:
+            - |
+              import urllib.request, json, os, time
+              I = "http://crapi-identity.crapi.svc.cluster.local:8080"
+              def post(p, body):
+                  r = urllib.request.Request(I+p, data=json.dumps(body).encode(),
+                      headers={"Content-Type":"application/json"}, method="POST")
+                  try:
+                      return urllib.request.urlopen(r, timeout=25).status
+                  except urllib.error.HTTPError as e:
+                      # Kèm thân phản hồi: chạy lại trên DB đã có user thì
+                      # identity trả 403 (đã đăng ký) — phải phân biệt được với
+                      # 403 do chặn (OPA/mesh), chỉ mã trạng thái thì không đủ.
+                      try:
+                          body = e.read().decode("utf-8", "replace")[:100].replace("\n", " ")
+                      except Exception:
+                          body = ""
+                      return f"{e.code} {body}".strip()
+              ok = False
+              for _ in range(60):
+                  try:
+                      if urllib.request.urlopen(I+"/identity/health_check", timeout=5).status == 200:
+                          ok = True; break
+                  except Exception:
+                      pass
+                  time.sleep(5)
+              print("identity ready:", ok)
+              print("reset-test-users:", post("/identity/api/auth/reset-test-users", {}))
+              pw = os.environ["SEED_PASSWORD"]
+              for i, u in enumerate(os.environ["SEED_USERS"].split(",")):
+                  u = u.strip()
+                  if not u:
+                      continue
+                  st = post("/identity/api/auth/signup",
+                      {"name": u.title(), "email": f"{u}@ztlab.local",
+                       "number": f"9{i:09d}", "password": pw})
+                  print(f"signup {u}: {st}")
+              print("seed done")
+              try:
+                  urllib.request.urlopen(urllib.request.Request(
+                      "http://localhost:15020/quitquitquit", method="POST"), timeout=5)
+              except Exception:
+                  pass

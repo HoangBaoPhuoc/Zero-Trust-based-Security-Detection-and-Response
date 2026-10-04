@@ -20,15 +20,19 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum(count_over_time({job="security-healthcheck"} | json | status="critical" [3m]))'
+              expr: 'sum(count_over_time({job="security-healthcheck"} | json | status="critical" [3m])) or vector(0)'
               instant: true
               queryType: instant
               refId: A
-        # noDataState=Alerting (không phải OK) một cách CÓ CHỦ ĐÍCH: nếu chính
-        # CronJob health-check ngừng chạy (crash, RBAC hỏng, image lỗi...) thì
-        # sẽ KHÔNG còn log mới — mất tín hiệu hoàn toàn phải được coi là đáng
-        # ngờ, không phải "im lặng = ổn", đúng tinh thần Assume Breach.
-        noDataState: Alerting
+        # Vòng cuối 2026-09-26 — SỬA LỖI LOGIC: bản cũ để `noDataState: Alerting` và
+        # query chỉ đếm dòng `status="critical"`. Khi hệ thống KHỎE thì không có dòng
+        # critical nào -> Loki trả kết quả RỖNG -> Grafana coi là NoData -> rule vào
+        # trạng thái `Alerting (NoData)` — tức báo động vĩnh viễn lúc khoẻ (quan sát
+        # sống: healthcheck `status=healthy opa=200` nhưng rule vẫn firing). Nay query
+        # có `or vector(0)` (khỏe = 0, không NoData) và NoData => OK. Việc "healthcheck
+        # ngừng chạy / mất tín hiệu" được phát hiện bằng rule RIÊNG bên dưới
+        # (`absent_over_time`), đúng ý định gốc mà không đảo ngược tín hiệu.
+        noDataState: OK
         execErrState: Alerting
         annotations:
           summary: "SPIRE agent chưa attest đủ số node hoặc OPA không phản hồi — mTLS/policy có nguy cơ fail-closed toàn hệ thống"
@@ -37,9 +41,43 @@ groups:
             KHÔNG phải dấu hiệu bị tấn công — đây là lỗi vận hành hạ tầng.
             Kiểm tra ngay:
               kubectl -n spire exec deploy/spire-server -- /opt/spire/bin/spire-server agent list -socketPath /tmp/spire-server/private/api.sock
-              kubectl -n financial get pods -l app=opa
+              kubectl -n crapi get pods -l app=opa
             Nếu không có log mới từ security-healthcheck trong 3+ phút, kiểm tra luôn:
               kubectl -n spire get cronjob,jobs security-healthcheck
+        labels:
+          severity: critical
+          category: infrastructure
+          component: security-control-plane
+
+      - uid: security-healthcheck-silent
+        title: "Security Health-Check Silent — CronJob ngừng ghi log"
+        for: 2m
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: Loki
+            model:
+              datasource:
+                type: loki
+                uid: Loki
+              expr: 'absent_over_time({job="security-healthcheck"}[5m])'
+              instant: true
+              queryType: instant
+              refId: A
+        # absent_over_time trả 1 khi KHÔNG có log nào trong 5 phút, rỗng khi có log ->
+        # NoData là trạng thái BÌNH THƯỜNG (đang có log) nên noDataState phải là OK.
+        noDataState: OK
+        execErrState: Alerting
+        annotations:
+          summary: "security-healthcheck không ghi log trong 5 phút — mất tín hiệu sức khoẻ control-plane"
+          description: |
+            CronJob security-healthcheck (ns spire, chạy mỗi phút) ngừng đẩy log về Loki:
+            crash, RBAC/image lỗi, hoặc Loki/Promtail không nhận. Mất tín hiệu hoàn toàn
+            được coi là đáng ngờ (Assume Breach), không phải "im lặng = ổn".
+            Kiểm tra: kubectl -n spire get cronjob,jobs security-healthcheck
         labels:
           severity: critical
           category: infrastructure

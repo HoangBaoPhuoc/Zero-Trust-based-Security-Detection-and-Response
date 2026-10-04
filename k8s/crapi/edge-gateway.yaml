@@ -1,0 +1,55 @@
+# Phần 1.3 (KEHOACH-THAYDOI-HETHONG.md remediation, 2026-09) — biên vào mesh
+# thật, thay Traefik->waf. Traefik không sidecar nên hop đó không bao giờ có
+# source_principal; cơ chế bù X-Edge-Marker đã CHỨNG MINH (KIEM-KE-HOP.md
+# nhóm (c)-1, verify sống 2026-09-13 qua Loki) là không hề được Envoy gọi tới
+# — dead code, hop không có enforcement nào ở tầng mesh/PDP.
+#
+# Thay bằng Istio IngressGateway (k8s/istio/istio-operator.yaml
+# components.ingressGateways) — pod này có sidecar SPIRE thật
+# (spiffe://ztlab.local/aws/edge-gateway, xem overlay mount socket trong
+# istio-operator.yaml), tự verify TLS client certificate (Device CA) ở tầng
+# Gateway (tls.mode: MUTUAL), rồi gọi waf qua mТLS SPIFFE thật — hop này giờ
+# có source_principal thật, qua OPA thật (edge aws/edge-gateway -> aws/waf
+# trong policy/service-graph-crapi.yaml), không cần X-Edge-Marker nữa.
+#
+# CHẠY SONG SONG với Traefik :18443 (KHÔNG xoá đường cũ) cho tới khi cả 3
+# kịch bản certificate verify xong trên cổng MỚI 8443. Sau đó mới xoá:
+# k8s/crapi/edge-tls.yaml (đường Traefik cũ), X-Edge-Marker (Middleware +
+# EDGE_MARKER env + rego branch + BFF _evaluate_device_cert marker check).
+---
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: crapi-edge-gateway
+  namespace: crapi
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+    - port:
+        number: 8443
+        name: https-device-mtls
+        protocol: HTTPS
+      hosts:
+        - "crapi.ztlab.local"
+      tls:
+        mode: MUTUAL
+        credentialName: edge-gateway-tls
+        minProtocolVersion: TLSV1_2
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: crapi-edge-gateway
+  namespace: crapi
+spec:
+  hosts:
+    - "crapi.ztlab.local"
+  gateways:
+    - crapi-edge-gateway
+  http:
+    - route:
+        - destination:
+            host: waf.crapi.svc.cluster.local
+            port:
+              number: 8080

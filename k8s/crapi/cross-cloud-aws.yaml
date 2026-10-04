@@ -1,0 +1,135 @@
+# Cross-cloud wiring — selectorless Service + Endpoints (mẫu core-banking-openstack
+# của finance app: cho một tên DNS nội cụm ổn định trỏ tới NodePort của cluster
+# kia qua WireGuard; CoreDNS resolve native, Istio auto-discover như mọi Service).
+#
+# ── Áp trên cluster AWS ──────────────────────────────────────────────────────
+#   crapi-identity-openstack → OS k3s-master :30090  (HTTP, + DestinationRule
+#                                                     ISTIO_MUTUAL → mТLS SPIRE)
+#   postgresdb-openstack     → OS k3s-master :30432  (TCP 5432, KHÔNG DR — plain
+#                                                     TCP mã hoá bởi WireGuard)
+#   keycloak-openstack       → OS k3s-master :30091  (HTTP, DR mode DISABLE —
+#                                                     Keycloak không sidecar; A1)
+# ── Áp trên cluster OpenStack ───────────────────────────────────────────────
+#   mailhog-aws              → AWS k3s-worker-1 :31025 (SMTP, KHÔNG DR)
+#
+# IP: 192.168.101.11 = os-k3s-master (như core-banking-openstack).
+#     10.10.1.11     = aws-k3s-worker-1 (như loki-relay socat của deploy-app.sh).
+---
+# Áp trên cluster AWS.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crapi-identity-openstack
+  namespace: crapi
+spec:
+  ports:
+    - name: http
+      port: 30090
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: crapi-identity-openstack
+  namespace: crapi
+subsets:
+  - addresses:
+      - ip: 192.168.101.11
+    ports:
+      - name: http
+        port: 30090
+        protocol: TCP
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: crapi-identity-openstack-mtls
+  namespace: crapi
+spec:
+  host: crapi-identity-openstack.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/crapi-identity"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresdb-openstack
+  namespace: crapi
+spec:
+  ports:
+    - name: postgres
+      port: 30432
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: postgresdb-openstack
+  namespace: crapi
+subsets:
+  - addresses:
+      - ip: 192.168.101.11
+    ports:
+      - name: postgres
+        port: 30432
+        protocol: TCP
+---
+# Postgres cross-cloud: tắt hẳn mТLS Istio cho host này (đầu OS không có sidecar
+# để terminate) — client istio-proxy đi plaintext, WireGuard lo mã hoá tunnel.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: postgresdb-openstack-plaintext
+  namespace: crapi
+spec:
+  host: postgresdb-openstack.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: DISABLE
+---
+# Phần 1.2 (remediation 2026-09) — Keycloak trên OpenStack nay CÓ sidecar
+# (k8s/keycloak/deployment.yaml). BFF (/kc/* proxy + token/authorize) và OPA
+# AWS (io.jwt JWKS + OIDC discovery qua http.send) gọi tên này qua mТLS thật
+# — cùng mẫu chính xác với crapi-identity-openstack-mtls ở trên (đã verify
+# sống nhiều lần).
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-openstack
+  namespace: crapi
+spec:
+  ports:
+    - name: http
+      port: 30091
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: keycloak-openstack
+  namespace: crapi
+subsets:
+  - addresses:
+      - ip: 192.168.101.11
+    ports:
+      - name: http
+        port: 30091
+        protocol: TCP
+---
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: keycloak-openstack-mtls
+  namespace: crapi
+spec:
+  host: keycloak-openstack.crapi.svc.cluster.local
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+      subjectAltNames:
+        - "spiffe://ztlab.local/openstack/keycloak"
+---

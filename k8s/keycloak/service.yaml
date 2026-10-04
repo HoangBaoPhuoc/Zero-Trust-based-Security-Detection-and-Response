@@ -1,3 +1,7 @@
+# A1 — Keycloak now runs on the OpenStack cluster (Nghị định 53: dữ liệu định
+# danh người dùng trong nước). NodePort 30091 để OPA/BFF (AWS, ns crapi) gọi
+# cross-cloud qua selectorless Service keycloak-openstack (k8s/crapi/cross-cloud-aws.yaml)
+# → os-k3s-master:30091 → WireGuard. Mẫu crapi-identity:30090.
 apiVersion: v1
 kind: Service
 metadata:
@@ -6,10 +10,11 @@ metadata:
   labels:
     app: keycloak
 spec:
-  type: ClusterIP
+  type: NodePort
   selector:
     app: keycloak
   ports:
     - name: http
       port: 8080
       targetPort: 8080
+      nodePort: 30091

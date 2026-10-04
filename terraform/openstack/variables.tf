@@ -4,6 +4,16 @@ variable "os_auth_url" {
   default     = ""
 }
 
+# DNS cho các subnet zta-*. Mặc định 1.1.1.1/1.0.0.1 (Cloudflare) thay vì
+# 8.8.8.8/8.8.4.4: uplink của host aio (hotspot điện thoại / CGNAT) hay
+# chặn/timeout UDP/53 tới 8.8.8.8 → hỏng DNS toàn cụm → SPIRE/mТLS sập dây
+# chuyền. Đổi qua đây nếu môi trường mạng khác.
+variable "subnet_dns_nameservers" {
+  description = "DNS servers gán cho subnet zta-dmz/private/identity"
+  type        = list(string)
+  default     = ["1.1.1.1", "1.0.0.1"]
+}
+
 variable "os_username" {
   description = "OpenStack username (from OS_USERNAME environment)"
   type        = string
