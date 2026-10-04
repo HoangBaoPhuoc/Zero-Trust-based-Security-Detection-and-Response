@@ -103,7 +103,7 @@ stop_all() {
     fi
     rm -f "$pid_file"
   done
-  # Kill socat Loki proxy
+  # Dọn socat Loki proxy cũ (trước 2026-09-29) nếu còn sót
   pkill -f "socat.*13099" 2>/dev/null || true
   # Kill bất kỳ kubectl port-forward nào còn sót
   pkill -f "kubectl.*port-forward" 2>/dev/null || true
@@ -177,16 +177,9 @@ start_pf_daemon "crAPI (Gateway mTLS)" istio-system istio-ingressgateway 18444 8
 # PLG Stack
 start_pf_daemon "Grafana"             plg-stack  grafana           3000  3000
 start_pf_daemon "Loki"                plg-stack  loki             13100  3100
-# Loki proxy cho OpenStack promtail: 172.10.10.1:13099 → localhost:13100
-# OpenStack nodes không reach được localhost trực tiếp nên cần socat bridge.
-# 172.10.10.1 = deployer machine br-exnat interface (route thật OpenStack dùng để
-# tới máy này, xem deploy-app.sh:719) — PHẢI khớp, không phải 10.10.10.1 (interface khác).
-if ! ss -lnt | awk '{print $4}' | grep -Eq ":13099$"; then
-  pkill -f "socat.*13099" 2>/dev/null || true
-  setsid socat TCP-LISTEN:13099,bind=172.10.10.1,fork,reuseaddr TCP:127.0.0.1:13100 &
-  echo $! > "$PID_DIR/loki-proxy.pid"
-  echo "[ OK ] Loki-proxy → 172.10.10.1:13099 → localhost:13100 (for OpenStack promtail)"
-fi
+# (Đã bỏ 2026-09-29) socat 172.10.10.1:13099 → localhost:13100 cho Promtail
+# OpenStack: log OpenStack nay đi thẳng WireGuard → NodePort 31000 của Loki
+# (deploy-app.sh, OS_LOKI_PUSH_URL), không còn phụ thuộc máy này.
 start_pf_daemon "Incident Analyzer"   plg-stack  incident-analyzer 8091  8080
 # Monitoring
 start_pf_daemon "Prometheus"          monitoring prometheus        9090  9090

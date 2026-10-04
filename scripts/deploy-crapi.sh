@@ -29,6 +29,27 @@ CRAPI_KEYS="$REPO_ROOT/deploy/vendor/crapi-keys/jwks.json"
 # every call to STRICT-mTLS Keycloak fails CERTIFICATE_VERIFY_FAILED).
 KC_ADMIN_SETUP_OVERRIDES='{"metadata":{"labels":{"app":"kc-admin-setup"},"annotations":{"sidecar.istio.io/userVolume":"[{\"name\":\"spire-workload-socket\",\"hostPath\":{\"path\":\"/run/spire/sockets/agent.sock\",\"type\":\"Socket\"}}]","sidecar.istio.io/userVolumeMount":"[{\"name\":\"spire-workload-socket\",\"mountPath\":\"/var/run/secrets/workload-spiffe-uds/socket\"}]"}},"spec":{"serviceAccountName":"kc-admin-setup"}}'
 
+# Phần 1 remediation (2026-09-18, phát hiện thêm ngoài danh sách task) — xem
+# bản giải thích đầy đủ trong scripts/deploy-app.sh (định nghĩa giống hệt):
+# "wait --for=condition=Ready ... || true" rồi exec ngay sau đó NUỐT LỖI wait,
+# nên nếu sidecar istio-proxy của kc-crapi-setup chưa Ready (SPIRE cấp SVID
+# chậm), python3 gọi Keycloak Admin API qua mesh thất bại rồi bị `|| warn`
+# cuối cùng nuốt tiếp — deploy báo "OK" nhưng redirectUris https của client
+# `crapi-bff` KHÔNG được áp dụng. Quan sát THẬT trên một lần redeploy sạch
+# (2026-09-18): đúng chuỗi này khiến login qua Gateway hỏng hoàn toàn dù
+# deploy-crapi.sh không báo lỗi. Sửa: retry wait thật trước khi exec.
+kc_wait_ready() { # <pod> [timeout_per_try] [số lần thử]
+  local pod="$1" per="${2:-30s}" tries="${3:-6}" i=0
+  until kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready "pod/$pod" -n identity --timeout="$per" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [[ $i -ge $tries ]]; then
+      warn "$pod không Ready sau ${i}x${per} — exec tiếp theo có thể lỗi mesh (sidecar/SPIRE SVID chậm)"
+      return 1
+    fi
+  done
+  return 0
+}
+
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log()  { echo -e "${BLUE}[DEPLOY-CRAPI]${NC} $*"; }
 ok()   { echo -e "${GREEN}[  OK  ]${NC} $*"; }
@@ -126,7 +147,7 @@ configure_crapi_keycloak() {
   [[ -n "$admin_pass" ]] || { warn "Không lấy được keycloak admin-password — bỏ qua"; return; }
   kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
   kkc run kc-crapi-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 90" >/dev/null 2>&1 || true
-  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-crapi-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kc_wait_ready kc-crapi-setup
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-crapi-setup -- python3 -c "
 import urllib.request, json, urllib.parse
 KC='http://keycloak.identity.svc.cluster.local:8080'; REALM='ztlab'
@@ -186,14 +207,26 @@ for uname,rs in ROLE_ADD.items():
     call('POST','/admin/realms/%s/users/%s/role-mappings/realm'%(REALM,uid),reps)
     print('user',uname,'+',rs)
 print('crapi keycloak config OK')
-" || warn "cấu hình Keycloak crapi lỗi (non-fatal — login bff sẽ hỏng cho tới khi sửa)"
+" || fail "cấu hình Keycloak crapi (client redirectUris + role mappings) THẤT BẠI — login qua BFF sẽ hỏng. Đây là bước bắt buộc, không còn coi là non-fatal (Phần 1 remediation 2026-09-18: silent warn từng để redirectUris https không được áp dụng mà deploy vẫn báo xong). Kiểm tra: kubectl --context \$KEYCLOAK_CONTEXT logs -n identity kc-crapi-setup; chạy lại: bash scripts/deploy-crapi.sh"
   kkc delete pod kc-crapi-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
   ok "Keycloak crapi roles/clients ensured"
+}
+
+# Phần 3.2 (remediation 2026-09-19) — tạo ConfigMap device-revocation-list
+# CHỈ KHI CHƯA TỒN TẠI (không bao giờ qua `kubectl apply` với nội dung tĩnh —
+# xem comment trong k8s/crapi/bff.yaml cho lý do: đây là trạng thái vận hành
+# động, apply lại sẽ reset danh sách thu hồi). An toàn gọi lại nhiều lần.
+ensure_device_revocation_configmap() {
+  kaws get configmap device-revocation-list -n crapi >/dev/null 2>&1 && return 0
+  kaws create configmap device-revocation-list -n crapi \
+    --from-literal=revoked.json='{"revoked_device_ids": []}'
+  ok "device-revocation-list ConfigMap khởi tạo (rỗng)"
 }
 
 deploy_bff() {
   [[ -d "$REPO_ROOT/services/bff" && -f "$CRAPI_DIR/bff.yaml" ]] || { log "bff chưa có (Phase 2) — bỏ qua"; return; }
   step "BFF (edge PEP + Keycloak) + WAF (ModSecurity/CRS DetectionOnly)"
+  ensure_device_revocation_configmap
   kaws apply -f "$CRAPI_DIR/bff.yaml"
   [[ -f "$CRAPI_DIR/waf.yaml" ]] && kaws apply -f "$CRAPI_DIR/waf.yaml"
   kos apply -f "$CRAPI_DIR/ingress-os.yaml"
@@ -213,9 +246,32 @@ deploy_crapi_opa() {
   for k in kaws kos; do
     $k -n crapi create configmap opa-policies-crapi --from-file="$REPO_ROOT/opa/crapi-policies" --dry-run=client -o yaml | $k apply -f -
     $k apply -f "$CRAPI_DIR/opa.yaml"
+    # Phần 1.2 remediation (2026-09-18): opa.yaml đổi tên 2 object khi sửa
+    # inbound sang STRICT — object cũ (PERMISSIVE/DISABLE) không tự mất khi
+    # `apply` một manifest đã đổi tên, dọn tường minh để không để lại policy
+    # tài liệu-treo (đúng lớp lỗi Phần 2 của task này cảnh báo).
+    $k delete peerauthentication opa-permissive -n crapi --ignore-not-found >/dev/null 2>&1 || true
+    $k delete destinationrule opa-service-plaintext -n crapi --ignore-not-found >/dev/null 2>&1 || true
   done
   wait_rollout "$AWS_CONTEXT" crapi deployment/opa-server 180s
   wait_rollout "$OS_CONTEXT"  crapi deployment/opa-server 180s
+  # 2026-10-04 (redeploy lên cụm OpenStack cũ): pod OPA tạo trong lúc
+  # SPIRE/istioctl install của deploy-app.sh đang chạy ra KHÔNG có istio-proxy
+  # (istiod không hề nhận request inject cho chúng). DestinationRule
+  # opa-service-mtls bắt client gọi OPA bằng ISTIO_MUTUAL → sidecar Keycloak
+  # không bắt tay được với OPA trần → ext_authz lỗi, fail-closed → MỌI request
+  # tới Keycloak 403 UAEX (kể cả /token của kc-crapi-setup ngay bước sau).
+  # Ready 1/1 trông "khỏe" nên wait_rollout không bắt được — kiểm tường minh.
+  local ctx missing
+  for ctx in "$AWS_CONTEXT" "$OS_CONTEXT"; do
+    missing="$(kubectl --context "$ctx" -n crapi get pods -l app=opa \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.containers[*].name}{"\n"}{end}' | grep -vc 'istio-proxy' || true)"
+    if [[ "${missing:-0}" -gt 0 ]]; then
+      warn "$ctx: $missing pod OPA thiếu istio-proxy — restart để inject"
+      kubectl --context "$ctx" -n crapi rollout restart deployment/opa-server
+      wait_rollout "$ctx" crapi deployment/opa-server 180s
+    fi
+  done
   ok "crapi OPA ready (2 cluster)"
 }
 
@@ -257,12 +313,23 @@ register_spire() {
 
 apply_network_policies() {
   [[ -f "$CRAPI_DIR/network-policies/aws-allow-list.yaml" ]] || { log "network-policies chưa có (Phase 4) — bỏ qua"; return; }
-  step "NetworkPolicy L4 (Phase 4)"
+  step "NetworkPolicy L4 (Phase 4) — baseline + pod-segmentation (per-destination)"
+  # Sửa 2026-09-25 (đo trực tiếp `nft -a list ruleset` trên node lúc waf->bff
+  # trả 503): baseline `{aws,os}-crapi-allow-baseline` có `podSelector: {}` nên
+  # default-deny ingress+egress MỌI pod ns crapi. Quyền ingress nội ns theo edge
+  # nằm ở `*-pod-segmentation.yaml` — bản trước (2026-09-19) ngừng apply file
+  # này dựa trên chẩn đoán "node thiếu ipset nên rule vô hiệu" là SAI: ipset
+  # KUBE-SRC-*/KUBE-DST-* có đủ IP pod, k3s tự có binary ipset, và counter
+  # `reject` trong chain KUBE-POD-FW-* của pod tăng đúng khi thiếu rule cho
+  # phép. Ngừng apply => không còn allow nội ns nào => waf->bff bị reject.
+  # Mọi giá trị cổng egress nội ns của baseline nay được generator TÍNH RA từ
+  # edge service-graph (gen-networkpolicy.py::_intra_ns_egress_ports) — lần
+  # trước thiếu cổng 8080 ở egress cũng làm waf->bff bị reject ở chain của waf.
   kaws apply -f "$CRAPI_DIR/network-policies/aws-allow-list.yaml"
   kos  apply -f "$CRAPI_DIR/network-policies/os-allow-list.yaml"
-  [[ -f "$CRAPI_DIR/network-policies/aws-pod-segmentation.yaml" ]] && kaws apply -f "$CRAPI_DIR/network-policies/aws-pod-segmentation.yaml" || true
-  [[ -f "$CRAPI_DIR/network-policies/os-pod-segmentation.yaml" ]] && kos apply -f "$CRAPI_DIR/network-policies/os-pod-segmentation.yaml" || true
-  ok "network-policies"
+  kaws apply -f "$CRAPI_DIR/network-policies/aws-pod-segmentation.yaml"
+  kos  apply -f "$CRAPI_DIR/network-policies/os-pod-segmentation.yaml"
+  ok "network-policies (baseline + pod-segmentation)"
 }
 
 restart_workloads_for_sds() {
@@ -272,15 +339,84 @@ restart_workloads_for_sds() {
   # → mọi hop nội mesh 503 (xem KET-QUA-KIEM-TRA.md T-2.1). Fix: sau khi SPIRE
   # entries + DestinationRule custom-SAN + AuthorizationPolicy đã sẵn sàng, bounce
   # toàn bộ Deployment nghiệp vụ để istio-proxy tái lập SDS sạch.
-  step "Restart workload crAPI để istio-proxy tái lập SDS/mТLS (sau SPIRE + mesh policy)"
-  kaws -n crapi rollout restart deployment 2>/dev/null || true
-  kos  -n crapi rollout restart deployment 2>/dev/null || true
-  for d in bff crapi-web crapi-community crapi-workshop; do
+  #
+  # Phần 1.1 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) — TRƯỚC bản
+  # sửa này: `rollout restart deployment` (không tên cụ thể) restart TẤT CẢ
+  # deployment trong ns CÙNG LÚC trên CẢ 2 CLUSTER — xác nhận sống đây CHÍNH
+  # LÀ kịch bản "restart đồng thời nhiều workload" gây ra
+  # diagnostics/2026-09-19-mesh-connectivity-incident (root cause thật: lỗi
+  # nền tảng iptables-legacy/nf_tables của network-policy controller nhúng
+  # trong k3s — cùng họ với AUDIT-THUC-THI.md §3.2, nhưng có lúc chặn nhầm cả
+  # traffic HỢP LỆ, không tự phục hồi). KHÔNG vá được lỗi nền tảng đó, nên đổi
+  # sang restart TUẦN TỰ từng deployment + chờ rollout xong thật, giảm số pod
+  # churn đồng thời trên cùng node.
+  step "Restart workload crAPI để istio-proxy tái lập SDS/mТLS (sau SPIRE + mesh policy) — TUẦN TỰ"
+  local d
+  for d in $(kaws -n crapi get deployment -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    kaws -n crapi rollout restart "deployment/$d" 2>/dev/null || true
     wait_rollout "$AWS_CONTEXT" crapi "deployment/$d" 240s
   done
-  wait_rollout "$OS_CONTEXT" crapi deployment/crapi-identity 240s
-  wait_rollout "$OS_CONTEXT" crapi deployment/mailhog 180s
-  ok "workloads restarted — SVID nên VALID trở lại (kiểm: istioctl proxy-config secret deploy/crapi-workshop -n crapi)"
+  for d in $(kos -n crapi get deployment -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+    kos -n crapi rollout restart "deployment/$d" 2>/dev/null || true
+    wait_rollout "$OS_CONTEXT" crapi "deployment/$d" 240s
+  done
+  ok "workloads restarted tuần tự — SVID nên VALID trở lại (kiểm: istioctl proxy-config secret deploy/crapi-workshop -n crapi)"
+}
+
+verify_mesh_connectivity() {
+  # Phần 1.1 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) — `kubectl
+  # get pods` Ready KHÔNG đủ để coi là "đã verify": xác nhận sống 2026-09-19
+  # một cụm với TOÀN BỘ pod 2/2 Running vẫn có waf->bff (đúng cặp
+  # service_acl cho phép) trả 503/"Connection refused" ở tầng L4 (lỗi nền
+  # tảng iptables-legacy/nf_tables của kube-router nhúng trong k3s, xem
+  # restart_workloads_for_sds() + AUDIT-THUC-THI.md §3.2) — im lặng, không
+  # `kubectl get pods` nào phát hiện ra. Gọi request THẬT giữa 1-2 cặp
+  # service_acl cho phép, kiểm HTTP code thật — deploy nào dính lỗi này FAIL
+  # RÕ RÀNG thay vì báo "OK" giả.
+  step "Kiểm connectivity THẬT giữa các service (không chỉ đọc trạng thái Ready)"
+  local ok_all=true
+
+  local wpod
+  wpod="$(kaws -n crapi get pod -l app=waf -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+  if [[ -n "$wpod" ]]; then
+    local code
+    code="$(kaws -n crapi exec "$wpod" -c waf -- curl -s -o /dev/null -w '%{http_code}' -m 8 http://bff.crapi.svc.cluster.local:8080/health 2>/dev/null || echo 000)"
+    if [[ "$code" == "200" ]]; then
+      ok "waf -> bff (AWS, nội cụm): HTTP $code"
+    else
+      ok_all=false
+      warn "waf -> bff (AWS): HTTP $code (kỳ vọng 200) — nghi mesh-connectivity đã biết (BAOCAO-VONG-2026-09-19.md mục 1.1). Kiểm: kubectl --context $AWS_CONTEXT -n crapi exec $wpod -c waf -- curl -v http://bff.crapi.svc.cluster.local:8080/health"
+    fi
+  else
+    warn "Không có pod waf để kiểm connectivity — bỏ qua"
+  fi
+
+  local cpod
+  cpod="$(kaws -n crapi get pod -l app=crapi-community -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)"
+  if [[ -n "$cpod" ]]; then
+    local code2
+    code2="$(kaws -n crapi exec "$cpod" -c crapi-community -- curl -s -o /dev/null -w '%{http_code}' -m 8 http://crapi-identity-openstack.crapi.svc.cluster.local:30090/identity/health_check 2>/dev/null || echo 000)"
+    if [[ "$code2" == "200" ]]; then
+      ok "crapi-community -> crapi-identity (cross-cloud): HTTP $code2"
+    else
+      ok_all=false
+      warn "crapi-community -> crapi-identity (cross-cloud): HTTP $code2 (kỳ vọng 200) — kiểm: kubectl --context $AWS_CONTEXT -n crapi exec $cpod -c crapi-community -- curl -v http://crapi-identity-openstack.crapi.svc.cluster.local:30090/identity/health_check"
+    fi
+  else
+    warn "Không có pod crapi-community để kiểm connectivity — bỏ qua"
+  fi
+
+  if [[ "$ok_all" == "true" ]]; then
+    ok "mesh connectivity: TẤT CẢ cặp kiểm đều thông"
+  elif [[ "${ZTLAB_DEFER_ACCEPTANCE:-0}" == "1" ]]; then
+    # H8 (2026-10-04): trong đường deploy đầy đủ (deploy-app.sh), nghiệm thu
+    # KHÔNG được chặn các bước sau — chính `fail` ở đây từng khiến stack quan
+    # sát không bao giờ được dựng (BAOCAO-CUOI mục 1.1). deploy-app.sh chạy lại
+    # hàm này (--verify-only, không hoãn) ở verify_final, sau khi mọi thứ đã dựng.
+    warn "mesh connectivity: có cặp KHÔNG thông — HOÃN nghiệm thu tới cuối deploy-app.sh (verify_final)"
+  else
+    fail "mesh connectivity: có cặp KHÔNG thông (chi tiết ở trên). Nguyên nhân thật đã gặp (2026-09-25): NetworkPolicy — baseline aws-/os-crapi-allow-baseline default-deny cả ingress+egress mọi pod ns crapi; nếu thiếu cổng ở egress baseline hoặc chưa apply *-pod-segmentation.yaml thì kube-router \`reject\` SYN (envoy báo 503 'delayed connect error: 111'). Kiểm: kubectl -n crapi get netpol (phải có aws-pod-*), và trên node đích: sudo nft -a list ruleset | grep -E 'reject' | grep -E 'packets [1-9]' để thấy chain KUBE-POD-FW-* nào đang reject. KHÔNG phải lỗi ipset (k3s tự có ipset). Restart pod đơn lẻ không khỏi."
+  fi
 }
 
 run_seed() {
@@ -297,6 +433,7 @@ verify() {
   step "Trạng thái"
   log "AWS ns crapi";  kaws get pods -n crapi -o wide || true
   log "OpenStack ns crapi"; kos get pods -n crapi -o wide || true
+  verify_mesh_connectivity
 }
 
 main() {
@@ -305,13 +442,44 @@ main() {
   apply_namespace_and_config
   deploy_databases
   deploy_crapi_workloads
-  configure_crapi_keycloak
-  deploy_bff
+  # register_spire + deploy_crapi_opa PHẢI đứng trước configure_crapi_keycloak
+  # (remediation 2026-09-19, phát hiện trên fresh deploy sạch): k8s/identity/
+  # keycloak-mesh-policies.yaml (áp bởi deploy-security-stack.sh, chạy TRƯỚC
+  # deploy-crapi.sh trong deploy-all.sh) đã đặt Keycloak STRICT mTLS + CUSTOM
+  # AuthorizationPolicy gọi PDP tại opa-service.crapi.svc.cluster.local:9191
+  # (failure_mode_allow: false — fail-closed). Với thứ tự cũ,
+  # configure_crapi_keycloak() (kc-crapi-setup gọi Keycloak Admin API) chạy
+  # TRƯỚC deploy_crapi_opa() dựng chính OPA đó → ext_authz không có backend
+  # để gọi → Envoy từ chối MỌI request tới Keycloak với 403 (xác nhận sống:
+  # istio-proxy log phía Keycloak "upstream":null,"response_time":0 — bị chặn
+  # ở proxy, chưa từng tới app — trong khi mТLS đã đúng, svid đã đúng
+  # spiffe://ztlab.local/openstack/kc-admin-setup). Không phải lỗi thoáng qua
+  # của cluster; sửa tại đây để mọi lần deploy-from-scratch không dính lại.
   register_spire
   deploy_crapi_opa
+  # apply_network_policies PHẢI đứng ngay sau deploy_crapi_opa, TRƯỚC
+  # configure_crapi_keycloak (remediation 2026-09-19, phát hiện NGAY SAU khi
+  # sửa bug ở trên — bug này trước giờ luôn bị bug OPA-chưa-tồn-tại che mất,
+  # chưa ai chạy tới đây để lộ ra): edge `openstack/keycloak -> openstack/opa`
+  # (policy/service-graph-crapi.yaml dòng ~210, đã khai đúng từ 2026-09-13) chỉ
+  # sinh ra manifest os-pod-opa ĐÚNG (NetworkPolicy cho phép ns identity/app
+  # keycloak gọi cổng 9191+8181) — file đó nằm im tới tận cuối main() cũ vì
+  # apply_network_policies() là bước THẬT SỰ `kubectl apply` nó. Trước
+  # configure_crapi_keycloak, cluster mới chỉ có os-crapi-allow-baseline (rule
+  # ipBlock chung, cổng [8080,5432,15006,8181] — KHÔNG có 9191) → NetworkPolicy
+  # ns crapi CHẶN THẬT ext_authz L4 (xác nhận sống bằng curl thẳng TCP tới
+  # opa-server:9191 từ sidecar Keycloak: "Connection refused" trên cả 3 pod
+  # opa, trong khi :8181 luôn thành công — LƯU Ý: điều này ngược lại kết luận
+  # "NetworkPolicy ns crapi không được kube-router enforce" của
+  # AUDIT-THUC-THI.md 2026-09-19 cho các rule ipBlock/rule rỗng cổng khác; rule
+  # port-list đơn giản này RÕ RÀNG có hiệu lực thật trên hạ tầng đang dùng).
+  # kc-crapi-setup vẫn 403 y hệt bug OPA dù OPA đã Ready — root cause khác,
+  # cùng lớp lỗi "thứ tự áp chính sách" trong main() này.
+  apply_network_policies
+  configure_crapi_keycloak
+  deploy_bff
   reinstall_istio_for_crapi_provider
   deploy_mesh_policies
-  apply_network_policies
   restart_workloads_for_sds
   run_seed
   verify
@@ -322,5 +490,10 @@ main() {
 # also triggering a full main() run — same pattern as deploy-app.sh /
 # deploy-security-stack.sh.
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-  main "$@"
+  if [[ "${1:-}" == "--verify-only" ]]; then
+    verify_contexts
+    verify_mesh_connectivity
+  else
+    main "$@"
+  fi
 fi

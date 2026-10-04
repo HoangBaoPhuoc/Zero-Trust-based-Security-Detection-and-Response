@@ -1,5 +1,13 @@
 apiVersion: 1
 
+# Phần 2 remediation (2026-09-19) — audit thực thi phát hiện: rule này firing
+# LIÊN TỤC (verify sống, không phải suy đoán) vì `path != "/health"` từng
+# THIẾU. Kubelet livenessProbe/readinessProbe gọi /health TRỰC TIẾP tới pod
+# IP, KHÔNG qua Istio sidecar interception (Istio tự loại trừ traffic probe
+# khỏi iptables redirect — hành vi ĐÚNG chuẩn, không phải bug) → mọi /health
+# check hợp lệ (waf, opa cả 2 cụm, ...) đều svid="" — khớp y hệt "bỏ qua
+# mТLS/OPA" mà rule này định bắt, dù không có gì sai. Thêm exclusion /health
+# — cùng mẫu đã áp cho lateral-movement (loại trừ /verify hợp lệ).
 groups:
   - orgId: 1
     name: mesh-integrity
@@ -7,7 +15,7 @@ groups:
     interval: 1m
     rules:
       - uid: mesh-integrity-svid-missing
-        title: "Mesh Integrity — request tới crapi không có SVID (khả năng bỏ qua mТLS/OPA)"
+        title: "Mesh Integrity — request/kết nối vào crapi không có SVID (khả năng bỏ qua mТLS/OPA)"
         for: 1m
         condition: A
         data:
@@ -20,7 +28,19 @@ groups:
               datasource:
                 type: loki
                 uid: Loki
-              expr: 'sum(count_over_time({job="envoy-access", namespace="crapi"} | json | method != "" | svid = "" [5m]))'
+              # Mục 4 vòng 2026-09-29 (H2) — 2 vế, chỉ xét phía SERVER:
+              #  (A) dòng inbound (direction từ upstream_cluster "inbound|...")
+              #      có HTTP mà không SVID = request vào sidecar không qua mTLS.
+              #      Bản cũ không lọc hướng nên đếm cả dòng phía CLIENT của
+              #      sidecar (outbound: push Loki, token Keycloak, bff→workshop…)
+              #      nơi svid rỗng là HỢP LỆ → firing liên tục khi hệ thống khoẻ.
+              #  (B) kết nối bị từ chối ở tầng listener: response_flags NR, không
+              #      upstream_cluster, không method = plaintext vào cổng STRICT
+              #      (đo sống: curl từ uid 1337 bff → crapi-workshop:8000 →
+              #      "Connection reset" + dòng {"response_flags":"NR",
+              #      "upstream_cluster":null,"method":null}). Bản cũ lọc
+              #      method != "" nên KHÔNG BAO GIỜ bắt được trường hợp này.
+              expr: '(sum(count_over_time({job="envoy-access", namespace="crapi", direction="inbound"} | json | method != "" | svid = "" | path != "/health" [5m])) or vector(0)) + (sum(count_over_time({job="envoy-access", namespace="crapi"} | json | response_flags = "NR" | upstream_cluster = "" | method = "" [5m])) or vector(0))'
               instant: true
               queryType: instant
               refId: A

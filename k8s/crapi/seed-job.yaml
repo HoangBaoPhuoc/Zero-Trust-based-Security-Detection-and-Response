@@ -24,7 +24,10 @@ metadata: { name: crapi-seed, namespace: crapi }
 type: Opaque
 stringData:
   password: "CrapiSeed123!"
-  users: "testuser01,testuser02,merchant01,analyst01,demoadmin"
+  # stepup-demo (vòng 2026-09-29): thiếu user crAPI khớp email → mọi request của
+  # stepup-demo bị chính crapi-workshop trả 401 (token bff-minted không resolve
+  # được user) dù Zero-Trust (OPA) đã cho qua — step-up không demo trọn được.
+  users: "testuser01,testuser02,merchant01,analyst01,demoadmin,stepup-demo"
 ---
 apiVersion: batch/v1
 kind: Job
@@ -64,7 +67,14 @@ spec:
                   try:
                       return urllib.request.urlopen(r, timeout=25).status
                   except urllib.error.HTTPError as e:
-                      return e.code
+                      # Kèm thân phản hồi: chạy lại trên DB đã có user thì
+                      # identity trả 403 (đã đăng ký) — phải phân biệt được với
+                      # 403 do chặn (OPA/mesh), chỉ mã trạng thái thì không đủ.
+                      try:
+                          body = e.read().decode("utf-8", "replace")[:100].replace("\n", " ")
+                      except Exception:
+                          body = ""
+                      return f"{e.code} {body}".strip()
               ok = False
               for _ in range(60):
                   try:

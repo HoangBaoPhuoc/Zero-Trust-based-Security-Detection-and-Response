@@ -1,0 +1,14 @@
+NAME                               READY   STATUS      RESTARTS   AGE     IP            NODE            NOMINATED NODE   READINESS GATES
+security-scanner-9xz6h             1/2     NotReady    0          44m     10.42.0.176   ip-10-10-1-10   <none>           <none>
+redis-7ddbb46c68-nwldj             1/1     Running     0          21m     10.42.0.178   ip-10-10-1-10   <none>           <none>
+mongodb-0                          1/1     Running     0          174m    10.42.1.11    ip-10-10-1-11   <none>           <none>
+posture-agent-29829260-c76nw       0/1     Completed   0          3m28s   10.42.2.74    ip-10-10-1-12   <none>           <none>
+opa-server-bcb587767-ld5jl         2/2     Running     0          2m17s   10.42.2.81    ip-10-10-1-12   <none>           <none>
+waf-5bd74d97c6-mrp4c               2/2     Running     0          2m18s   10.42.2.76    ip-10-10-1-12   <none>           <none>
+bff-86c8785b8-swnnw                2/2     Running     0          2m18s   10.42.2.78    ip-10-10-1-12   <none>           <none>
+opa-server-bcb587767-qpkpt         2/2     Running     0          2m11s   10.42.1.83    ip-10-10-1-11   <none>           <none>
+crapi-web-58cccbbcb7-99jv2         2/2     Running     0          2m18s   10.42.2.77    ip-10-10-1-12   <none>           <none>
+opa-server-bcb587767-sbhh6         2/2     Running     0          2m5s    10.42.2.82    ip-10-10-1-12   <none>           <none>
+crapi-community-78c6cf7974-2dgbq   2/2     Running     0          2m18s   10.42.2.79    ip-10-10-1-12   <none>           <none>
+crapi-workshop-7787f7dc95-lwm9f    2/2     Running     0          2m18s   10.42.2.80    ip-10-10-1-12   <none>           <none>
+posture-agent-29829262-65d8f       0/1     Completed   0          88s     10.42.2.83    ip-10-10-1-12   <none>           <none>

@@ -11,6 +11,10 @@ spec:
     metadata:
       labels:
         app: security-scanner
+        # Vòng 2026-09-29: ns crapi bật sidecar injection → istio-proxy chạy mãi sau
+        # khi scanner thoát, Job KHÔNG BAO GIỜ complete (pod 1/2 NotReady). Scanner
+        # chỉ đọc /proc và /etc/shadow của chính nó, không gọi mạng → không cần mesh.
+        sidecar.istio.io/inject: "false"
     spec:
       restartPolicy: Never
       containers:

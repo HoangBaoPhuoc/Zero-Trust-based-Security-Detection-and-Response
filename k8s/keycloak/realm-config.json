@@ -104,7 +104,8 @@
         "+"
       ],
       "attributes": {
-        "pkce.code.challenge.method": "S256"
+        "pkce.code.challenge.method": "S256",
+        "acr.loa.map": "{\"normal\":1,\"high\":2}"
       },
       "protocolMappers": [
         {

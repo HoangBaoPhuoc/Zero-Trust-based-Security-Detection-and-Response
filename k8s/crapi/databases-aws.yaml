@@ -34,6 +34,17 @@ spec:
         - name: mongodb
           image: mongo@sha256:4be76f674fc4b27859816811b8baa3c51830eb1dbf4ca81a51e26b79edd662ef
           imagePullPolicy: IfNotPresent
+          # Phần 2 remediation (2026-09-19) — nghi vấn ban đầu (mongo không
+          # --auth, vì manifest này không có MONGO_INITDB_ROOT_*/args) là
+          # SAI theo thực nghiệm sống: `ps aux` trong container xác nhận
+          # `mongod --auth --bind_ip_all` đang chạy, và
+          # `mongo -u admin -p crapisecretpassword` xác thực + đọc DB thành
+          # công (cơ chế bootstrap chính xác chưa truy hết — không phải việc
+          # cấu hình ở file này — không đổi gì thêm để tránh phá vỡ cái đang
+          # chạy đúng mà mình chưa hiểu hết). KHÔNG cần args/env thêm. Xem
+          # AUDIT-THUC-THI.md mục MongoDB: auth có thật (lớp DATA ổn), netpol
+          # aws-pod-mongodb thì không được kube-router enforce thật (lớp
+          # NETWORK không đáng tin) — 2 lớp độc lập, chỉ 1 lớp cần sửa.
           ports:
             - containerPort: 27017
               name: mongo
@@ -48,6 +59,18 @@ spec:
               command: ["mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
             initialDelaySeconds: 10
             periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["mongo", "--quiet", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          # Phần 3.5 remediation (2026-09-19) — thiếu requests/limits trước đây
+          # (Gatekeeper chưa có constraint bắt buộc, xem AUDIT-THUC-THI.md).
+          # Mongo cần bộ nhớ đủ cho WiredTiger cache — không đặt limit quá sát
+          # request để tránh OOM-kill khi có traffic tăng đột biến.
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 768Mi }
       volumes:
         - name: mongodb-data
           persistentVolumeClaim:
@@ -123,6 +146,14 @@ spec:
               command: ["sh", "-c", "redis-cli -a $REDIS_PASSWORD --no-auth-warning ping"]
             initialDelaySeconds: 5
             periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a $REDIS_PASSWORD --no-auth-warning ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 256Mi }
       volumes:
         - name: redis-data
           persistentVolumeClaim:

@@ -87,10 +87,15 @@ if run_step 1; then
 fi
 
 # ─────────────────────────────────────────────────────────
+# .env được nạp CẢ khi chạy tiếp bằng --from-step > 2 (2026-10-04: `--from-step 11` bỏ qua bước 2 →
+# không có khoá AWS → deploy-app.sh::deploy_aws_saml_federation chỉ WARN rồi bỏ qua, trong khi bước 5
+# đã tạo SAML provider từ file metadata còn sót của Keycloak cũ — deploy báo xanh với SSO hỏng).
+if [[ -f .env ]]; then set -a; source <(grep -v '^#' .env | grep '='); set +a; fi
+export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-1}"
+
 step 2 "Credentials .env"
 if run_step 2; then
   [[ -f .env ]] || fail "Không thấy file .env — copy từ .env.template trước"
-  set -a; source <(grep -v '^#' .env | grep '='); set +a
 
   if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
     warn "Thiếu AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY trong .env"
@@ -153,6 +158,9 @@ fi
 # ─────────────────────────────────────────────────────────
 step 6 "Image Ubuntu OpenStack"
 if run_step 6; then
+  # Tiền kiểm control-plane AIO (sự cố 2026-10-04: đồng hồ bị chỉnh lùi sau khi Kolla khởi động →
+  # nova-scheduler câm, VM kẹt BUILD 30 phút). Tự khởi động lại container bị ảnh hưởng + tạo VM thử.
+  bash scripts/openstack-aio-preflight.sh || fail "control-plane OpenStack AIO không lập lịch được VM"
   if openstack image list -f value -c Name | grep -qx "ubuntu-22.04"; then
     ok "Image 'ubuntu-22.04' đã tồn tại — bỏ qua"
   else

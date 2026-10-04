@@ -12,6 +12,15 @@ type: Opaque
 stringData:
   session-secret: "ZTLab-BFF-Session-2026-change-me"
 ---
+# Phần 3.2 (remediation 2026-09-19) — Device CA revocation. ConfigMap
+# `device-revocation-list` (khai + tạo trong scripts/deploy-crapi.sh
+# ensure_device_revocation_configmap(), CỐ Ý KHÔNG ở đây) giữ danh sách
+# device_id bị thu hồi, đọc TƯƠI mỗi request bởi bff. Lý do KHÔNG khai
+# ConfigMap này trong file manifest thường-apply: đây là TRẠNG THÁI VẬN HÀNH
+# động (giống tests/runs.jsonl), không phải cấu hình nguồn tĩnh — nếu nằm
+# trong 1 file bị `kubectl apply` lại mỗi lần redeploy, nội dung sẽ bị RESET
+# theo bất kỳ giá trị nào trong manifest, tự hoàn tác mọi lần thu hồi đã làm.
+# `ensure_device_revocation_configmap()` tạo CHỈ KHI CHƯA TỒN TẠI.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -24,7 +33,7 @@ spec:
     matchLabels: { app: bff }
   template:
     metadata:
-      labels: { app: bff }
+      labels: { app: bff, ztlab.io/nonroot-enforced: "true" }
       annotations:
         spiffe.io/spiffeid: "spiffe://ztlab.local/aws/bff"
         sidecar.istio.io/inject: "true"
@@ -36,17 +45,32 @@ spec:
         - name: crapi-keys
           secret:
             secretName: crapi-jwt-key
+        - name: device-revocation
+          configMap:
+            name: device-revocation-list
+            optional: true
       containers:
         - name: bff
           image: ztlab/bff:1.0.0
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c", "exec python -m uvicorn main:app --host 0.0.0.0 --port 8080"]
+          # Phần 1.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) —
+          # ảnh python:3.11-slim tự build, không cần root: cổng 8080 không
+          # đặc quyền, mọi volumeMount đều readOnly. Verify sống: pod chạy
+          # Running/Ready với UID này (không cần sửa Dockerfile).
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
           ports:
             - containerPort: 8080
               name: http
           volumeMounts:
             - name: crapi-keys
               mountPath: /app/crapi-keys
+              readOnly: true
+            - name: device-revocation
+              mountPath: /app/device-revocation
               readOnly: true
           env:
             - name: CLOUD_PROVIDER

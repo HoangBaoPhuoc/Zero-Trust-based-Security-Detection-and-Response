@@ -1,7 +1,9 @@
-# OpenLDAP — nguồn directory GIẢ LẬP cho mục đích minh hoạ "sync user từ
-# corporate directory vào Keycloak" (mục SCIM trong file tham khảo). Lab này
-# không có LDAP/AD doanh nghiệp thật — đây là nguồn dựng riêng để có cái sync,
-# không phản ánh nhu cầu vận hành thật. Ghi rõ trong README/docs khi tham chiếu.
+# [TEST DOUBLE — Phần 3.8] OpenLDAP — nguồn directory GIẢ LẬP cho mục đích
+# minh hoạ "sync user từ corporate directory vào Keycloak" (mục SCIM trong
+# file tham khảo). Lab này không có LDAP/AD doanh nghiệp thật — đây là nguồn
+# dựng riêng để có cái sync, không phản ánh nhu cầu vận hành thật. KHÔNG nâng
+# cấp (không cần HA/backup/hardening như 1 directory doanh nghiệp thật) — chỉ
+# đánh dấu rõ để không đọc nhầm thành thành phần vận hành thật.
 apiVersion: v1
 kind: Namespace
 metadata:

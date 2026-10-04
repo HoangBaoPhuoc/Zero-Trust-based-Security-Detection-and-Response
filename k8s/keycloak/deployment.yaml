@@ -89,6 +89,9 @@ spec:
               port: 8080
             initialDelaySeconds: 90
             periodSeconds: 20
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1000m, memory: 1280Mi }
       volumes:
         - name: realm-config
           configMap:

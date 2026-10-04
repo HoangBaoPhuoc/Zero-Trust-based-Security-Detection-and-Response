@@ -37,8 +37,11 @@ workloads:
   # SVID thật — cần cho egress aws/opa -> openstack/keycloak (JWKS/OIDC
   # discovery qua OPA). service_account (không phải app_label) vì giờ nó CÓ
   # tham gia edge L7 (test_every_l7_workload_has_spire_entry_and_real_spiffe
-  # đòi hỏi service_account để sinh entry SPIRE). Inbound (ext_authz từ mọi
-  # workload khác) GIỮ NGUYÊN plaintext — xem k8s/crapi/opa.yaml opa-permissive.
+  # đòi hỏi service_account để sinh entry SPIRE). Inbound cổng 9191 (ext_authz
+  # thật) nay STRICT mТLS + AuthorizationPolicy ALLOW theo SPIFFE (Phần 1.2
+  # remediation 2026-09-18, sửa lỗ thật — xem k8s/crapi/opa.yaml opa-strict/
+  # opa-service-mtls/opa-inbound-allow); cổng 8181 (REST/health) vẫn
+  # PERMISSIVE có chủ đích, giới hạn CHỈ GET /health bằng cùng AuthorizationPolicy.
   aws/opa:              { cluster: aws, namespace: crapi, service_account: opa }
   openstack/crapi-identity: { cluster: openstack, namespace: crapi, service_account: crapi-identity }
   openstack/postgresdb:     { cluster: openstack, namespace: crapi, app_label: postgresdb, spiffe: false }
@@ -229,9 +232,29 @@ netpol_baseline:
       - from_ns: spire
         ports: [8181]
         comment: "security-healthcheck CronJob -> opa :8181"
-      - from_ns: crapi
-        ports: []
-        comment: "noi bo ns crapi (podSelector {} nen bat ky pod crapi -> pod crapi)"
+      # Phần 2 remediation (2026-09-19) — XOÁ rule "noi bo ns crapi, ports: []"
+      # từng ở đây. `ports: []` khiến gen-networkpolicy.py không render field
+      # `ports:` cho rule này ở TẤT CẢ = K8s NetworkPolicy hiểu là KHÔNG GIỚI
+      # HẠN CỔNG — vì podSelector: {} nên rule này áp cho MỌI pod trong ns
+      # crapi và NetworkPolicy là phép OR/union giữa các rule/policy cùng
+      # chọn 1 pod đích, rule này ĐÈ LÊN mọi giới hạn cổng của từng policy
+      # per-destination khác (aws-pod-redis, aws-pod-mongodb, ...) — verify
+      # sống 2026-09-19: `nc -zv` từ crapi-web/crapi-community (KHÔNG có
+      # trong policy aws-pod-redis) THẲNG vào redis:6379 (không sidecar,
+      # không lớp L7 nào bù) vẫn "open" dù aws-pod-redis chỉ định rõ chỉ bff
+      # được phép — ipset/chain kube-router cho aws-pod-redis khi kiểm riêng
+      # (`iptables -S`, `ipset list`) ĐÚNG (chỉ chứa IP bff), tức đây KHÔNG
+      # phải "nf_tables/ipset hỏng" như tài liệu cũ suy đoán — là lỗi
+      # THIẾT KẾ policy (rule rỗng cổng ở baseline nuốt mất phân đoạn của
+      # per-destination policy). LƯU Ý 2026-09-26: sau khi xoá rule này, một cơ
+      # chế THỨ HAI cùng kiểu vẫn còn — rule egress "cùng ns :cổng" của baseline
+      # bị kube-router áp thành cho phép ở phía ingress của pod đích (AUDIT §3.4,
+      # HAN-CHE H3), nên phân đoạn nội ns bằng L4 vẫn không hiệu lực ở các cổng
+      # nằm trong danh sách egress. Mọi traffic nội bộ ns crapi CẦN THẬT đã có
+      # policy per-destination riêng (aws-pod-bff/-crapi-community/-crapi-web/
+      # -crapi-workshop/-mongodb/-opa/-redis/-waf, sinh từ edge service-graph)
+      # — xoá rule catch-all này không mất traffic hợp lệ nào, chỉ đóng đúng
+      # lỗ đã tìm thấy. Xem AUDIT-THUC-THI.md.
     egress:
       - to_ns: kube-system
         ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
@@ -248,17 +271,27 @@ netpol_baseline:
   openstack:
     ingress:
       - from_cidrs: [10.10.1.0/24, 10.10.0.0/24, 10.200.0.0/24, 10.42.0.0/16, 192.168.101.0/24]
-        ports: [8080, 5432, 15006, 8181]
-        comment: "cross-cloud AWS k3s nodes + pod CIDR -> identity/postgres NodePort"
+        ports: [8080, 5432, 15006, 8181, 9191]
+        # Phần 2.2 remediation (2026-09-19, BAOCAO-VONG-2026-09-19.md) — 9191
+        # (ext_authz thật của OPA) THIẾU ở đây từ đầu; "fix" ban đầu tối nay
+        # (đăng ký thêm edge keycloak->opa ở dưới, sinh ra os-pod-opa) dựa vào
+        # rule podSelector — bản 2026-09-19 kết luận "0% hiệu lực vì node thiếu
+        # ipset": KẾT LUẬN ĐÓ SAI (đã đo lại 2026-09-26: k3s tự có ipset, policy
+        # podSelector chạy đúng; AUDIT-THUC-THI.md §3.1). Thêm 9191 thẳng vào
+        # baseline này vẫn là fix đúng (cổng ext_authz phải nằm trong danh sách
+        # cho phép của baseline). Verify sống: sau khi thêm, keycloak -> opa:9191
+        # (ext_authz) hết cx_connect_fail, decision log xuất hiện lại.
+        comment: "cross-cloud AWS k3s nodes + pod CIDR -> identity/postgres NodePort + opa ext_authz"
       - from_ns: monitoring
         ports: [8080, 15006]
         comment: "Prometheus scrape"
       - from_ns: spire
         ports: [8181]
         comment: "security-healthcheck -> opa"
-      - from_ns: crapi
-        ports: []
-        comment: "noi bo ns crapi"
+      # Phần 2 remediation (2026-09-19) — cùng lỗi/lý do đã xoá ở nhánh aws
+      # phía trên (rule "ports: []" nuốt mất phân đoạn per-destination của
+      # os-pod-opa/os-pod-postgresdb). Traffic nội bộ ns crapi (OpenStack)
+      # cần thật đã có os-pod-opa + os-pod-postgresdb riêng.
     egress:
       - to_ns: kube-system
         ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]

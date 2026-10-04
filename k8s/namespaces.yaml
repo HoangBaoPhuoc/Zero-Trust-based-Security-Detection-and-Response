@@ -32,3 +32,10 @@ metadata:
   labels:
     app.kubernetes.io/part-of: ztlab
     app.kubernetes.io/managed-by: kubectl
+    # Vòng cuối 2026-09-26: Prometheus (ns này) scrape bff:8080/metrics, bff là
+    # STRICT mTLS nên Prometheus PHẢI có sidecar + SVID. Nhãn này trước đây chỉ
+    # được gắn bằng `kubectl label` ở deploy_istio, rồi bị `kubectl apply` của
+    # k8s/monitoring/prometheus.yaml (từng chứa 1 object Namespace không nhãn)
+    # ghi đè ở Step 6 -> Prometheus lên KHÔNG sidecar -> target crapi-services-aws
+    # `connection reset by peer`. Khai báo ở đây (nguồn duy nhất của Namespace).
+    istio-injection: enabled

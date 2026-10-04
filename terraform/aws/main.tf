@@ -166,7 +166,7 @@ resource "aws_instance" "aws_k3s_master" {
   private_ip             = "10.10.1.10"
   key_name               = local.effective_key_pair
   vpc_security_group_ids = [aws_security_group.sg_private.id]
-  root_block_device { volume_size = 30 }
+  root_block_device { volume_size = 100 } # 2026-10-04 mục 2.3: Loki 51,6 MB/h × retention 720 h ≈ 37 GB, ×2 biên
   tags = { Name = "aws-k3s-master", Role = "k3s-master" }
 }
 
@@ -177,7 +177,7 @@ resource "aws_instance" "aws_k3s_worker_1" {
   private_ip             = "10.10.1.11"
   key_name               = local.effective_key_pair
   vpc_security_group_ids = [aws_security_group.sg_private.id]
-  root_block_device { volume_size = 30 }
+  root_block_device { volume_size = 100 } # 2026-10-04 mục 2.3: Loki 51,6 MB/h × retention 720 h ≈ 37 GB, ×2 biên
   tags = { Name = "aws-k3s-worker-1", Role = "k3s-worker" }
 }
 
@@ -188,7 +188,7 @@ resource "aws_instance" "aws_k3s_worker_2" {
   private_ip             = "10.10.1.12"
   key_name               = local.effective_key_pair
   vpc_security_group_ids = [aws_security_group.sg_private.id]
-  root_block_device { volume_size = 30 }
+  root_block_device { volume_size = 100 } # 2026-10-04 mục 2.3: Loki 51,6 MB/h × retention 720 h ≈ 37 GB, ×2 biên
   tags = { Name = "aws-k3s-worker-2", Role = "k3s-worker" }
 }
 

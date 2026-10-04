@@ -40,7 +40,13 @@ CRAPI_CA_CERT="${CRAPI_CA_CERT:-$CA_DIR/device-ca.crt}"
 
 _ensure_device_cert() {
   local device_id="$1" posture="$2"
-  [[ -f "$CA_DIR/issued/$device_id/device.crt" ]] && return 0
+  # Vòng 2026-09-29: trước chỉ kiểm file TỒN TẠI → cert fixture (TTL 7 ngày,
+  # issue-device-cert.sh) hết hạn 2026-09-26 mà không ai phát hành lại; mọi
+  # kịch bản chết ở Gateway với TLS alert "certificate expired" (curl 000).
+  # Nay phát hành lại khi thiếu HOẶC còn < 24 giờ — đợt thu 150 giờ (Giai
+  # đoạn B) dài gần bằng TTL nên việc này phải tự động.
+  local crt="$CA_DIR/issued/$device_id/device.crt"
+  [[ -f "$crt" ]] && openssl x509 -in "$crt" -noout -checkend 86400 >/dev/null 2>&1 && return 0
   bash "$REPO_ROOT/scripts/issue-device-cert.sh" "$device_id" "$posture" >/dev/null \
     || fail "không phát hành được cert thiết bị '$device_id' — kiểm tra Device CA ($CA_DIR)"
 }
@@ -97,17 +103,38 @@ crapi_call() {
   fi
 }
 
-# loki_count '<logql>'  → số dòng khớp trong 10 phút gần nhất (0 nếu Loki không tới được)
+# loki_count '<logql>' [start_epoch_s] [end_epoch_s]
+#   Không truyền start/end: cửa sổ TRƯỢT 10 phút gần nhất tính từ "now" — chỉ
+#   dùng cho log THAM KHẢO (không gate pass/fail), vì kết quả phụ thuộc thời
+#   điểm gọi và có thể ăn log của lần chạy trước/sau khi gọi script lặp lại
+#   nhanh (Phần 1.1 remediation 2026-09: đây là nguyên nhân gốc khiến
+#   crapi_bola.sh báo FAIL=4 giả — số CRS-hit không liên quan gì tới BOLA bị
+#   tính vào vì rơi trong cùng cửa sổ 10 phút của một lần gọi debug trước đó).
+#   Có start/end (epoch giây, TƯỜNG MINH — dùng mốc bắt đầu/kết thúc thật của
+#   chính lần chạy, kiểu T_START/T_END của crapi_run_campaign.sh A5.2): khoảng
+#   thời gian TẤT ĐỊNH, không phụ thuộc "now" → dùng cho MỌI phép đo gate
+#   pass/fail (vd crapi_bola.sh, crapi_sqli_waf.sh).
 loki_count() {
-  local q="$1" end start
-  end="$(date +%s)000000000"; start="$(( $(date +%s) - 600 ))000000000"
-  curl -s --max-time 8 -G "$LOKI_URL/loki/api/v1/query_range" \
-    --data-urlencode "query=count_over_time(($q)[10m])" \
-    --data-urlencode "start=$start" --data-urlencode "end=$end" --data-urlencode "step=600" 2>/dev/null \
+  local q="$1" start_s end_s dur start end
+  if [[ $# -ge 3 ]]; then
+    start_s="$2"; end_s="$3"
+  else
+    end_s="$(date +%s)"; start_s="$(( end_s - 600 ))"
+  fi
+  dur=$(( end_s - start_s )); [[ $dur -lt 1 ]] && dur=1
+  # Mục 11 vòng 2026-09-29 — bản cũ dùng query_range(start,end,step=dur) rồi lấy
+  # r[0].values[-1]: (1) Loki CĂN điểm đánh giá theo bội số của step (cửa sổ thật
+  # bị lệch khỏi [T0,T1], vd (152,160] thay vì (148,156]); (2) không sum() nên chỉ
+  # đếm SERIES ĐẦU TIÊN. Hệ quả đo được: "transaction total" = 2 dù có 3 dòng, và
+  # attack-lfi/rce 1↔0 giữa các lần chạy. Instant query tại end với
+  # sum(count_over_time(...[dur])) đếm đúng (end-dur, end] trên mọi series.
+  curl -s --max-time 8 -G "$LOKI_URL/loki/api/v1/query" \
+    --data-urlencode "query=sum(count_over_time(($q)[${dur}s]))" \
+    --data-urlencode "time=${end_s}000000000" 2>/dev/null \
     | python3 -c "import json,sys
 try:
     d=json.load(sys.stdin); r=d['data']['result']
-    print(int(float(r[0]['values'][-1][1])) if r else 0)
+    print(int(float(r[0]['value'][1])) if r else 0)
 except Exception:
     print(0)"
 }
@@ -117,4 +144,53 @@ crapi_pod() {
   local app="$1" ctx="${2:-$KUBE_AWS}"
   kubectl --context "$ctx" -n "$NS" get pod -l "app=$app" \
     -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+}
+
+# ── Vòng 2026-09-29: bằng chứng Firing THẬT cho một rule Grafana ────────────────
+# (dùng cho crapi_large_response.sh, crapi_privilege_escalation.sh và
+# tests/collect_metrics.py --runs). Cần port-forward Grafana :3000 + incident-analyzer :8091.
+GRAFANA_URL="${GRAFANA_URL:-http://localhost:3000}"
+INCIDENT_ANALYZER_URL="${INCIDENT_ANALYZER_URL:-http://localhost:8091}"
+_grafana_pass() { kubectl --context "$KUBE_AWS" -n plg-stack get secret grafana-admin-secret \
+                    -o jsonpath='{.data.admin-password}' | base64 -d; }
+
+# grafana_rule_state <title-prefix> → inactive|pending|firing|missing (+ activeAt nếu có)
+grafana_rule_state() {
+  curl -s -u "admin:$(_grafana_pass)" "$GRAFANA_URL/api/prometheus/grafana/api/v1/rules" | python3 -c '
+import json,sys
+pre=sys.argv[1]
+for g in json.load(sys.stdin)["data"]["groups"]:
+  for r in g["rules"]:
+    if r["name"].startswith(pre):
+      at=[a.get("activeAt","") for a in r.get("alerts",[]) if a.get("state","").lower().startswith("alert")]
+      print(r["state"], (at or [""])[0]); sys.exit()
+print("missing")' "$1"
+}
+
+# wait_rule_firing <title-prefix> <timeout_s> → in "firing <activeAt> <giây chờ>" hoặc "timeout"
+wait_rule_firing() {
+  local pre="$1" to="$2" t0 st; t0=$(date +%s)
+  while (( $(date +%s) - t0 < to )); do
+    st="$(grafana_rule_state "$pre")"
+    [[ "$st" == firing* ]] && { echo "$st $(( $(date +%s) - t0 ))"; return 0; }
+    sleep 5
+  done
+  echo "timeout"; return 1
+}
+
+# wait_evidence <attack_type> <after_epoch> <timeout_s> → in JSON evidence bundle đầu tiên khớp
+wait_evidence() {
+  local at="$1" after="$2" to="$3" t0 out; t0=$(date +%s)
+  while (( $(date +%s) - t0 < to )); do
+    out="$(curl -s "$INCIDENT_ANALYZER_URL/evidence" | python3 -c '
+import json,sys,datetime
+at,after=sys.argv[1],float(sys.argv[2])
+for r in json.load(sys.stdin):
+  ts=datetime.datetime.fromisoformat(r["ts"].replace("Z","+00:00")).timestamp()
+  if ts>=after and at in r.get("attack_type",""):
+    print(json.dumps({k:r.get(k) for k in ("evidence_id","ts","attack_type","alert_name","email_sent")},ensure_ascii=False)); break' "$at" "$after" 2>/dev/null)"
+    [[ -n "$out" ]] && { echo "$out"; return 0; }
+    sleep 5
+  done
+  return 1
 }

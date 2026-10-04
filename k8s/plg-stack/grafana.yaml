@@ -18,6 +18,12 @@ metadata:
   namespace: plg-stack
 spec:
   replicas: 1
+  # Phần 3.6 remediation (2026-09-19) — cùng lý do đã sửa ở loki.yaml: PVC
+  # grafana-data-pvc là ReadWriteOnce, RollingUpdate mặc định có thể deadlock
+  # (pod mới kẹt Pending chờ volume, pod cũ không bị xoá vì pod mới chưa
+  # Ready) khi node ít tài nguyên trống — verify sống đúng bug này ở loki.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: grafana
@@ -35,10 +41,15 @@ spec:
           ports:
             - containerPort: 3000
           env:
+            # Phần 3.7 remediation (2026-09-19) — trước đây hardcode plaintext
+            # "ZTALab2026!" thẳng trong file này (không Secret nào cả, dù
+            # .env.template đã có sẵn GRAFANA_ADMIN_PASSWORD, đúng ý định thiết
+            # kế chỉ là chưa nối dây). Nay đọc từ Secret grafana-admin-secret
+            # (scripts/deploy-app.sh ensure, cùng mẫu keycloak-secret).
             - name: GF_SECURITY_ADMIN_USER
-              value: admin
+              valueFrom: { secretKeyRef: { name: grafana-admin-secret, key: admin-user } }
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: ZTALab2026!
+              valueFrom: { secretKeyRef: { name: grafana-admin-secret, key: admin-password } }
             - name: GF_AUTH_ANONYMOUS_ENABLED
               value: "false"
             - name: GF_USERS_ALLOW_SIGN_UP
@@ -47,24 +58,21 @@ spec:
               value: "true"
             - name: GF_UNIFIED_ALERTING_ENABLED
               value: "true"
-            # SMTP — Gmail để gửi alert email cho admin
+            # SMTP (đóng sổ 2026-10-04): trỏ vào MailHog plg-stack — hộp thư SOC của lab, cùng nơi incident-analyzer
+            # gửi evidence bundle (H9: test double có chủ đích). Bản cũ trỏ smtp.gmail.com:587 với mật khẩu lấy từ
+            # grafana-smtp-secret — trên cụm dựng 2026-10-04 secret rỗng → MỌI email của Grafana thất bại "535 Username
+            # and Password not accepted" (đo qua API receivers): các alert category=infrastructure (Mesh Integrity,
+            # Control-Plane Down, Log Pipeline Silent, Health-Check Silent) Firing đúng nhưng chưa từng báo tới ai (H7 ca 6).
             - name: GF_SMTP_ENABLED
               value: "true"
             - name: GF_SMTP_HOST
-              value: "smtp.gmail.com:587"
-            - name: GF_SMTP_USER
-              value: "voha2005@gmail.com"
-            - name: GF_SMTP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: grafana-smtp-secret
-                  key: password
+              value: "mailhog.plg-stack.svc.cluster.local:1025"
             - name: GF_SMTP_FROM_ADDRESS
-              value: "voha2005@gmail.com"
+              value: "grafana@ztlab.local"
             - name: GF_SMTP_FROM_NAME
               value: "ZTLab Security Monitor"
             - name: GF_SMTP_STARTTLS_POLICY
-              value: "MandatoryStartTLS"
+              value: "NoStartTLS"
           volumeMounts:
             - name: grafana-data
               mountPath: /var/lib/grafana

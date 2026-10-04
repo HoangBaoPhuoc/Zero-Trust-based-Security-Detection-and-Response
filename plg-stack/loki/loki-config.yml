@@ -35,8 +35,17 @@ limits_config:
   ingestion_burst_size_mb:   64
   max_streams_per_user:      10000
   max_entries_limit_per_query: 50000
+  # Phần 3.6 remediation (2026-09-19): retention THẬT SỰ có hiệu lực nằm ở
+  # đây, không phải table_manager (đã xoá — legacy boltdb-shipper era, KHÔNG
+  # áp dụng cho schema_config.store: tsdb đang dùng — compactor.
+  # retention_enabled: true mà KHÔNG có dòng này thì không có period nào để
+  # thực thi, coi như retention tắt câm lặng dù trông như đã bật). 30 ngày =
+  # dư khoảng 4x so với 150 giờ traffic nền cộng dồn Giai đoạn B cần (150h ≈
+  # 6.25 ngày) — biên đủ rộng cho việc thu thập trải dài nhiều phiên + thời
+  # gian gán nhãn sau đó mà không lo mất dữ liệu.
+  retention_period: 720h   # 30 ngày
 
-# Retention — giữ log 30 ngày
+# Retention thật thi hành qua limits_config.retention_period ở trên.
 compactor:
   working_directory: /loki/compactor
   retention_enabled: true
@@ -53,7 +62,3 @@ chunk_store_config:
     embedded_cache:
       enabled: true
       max_size_mb: 256
-
-table_manager:
-  retention_deletes_enabled: true
-  retention_period: 2160h  # 90 days

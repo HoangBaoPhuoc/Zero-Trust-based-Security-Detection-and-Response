@@ -50,7 +50,8 @@ spec:
                     | grep -c '^SPIFFE ID' || true)
                   AGENT_COUNT=${AGENT_COUNT:-0}
 
-                  # k3s's embedded kube-router NetworkPolicy controller lags
+                  # (Giả thuyết 2026-09-13, CHƯA kiểm lại — HAN-CHE H8:) k3s's
+                  # embedded kube-router NetworkPolicy controller lags
                   # behind this Job's own pod IP getting added to the
                   # spire-ns ipset (this ns churns every minute), so the very
                   # first curl right after pod start often gets an instant

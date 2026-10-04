@@ -22,6 +22,10 @@ AWS_CONTEXT="${AWS_CONTEXT:-ctx-aws}"
 OS_CONTEXT="${OS_CONTEXT:-ctx-openstack}"
 AWS_KEY_PAIR_NAME="${AWS_KEY_PAIR_NAME:-ztlab-key}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
+# NodePort 31000 cua Service loki (k8s/plg-stack/loki.yaml) tren master AWS
+# (IP private co dinh, terraform/aws). Dung chung cho Promtail va
+# security-healthcheck phia OpenStack.
+OS_LOKI_PUSH_URL="${OS_LOKI_PUSH_URL:-http://10.10.1.10:31000/loki/api/v1/push}"
 
 # `kubectl run` overrides for the 4 short-lived kc-admin-setup bootstrap pods
 # (kc-ldap-federation-setup, kc-audience-mapper-setup, kc-stepup-flow-setup,
@@ -49,6 +53,30 @@ SSH_KEY="${SSH_KEY:-$HOME/.ssh/${AWS_KEY_PAIR_NAME}}"
 # 2026-09-13 with `kubectl run ... --dry-run=client -o yaml`, which showed
 # only the `run:` label.
 KC_ADMIN_SETUP_OVERRIDES='{"metadata":{"labels":{"app":"kc-admin-setup"},"annotations":{"sidecar.istio.io/userVolume":"[{\"name\":\"spire-workload-socket\",\"hostPath\":{\"path\":\"/run/spire/sockets/agent.sock\",\"type\":\"Socket\"}}]","sidecar.istio.io/userVolumeMount":"[{\"name\":\"spire-workload-socket\",\"mountPath\":\"/var/run/secrets/workload-spiffe-uds/socket\"}]"}},"spec":{"serviceAccountName":"kc-admin-setup"}}'
+
+# Phần 1 remediation (2026-09-18, phát hiện thêm ngoài danh sách task): mọi
+# call site kc-*-setup bên dưới trước đây làm
+# `wait --for=condition=Ready ... --timeout=60s >/dev/null 2>&1 || true` rồi
+# `exec` NGAY SAU — cái `|| true` NUỐT LỖI wait, nên nếu istio-proxy sidecar
+# của pod chưa Ready (SPIRE cấp SVID chậm khi cụm vừa khởi động — đúng lúc
+# các pod này chạy, ngay sau bước SPIRE/Istio), lệnh exec chạy vào một pod mà
+# mesh chưa sẵn sàng định tuyến: gọi Keycloak Admin API qua mTLS thất bại,
+# rồi bị `|| warn` ở cuối nuốt tiếp — deploy báo "OK" nhưng cấu hình Keycloak
+# KHÔNG được áp dụng. Quan sát THẬT trên một lần redeploy sạch (2026-09-18):
+# đúng chuỗi này khiến client `crapi-bff` không có redirectUris https, login
+# qua Gateway hỏng hoàn toàn dù `deploy-crapi.sh` không báo lỗi nào. Sửa tận
+# gốc: retry wait THẬT (không swallow) trước khi exec.
+kc_wait_ready() { # <pod> [timeout_per_try] [số lần thử]
+  local pod="$1" per="${2:-30s}" tries="${3:-6}" i=0
+  until kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready "pod/$pod" -n identity --timeout="$per" >/dev/null 2>&1; do
+    i=$((i + 1))
+    if [[ $i -ge $tries ]]; then
+      warn "$pod không Ready sau ${i}x${per} — exec tiếp theo có thể lỗi mesh (sidecar/SPIRE SVID chậm)"
+      return 1
+    fi
+  done
+  return 0
+}
 
 SKIP_IMAGES=false
 SKIP_TUNNEL=false
@@ -320,6 +348,7 @@ deploy_security_stack() {
 }
 
 deploy_openldap_and_federation() {
+  local kc_step_failed=false
   step "Step 3b: OpenLDAP (SCIM demo directory) + Keycloak User Federation"
   if [[ "$SKIP_SECURITY_STACK" == true ]]; then
     log "Skipping OpenLDAP federation (security stack was skipped, Keycloak not available)"
@@ -341,7 +370,7 @@ deploy_openldap_and_federation() {
   # even when Keycloak itself wasn't redeployed this run.
   kkc delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
   kkc run kc-ldap-federation-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
-  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-ldap-federation-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kc_wait_ready kc-ldap-federation-setup
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-ldap-federation-setup -- python3 -c "
 import urllib.request, json, urllib.parse, urllib.error
 
@@ -375,13 +404,14 @@ else:
     req = urllib.request.Request('http://keycloak.identity.svc.cluster.local:8080/admin/realms/ztlab/components', data=json.dumps(payload).encode(), headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}, method='POST')
     urllib.request.urlopen(req)
     print('ldap-directory component created')
-" || warn "OpenLDAP Keycloak federation setup failed (non-fatal — demo/illustration component)"
+" || { warn "OpenLDAP Keycloak federation setup failed (non-fatal — demo/illustration component)"; kc_step_failed=true; }
   kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-ldap-federation-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
-  ok "OpenLDAP deployed, seeded, and registered as Keycloak User Federation (READ_ONLY, demo directory — not a real corporate LDAP)"
+  [[ "${kc_step_failed:-false}" == true ]] || ok "OpenLDAP deployed, seeded, and registered as Keycloak User Federation (READ_ONLY, demo directory — not a real corporate LDAP)"
 }
 
 deploy_audience_mapper() {
+  local kc_step_failed=false
   step "Step 3b2: Keycloak Audience protocol mapper (crapi-bff -> aud=crapi-bff)"
   if [[ "$SKIP_SECURITY_STACK" == true ]]; then
     log "Skipping Audience mapper (security stack was skipped, Keycloak not available)"
@@ -399,7 +429,7 @@ deploy_audience_mapper() {
   # nowhere else). Register it live too so every deploy ends up with it.
   kkc delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
   kkc run kc-audience-mapper-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
-  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-audience-mapper-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kc_wait_ready kc-audience-mapper-setup
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-audience-mapper-setup -- python3 -c "
 import urllib.request, json, urllib.parse
 
@@ -432,13 +462,14 @@ for client_id in ('crapi-bff',):
         data=json.dumps(payload).encode(), headers={**headers, 'Content-Type': 'application/json'}, method='POST')
     urllib.request.urlopen(req)
     print(client_id, '-> aud-crapi-bff mapper created')
-" || warn "Keycloak Audience mapper setup failed (non-fatal — but T-1.4 audience check degrades to a no-op without it, see KET-QUA-KIEM-TRA.md)"
+" || { warn "Keycloak Audience mapper setup failed (non-fatal — but T-1.4 audience check degrades to a no-op without it, see KET-QUA-KIEM-TRA.md)"; kc_step_failed=true; }
   kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-audience-mapper-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
-  ok "Keycloak Audience mapper ensured on crapi-bff client"
+  [[ "${kc_step_failed:-false}" == true ]] || ok "Keycloak Audience mapper ensured on crapi-bff client"
 }
 
 deploy_stepup_flow() {
+  local kc_step_failed=false
   step "Step 3b3: Keycloak browser-stepup authentication flow (T-4.2 step-up OTP)"
   if [[ "$SKIP_SECURITY_STACK" == true ]]; then
     log "Skipping browser-stepup flow (security stack was skipped, Keycloak not available)"
@@ -454,8 +485,8 @@ deploy_stepup_flow() {
   # Admin API in a prior session and lost on the next from-scratch deploy (see
   # VIEC-CON-TON-DONG.md item 1). Register it live too so every deploy ends up with it.
   kkc delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
-  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 60" >/dev/null 2>&1 || true
-  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-stepup-flow-setup -n identity --timeout=60s >/dev/null 2>&1 || true
+  kkc run kc-stepup-flow-setup --image=python:3.12-alpine -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 180" >/dev/null 2>&1 || true
+  kc_wait_ready kc-stepup-flow-setup
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-stepup-flow-setup -- python3 -c "
 import urllib.request, json, urllib.parse
 
@@ -526,6 +557,19 @@ else:
 
     print('browser-stepup flow created')
 
+# 5b. (Vòng 2026-09-29, phát hiện khi chạy step-up trọn lần đầu) 'browser-stepup' là
+#     BẢN SAO của flow 'browser' nên mang theo subflow 'Browser - Conditional OTP'
+#     (OTP khi user đã cấu hình OTP) CẠNH Stepup-2fa (OTP khi LoA 2) → user có OTP bị
+#     hỏi OTP HAI LẦN liên tiếp (2 execution auth-otp-form khác nhau), và cùng một mã
+#     TOTP không dùng lại được trong cửa sổ 30 s. Tắt subflow sao chép đó CHỈ trong
+#     browser-stepup (idempotent, chạy mọi lần) — OTP do Stepup-2fa hỏi đúng một lần.
+for e in call('GET', f'/admin/realms/{REALM}/authentication/flows/browser-stepup/executions'):
+    if e.get('level') == 1 and e.get('authenticationFlow') and 'Conditional OTP' in (e.get('displayName') or '') \
+            and e.get('requirement') != 'DISABLED':
+        call('PUT', f'/admin/realms/{REALM}/authentication/flows/browser-stepup/executions',
+             {'id': e['id'], 'requirement': 'DISABLED'})
+        print('browser-stepup: disabled copied Conditional OTP subflow (tránh hỏi OTP 2 lần)')
+
 # 6. Bind 'browser-stepup' as the browser flow of client 'crapi-bff-stepup' ONLY.
 #    Do NOT bind it on 'web-portal' — that forces OTP on every normal login (regression
 #    seen once already, see KET-QUA-KIEM-TRA.md).
@@ -542,14 +586,18 @@ else:
         overrides['browser'] = browser_stepup_id
         call('PUT', f'/admin/realms/{REALM}/clients/{client_id}', {'authenticationFlowBindingOverrides': overrides})
         print('crapi-bff-stepup bound to browser-stepup')
+    # 6b. (Vòng 2026-09-29) ánh xạ ACR↔LoA. Thiếu nó Keycloak trả acr="2" (số LoA)
+    #     trong khi BFF (_is_sensitive) và OPA (step_up_ok) so acr == "high" → step-up
+    #     KHÔNG BAO GIỜ thành công dù OTP đúng (quan sát sống lần chạy trọn đầu tiên).
+    attrs = call('GET', f'/admin/realms/{REALM}/clients/{client_id}').get('attributes', {})
+    want = json.dumps({'normal': 1, 'high': 2}, separators=(',', ':'))
+    if attrs.get('acr.loa.map') != want:
+        call('PUT', f'/admin/realms/{REALM}/clients/{client_id}', {'attributes': {**attrs, 'acr.loa.map': want}})
+        print('crapi-bff-stepup: acr.loa.map = ' + want)
 
-# 7. Ensure the demo user exists with CONFIGURE_TOTP pending. This only creates
-# the account/required-action — it deliberately does NOT fabricate an OTP
-# secret (secretData must come from a real QR enrollment via the browser; a
-# hand-rolled secret was tried before and is not a faithful demo — see
-# VIEC-CON-TON-DONG.md item 1). Finish enrollment once, interactively, via
-# \$KC_URL/realms/ztlab/account, then the credential persists across redeploys
-# (it lives in Postgres, not in this script).
+# 7. Ensure the demo user exists with CONFIGURE_TOTP pending. No OTP secret is
+# fabricated here: enrollment happens right after this block through Keycloak's
+# own CONFIGURE_TOTP required-action form (scripts/kc-enroll-stepup-otp.py).
 users = call('GET', f'/admin/realms/{REALM}/users?username=stepup-demo&exact=true')
 if users:
     print('stepup-demo user already exists, skipping')
@@ -558,10 +606,31 @@ else:
          {'username': 'stepup-demo', 'enabled': True, 'requiredActions': ['CONFIGURE_TOTP'],
           'credentials': [{'type': 'password', 'value': 'StepupDemo123!', 'temporary': False}]})
     print('stepup-demo user created (requiredActions=CONFIGURE_TOTP, needs one interactive login to enroll real OTP)')
-" || warn "Keycloak browser-stepup flow setup failed (non-fatal — but T-4.2 step-up OTP degrades to no-op without it, see VIEC-CON-TON-DONG.md item 1)"
+" || { warn "Keycloak browser-stepup flow setup failed (non-fatal — but T-4.2 step-up OTP degrades to no-op without it, see VIEC-CON-TON-DONG.md item 1)"; kc_step_failed=true; }
+  # Mục 6 vòng 2026-09-29: enroll OTP cho stepup-demo NGAY TRONG deploy (trước đây
+  # là "việc người dùng làm tay qua trình duyệt" và chưa từng được làm → step-up
+  # chưa bao giờ chạy trọn một lần). Script đi đúng luồng CONFIGURE_TOTP của
+  # Keycloak (xem docstring scripts/kc-enroll-stepup-otp.py). Secret TOTP cất ở
+  # Secret k8s identity/stepup-demo-otp để tests/crapi_step_up_otp.sh tính mã.
+  if [[ "${kc_step_failed:-false}" != true ]]; then
+    local otp_known otp_out otp_secret
+    otp_known="$(kkc get secret stepup-demo-otp -n identity -o jsonpath='{.data.secret}' 2>/dev/null | base64 -d 2>/dev/null || true)"
+    if otp_out="$(kubectl --context "$KEYCLOAK_CONTEXT" exec -i -n identity kc-stepup-flow-setup -- \
+          env KC_ADMIN_PASSWORD="$admin_pass" OTP_SECRET="$otp_known" python3 - \
+          < "$REPO_ROOT/scripts/kc-enroll-stepup-otp.py" 2>&1)"; then
+      otp_secret="$(sed -n 's/^OTP_SECRET=//p' <<<"$otp_out" | tail -1)"
+      grep -v '^OTP_SECRET=' <<<"$otp_out" | sed 's/^/    /'
+      kkc create secret generic stepup-demo-otp -n identity --from-literal=secret="$otp_secret" \
+        --dry-run=client -o yaml | kkc apply -f - >/dev/null
+      ok "stepup-demo OTP enrolled (secret ở Secret identity/stepup-demo-otp)"
+    else
+      warn "enroll OTP stepup-demo thất bại — step-up OTP không demo được: $(grep -v '^OTP_SECRET=' <<<"$otp_out" | tail -3)"
+      kc_step_failed=true
+    fi
+  fi
   kubectl --context "$KEYCLOAK_CONTEXT" delete pod kc-stepup-flow-setup -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
-  ok "Keycloak browser-stepup flow ensured, bound to crapi-bff-stepup client"
+  [[ "${kc_step_failed:-false}" == true ]] || ok "Keycloak browser-stepup flow ensured, bound to crapi-bff-stepup client"
 }
 
 deploy_aws_saml_federation() {
@@ -579,13 +648,18 @@ deploy_aws_saml_federation() {
     return
   fi
 
+  # Vòng 2026-09-29: tải về file tạm, chỉ khi hợp lệ mới thay file CỐ ĐỊNH
+  # terraform/aws/keycloak-saml-metadata.xml (default của biến
+  # keycloak_saml_metadata_path, gitignore) và GIỮ LẠI — để mọi `terraform plan`
+  # không target sau này thấy đúng 3 tài nguyên SAML/IAM thay vì đòi destroy.
   local meta_file="/tmp/ztlab-keycloak-saml-metadata-$$.xml"
+  local meta_keep="$REPO_ROOT/terraform/aws/keycloak-saml-metadata.xml"
   # kubectl run --rm's own "pod ... deleted" status line can land on stdout
   # and corrupt a captured file — use a plain pod + exec + explicit delete
   # instead of --rm to keep the captured metadata byte-exact.
   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=true >/dev/null 2>&1 || true
   kkc run kc-saml-meta --image=curlimages/curl -n identity --restart=Never --overrides="$KC_ADMIN_SETUP_OVERRIDES" --command -- sh -c "sleep 30" >/dev/null
-  kubectl --context "$KEYCLOAK_CONTEXT" wait --for=condition=Ready pod/kc-saml-meta -n identity --timeout=30s >/dev/null
+  kc_wait_ready kc-saml-meta 15s 2
   kubectl --context "$KEYCLOAK_CONTEXT" exec -n identity kc-saml-meta -- curl -s http://keycloak.identity.svc.cluster.local:8080/realms/ztlab/protocol/saml/descriptor > "$meta_file" || true
   kkc delete pod kc-saml-meta -n identity --ignore-not-found --wait=false >/dev/null 2>&1 || true
 
@@ -595,15 +669,13 @@ deploy_aws_saml_federation() {
     return
   fi
 
+  mv -f "$meta_file" "$meta_keep"
   (cd "$REPO_ROOT/terraform/aws" && terraform apply -auto-approve \
-    -var="keycloak_saml_metadata_path=$meta_file" \
     -target=aws_iam_saml_provider.keycloak \
     -target=aws_iam_role.ztlab_sso_admin \
     -target=aws_iam_role_policy_attachment.ztlab_sso_admin_readonly) \
     && ok "AWS IAM SAML provider + ztlab-sso-admin role applied" \
     || warn "AWS SAML federation terraform apply failed (non-fatal — admin-console-SSO convenience only)"
-
-  rm -f "$meta_file"
 }
 
 deploy_crapi() {
@@ -613,7 +685,9 @@ deploy_crapi() {
   # Keycloak crapi client/role, SPIRE entries, OPA PDP riêng ns crapi + Istio
   # extensionProvider, AuthorizationPolicy, NetworkPolicy, seed Job.
   step "Step 4-5: Deploy crAPI target app + Zero-Trust wiring"
-  AWS_CONTEXT="$AWS_CONTEXT" OS_CONTEXT="$OS_CONTEXT" "$REPO_ROOT/scripts/deploy-crapi.sh"
+  # ZTLAB_DEFER_ACCEPTANCE=1: nghiệm thu mesh của deploy-crapi.sh chỉ cảnh báo ở
+  # đây; nghiệm thu thật (fail) chạy ở verify_final SAU khi stack quan sát đã dựng (H8).
+  ZTLAB_DEFER_ACCEPTANCE=1 AWS_CONTEXT="$AWS_CONTEXT" OS_CONTEXT="$OS_CONTEXT" "$REPO_ROOT/scripts/deploy-crapi.sh"
   ok "crAPI target app deployed"
 }
 
@@ -747,6 +821,7 @@ provision_grafana_configmaps() {
     --from-file=privilege-escalation-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/privilege-escalation-alert.yml" \
     --from-file=incident-analyzer-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/incident-analyzer-alert.yml" \
     --from-file=security-control-plane-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/security-control-plane-alert.yml" \
+    --from-file=log-pipeline-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/log-pipeline-alert.yml" \
     --from-file=mesh-integrity-alert.yml="$REPO_ROOT/plg-stack/grafana/alerting/mesh-integrity-alert.yml" \
     --from-file=notification-policy.yml="$REPO_ROOT/plg-stack/grafana/alerting/notification-policy.yml"
 }
@@ -773,6 +848,20 @@ deploy_observability_response() {
     --from-literal=password="${GRAFANA_SMTP_PASSWORD:-}" \
     --dry-run=client -o yaml | kaws apply -f -
 
+  # Phần 3.7 remediation (2026-09-19) — audit bí mật tìm thấy: mật khẩu admin
+  # Grafana từng hardcode PLAINTEXT trực tiếp trong k8s/plg-stack/grafana.yaml
+  # (GF_SECURITY_ADMIN_PASSWORD value: "ZTALab2026!", không qua Secret nào) —
+  # trong khi .env.template ĐÃ CÓ sẵn biến GRAFANA_ADMIN_PASSWORD, đúng ý định
+  # thiết kế ban đầu, chỉ là chưa từng được nối dây. Cùng mẫu ensure_keycloak_secret
+  # (deploy-security-stack.sh) — tạo Secret CHỈ KHI CHƯA TỒN TẠI (đổi mật khẩu
+  # ngẫu nhiên mỗi lần re-apply sẽ khoá luôn admin khỏi Grafana của chính họ).
+  if ! kaws get secret grafana-admin-secret -n plg-stack >/dev/null 2>&1; then
+    kaws create secret generic grafana-admin-secret -n plg-stack \
+      --from-literal=admin-user="${GRAFANA_ADMIN_USER:-admin}" \
+      --from-literal=admin-password="${GRAFANA_ADMIN_PASSWORD:-$(openssl rand -base64 24)}"
+    ok "grafana-admin-secret khởi tạo (từ \$GRAFANA_ADMIN_PASSWORD hoặc ngẫu nhiên)"
+  fi
+
   provision_grafana_configmaps
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/grafana.yaml"
   wait_deployment "$AWS_CONTEXT" plg-stack grafana 180s
@@ -780,32 +869,17 @@ deploy_observability_response() {
   kaws apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
   wait_daemonset "$AWS_CONTEXT" plg-stack promtail 180s
 
-  # Ensure socat relay is persistent on AWS worker (OpenStack Promtail → Loki cross-cluster)
-  # aws_bastion's public IP is dynamic (not an EIP) and changes on every instance
-  # recreate, so it must be resolved from inventory rather than hardcoded.
-  LOKI_CIP=$(kubectl --context "$AWS_CONTEXT" -n plg-stack get svc loki -o jsonpath='{.spec.clusterIP}')
-  AWS_BASTION_IP="$(ansible-inventory -i "$REPO_ROOT/ansible/inventory/hosts.yml" --host aws_bastion | python3 -c 'import json,sys; print(json.load(sys.stdin)["ansible_host"])')"
-  ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -i "$SSH_KEY" \
-      -J "ubuntu@${AWS_BASTION_IP}" ubuntu@10.10.1.11 \
-      "sudo tee /etc/systemd/system/loki-relay.service > /dev/null << 'EOF'
-[Unit]
-Description=Loki Relay (OpenStack cross-cluster)
-After=network.target
-
-[Service]
-ExecStart=/usr/bin/socat TCP-LISTEN:31100,fork,reuseaddr TCP:${LOKI_CIP}:3100
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now loki-relay" 2>/dev/null || warn "socat relay setup skipped (SSH unavailable)"
-
+  # Muc 1 vong 2026-09-29 — duong log OpenStack -> Loki KHONG con phu thuoc
+  # tien trinh nao tren may nguoi dung. Truoc day: Promtail OS -> socat
+  # 172.10.10.1:13099 (may deployer) -> kubectl port-forward -> Loki; may ngu /
+  # doi mang = mat log am tham (H11). Relay `loki-relay` (socat :31100 tren
+  # 10.10.1.11) cung da bo: no chua bao gio dung duoc vi SG chan (xem duoi).
+  # Nay: pod OS -> os_gateway -> WireGuard -> aws_gateway (MASQUERADE, nguon =
+  # IP private gateway) -> NodePort 31000 cua Service loki tren node AWS.
+  # Can SG sg_private mo NodePort cho ${gateway_private_ip}/32
+  # (terraform/aws/security_groups.tf) — thieu no thi duong nay bi chan.
   kos apply -f "$REPO_ROOT/k8s/plg-stack/promtail-daemonset.yaml"
-  # 172.10.10.1:13099 = deployer machine br-exnat interface (reachable from OpenStack via os-gateway default route)
-  # socat on deployer bridges this port to localhost:13100 → kubectl port-forward → Loki
-  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL=http://172.10.10.1:13099/loki/api/v1/push CLOUD_PROVIDER=openstack
+  kos set env daemonset/promtail -n plg-stack LOKI_PUSH_URL="$OS_LOKI_PUSH_URL" CLOUD_PROVIDER=openstack
   wait_daemonset "$OS_CONTEXT" plg-stack promtail 180s
 
   # A4: single detection-side service (no RBAC, no k8s client, no response).
@@ -838,7 +912,59 @@ verify_final() {
   log "OpenStack non-system pods"
   kos get pods -A | grep -v kube-system || true
 
+  verify_observability_stack
+
+  # H8: nghiệm thu kết nối mesh THẬT (request giữa cặp service_acl) — đặt ở cuối
+  # để một lỗi tầng app không còn chặn việc dựng stack quan sát, nhưng deploy vẫn
+  # KHÔNG báo hoàn tất nếu mesh không thông.
+  step "Step 8c: Mesh connectivity acceptance (request thật giữa các cặp service_acl)"
+  AWS_CONTEXT="$AWS_CONTEXT" OS_CONTEXT="$OS_CONTEXT" "$REPO_ROOT/scripts/deploy-crapi.sh" --verify-only
+
   ok "Full multi-cloud deploy flow completed"
+}
+
+# Nghiệm thu bắt buộc: stack quan sát/phát hiện PHẢI tồn tại và sẵn sàng, không chỉ "deploy
+# xong bước trước". Vòng cuối 2026-09-26 (BAOCAO-CUOI mục 1.1): một cụm từng bị coi là "đã
+# redeploy sạch" trong khi KHÔNG có Loki/Grafana/Prometheus (deploy-crapi.sh dừng vì
+# verify_mesh_connectivity trước deploy_observability_response, hoặc chỉ chạy lại
+# deploy-crapi.sh) — không có bước nào kiểm sự tồn tại của chúng. Hàm này `fail` (không phải
+# warn) nếu thiếu, để deploy như vậy KHÔNG BAO GIỜ báo hoàn tất.
+verify_observability_stack() {
+  step "Step 8b: Observability stack presence (Loki/Grafana/Prometheus/Promtail/incident-analyzer)"
+  local missing=()
+  local spec ctx ns kind name
+  for spec in \
+      "$AWS_CONTEXT plg-stack deployment loki" \
+      "$AWS_CONTEXT plg-stack deployment grafana" \
+      "$AWS_CONTEXT plg-stack deployment incident-analyzer" \
+      "$AWS_CONTEXT plg-stack deployment mailhog" \
+      "$AWS_CONTEXT monitoring deployment prometheus" \
+      "$AWS_CONTEXT plg-stack daemonset promtail" \
+      "$OS_CONTEXT plg-stack daemonset promtail"; do
+    read -r ctx ns kind name <<<"$spec"
+    if ! kubectl --context "$ctx" -n "$ns" rollout status "$kind/$name" --timeout=120s >/dev/null 2>&1; then
+      missing+=("$ctx/$ns/$kind/$name")
+    fi
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    fail "stack quan sát KHÔNG sẵn sàng: ${missing[*]} — deploy KHÔNG hoàn tất (không có Loki/Grafana/Prometheus thì không đo được MTTD, không có alert Firing thật). Kiểm: kubectl get pods -n plg-stack -n monitoring"
+  fi
+  ok "Observability stack present and ready (Loki, Grafana, Prometheus, incident-analyzer, MailHog, Promtail x2)"
+
+  # Mục 1 vòng 2026-09-29: pod Promtail OpenStack "Ready" KHÔNG chứng minh log
+  # tới được Loki (đường WireGuard → NodePort có thể bị SG/route chặn, Promtail
+  # vẫn Running và chỉ retry). Hỏi Loki trực tiếp: phải có log cloud=openstack
+  # trong 5 phút gần nhất, nếu không thì deploy KHÔNG hoàn tất.
+  local q n i
+  q=$(python3 -c 'import urllib.parse;print(urllib.parse.quote("sum(count_over_time({cloud=\"openstack\"}[5m]))"))')
+  for i in $(seq 1 18); do
+    n=$(kaws get --raw "/api/v1/namespaces/plg-stack/services/loki:3100/proxy/loki/api/v1/query?query=$q" 2>/dev/null \
+        | python3 -c 'import json,sys;r=json.load(sys.stdin)["data"]["result"];print(int(float(r[0]["value"][1])) if r else 0)' 2>/dev/null || echo 0)
+    [[ "${n:-0}" -gt 0 ]] && break
+    sleep 10
+  done
+  [[ "${n:-0}" -gt 0 ]] || fail "Loki KHÔNG nhận log nào từ cloud=openstack sau 3 phút — đường Promtail OpenStack → $OS_LOKI_PUSH_URL (WireGuard → NodePort 31000) hỏng. Kiểm SG sg_private (NodePort cho IP private aws_gateway), wg0, và kubectl --context $OS_CONTEXT -n plg-stack logs ds/promtail"
+  ok "Log OpenStack tới Loki qua WireGuard ($n dòng / 5 phút)"
 }
 
 main() {
@@ -862,11 +988,19 @@ main() {
   deploy_istio
   sync_images
   deploy_security_stack
+  deploy_crapi
+  # 4 bước Admin API/SAML của Keycloak PHẢI đứng SAU deploy_crapi (2026-09-25,
+  # quan sát sống trên redeploy sạch): deploy-security-stack.sh đã áp
+  # keycloak-mesh-policies.yaml (CUSTOM AuthorizationPolicy → OPA
+  # opa-service.crapi:9191, fail-closed) từ Step 3, trong khi OPA OpenStack chỉ
+  # được dựng ở deploy_crapi (+ netpol keycloak->opa). Chạy chúng trước đó thì
+  # Envoy phía Keycloak từ chối MỌI request bằng 403 (token admin-cli 403 ở
+  # dòng 6 của script Python). Cùng nguyên nhân với thứ tự register_spire /
+  # deploy_crapi_opa / configure_crapi_keycloak trong deploy-crapi.sh main().
   deploy_openldap_and_federation
   deploy_audience_mapper
   deploy_stepup_flow
   deploy_aws_saml_federation
-  deploy_crapi
   deploy_observability_response
   apply_policies_and_ingress
   verify_final

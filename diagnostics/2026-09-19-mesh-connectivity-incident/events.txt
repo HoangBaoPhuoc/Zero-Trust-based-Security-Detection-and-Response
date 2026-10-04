@@ -1,0 +1,534 @@
+LAST SEEN   TYPE      REASON                 OBJECT                                  MESSAGE
+21m         Normal    Scheduled              pod/opa-server-7685fc584c-vkmng         Successfully assigned crapi/opa-server-7685fc584c-vkmng to ip-10-10-1-11
+2m18s       Normal    Scheduled              pod/crapi-workshop-7787f7dc95-lwm9f     Successfully assigned crapi/crapi-workshop-7787f7dc95-lwm9f to ip-10-10-1-12
+55m         Normal    Scheduled              pod/posture-agent-29829208-snqdc        Successfully assigned crapi/posture-agent-29829208-snqdc to ip-10-10-1-10
+53m         Normal    Scheduled              pod/posture-agent-29829210-wbv68        Successfully assigned crapi/posture-agent-29829210-wbv68 to ip-10-10-1-12
+51m         Normal    Scheduled              pod/posture-agent-29829212-gf5fx        Successfully assigned crapi/posture-agent-29829212-gf5fx to ip-10-10-1-12
+39m         Normal    Scheduled              pod/posture-agent-29829224-mjb2q        Successfully assigned crapi/posture-agent-29829224-mjb2q to ip-10-10-1-11
+21m         Normal    Scheduled              pod/opa-server-7685fc584c-xdlrs         Successfully assigned crapi/opa-server-7685fc584c-xdlrs to ip-10-10-1-12
+21m         Normal    Scheduled              pod/crapi-workshop-868ccf8f55-nzpkb     Successfully assigned crapi/crapi-workshop-868ccf8f55-nzpkb to ip-10-10-1-11
+35m         Normal    Scheduled              pod/posture-agent-29829228-lps9g        Successfully assigned crapi/posture-agent-29829228-lps9g to ip-10-10-1-11
+21m         Normal    Scheduled              pod/bff-dc7447c56-qg2bp                 Successfully assigned crapi/bff-dc7447c56-qg2bp to ip-10-10-1-10
+19m         Normal    Scheduled              pod/posture-agent-29829244-xjl5m        Successfully assigned crapi/posture-agent-29829244-xjl5m to ip-10-10-1-11
+21m         Normal    Scheduled              pod/opa-server-7685fc584c-2m2qd         Successfully assigned crapi/opa-server-7685fc584c-2m2qd to ip-10-10-1-10
+89s         Normal    Scheduled              pod/posture-agent-29829262-65d8f        Successfully assigned crapi/posture-agent-29829262-65d8f to ip-10-10-1-12
+41m         Normal    Scheduled              pod/posture-agent-29829222-857wh        Successfully assigned crapi/posture-agent-29829222-857wh to ip-10-10-1-11
+21m         Normal    Scheduled              pod/crapi-community-7796457dfd-zk9nq    Successfully assigned crapi/crapi-community-7796457dfd-zk9nq to ip-10-10-1-11
+59m         Normal    Scheduled              pod/posture-agent-29829204-r78dt        Successfully assigned crapi/posture-agent-29829204-r78dt to ip-10-10-1-10
+33m         Normal    Scheduled              pod/posture-agent-29829230-wfk46        Successfully assigned crapi/posture-agent-29829230-wfk46 to ip-10-10-1-11
+2m5s        Normal    Scheduled              pod/opa-server-bcb587767-sbhh6          Successfully assigned crapi/opa-server-bcb587767-sbhh6 to ip-10-10-1-12
+21m         Normal    Scheduled              pod/crapi-web-6f889b5bc-46mx4           Successfully assigned crapi/crapi-web-6f889b5bc-46mx4 to ip-10-10-1-11
+43m         Normal    Scheduled              pod/posture-agent-29829220-8mjrb        Successfully assigned crapi/posture-agent-29829220-8mjrb to ip-10-10-1-11
+2m11s       Normal    Scheduled              pod/opa-server-bcb587767-qpkpt          Successfully assigned crapi/opa-server-bcb587767-qpkpt to ip-10-10-1-11
+2m18s       Normal    Scheduled              pod/opa-server-bcb587767-ld5jl          Successfully assigned crapi/opa-server-bcb587767-ld5jl to ip-10-10-1-12
+21m         Normal    Scheduled              pod/waf-59b67b9c48-9ntds                Successfully assigned crapi/waf-59b67b9c48-9ntds to ip-10-10-1-12
+31m         Normal    Scheduled              pod/posture-agent-29829232-fmjbd        Successfully assigned crapi/posture-agent-29829232-fmjbd to ip-10-10-1-11
+57m         Normal    Scheduled              pod/posture-agent-29829206-g4qmk        Successfully assigned crapi/posture-agent-29829206-g4qmk to ip-10-10-1-10
+37m         Normal    Scheduled              pod/posture-agent-29829226-6jm4h        Successfully assigned crapi/posture-agent-29829226-6jm4h to ip-10-10-1-11
+21m         Normal    Scheduled              pod/redis-7ddbb46c68-nwldj              Successfully assigned crapi/redis-7ddbb46c68-nwldj to ip-10-10-1-10
+2m18s       Normal    Scheduled              pod/crapi-community-78c6cf7974-2dgbq    Successfully assigned crapi/crapi-community-78c6cf7974-2dgbq to ip-10-10-1-12
+2m18s       Normal    Scheduled              pod/crapi-web-58cccbbcb7-99jv2          Successfully assigned crapi/crapi-web-58cccbbcb7-99jv2 to ip-10-10-1-12
+23m         Normal    Scheduled              pod/bff-f4fcf7fbb-6lcxd                 Successfully assigned crapi/bff-f4fcf7fbb-6lcxd to ip-10-10-1-11
+23m         Normal    Scheduled              pod/posture-agent-29829240-qgpqb        Successfully assigned crapi/posture-agent-29829240-qgpqb to ip-10-10-1-12
+49m         Normal    Scheduled              pod/posture-agent-29829214-w2bhx        Successfully assigned crapi/posture-agent-29829214-w2bhx to ip-10-10-1-12
+17m         Normal    Scheduled              pod/posture-agent-29829246-w9vvk        Successfully assigned crapi/posture-agent-29829246-w9vvk to ip-10-10-1-11
+15m         Normal    Scheduled              pod/posture-agent-29829248-pcz67        Successfully assigned crapi/posture-agent-29829248-pcz67 to ip-10-10-1-11
+12m         Normal    Scheduled              pod/waf-59b67b9c48-gmgtx                Successfully assigned crapi/waf-59b67b9c48-gmgtx to ip-10-10-1-11
+25m         Normal    Scheduled              pod/posture-agent-29829238-tdvt8        Successfully assigned crapi/posture-agent-29829238-tdvt8 to ip-10-10-1-11
+29m         Normal    Scheduled              pod/posture-agent-29829234-67qlb        Successfully assigned crapi/posture-agent-29829234-67qlb to ip-10-10-1-11
+3m28s       Normal    Scheduled              pod/posture-agent-29829260-c76nw        Successfully assigned crapi/posture-agent-29829260-c76nw to ip-10-10-1-12
+13m         Normal    Scheduled              pod/posture-agent-29829250-2fndp        Successfully assigned crapi/posture-agent-29829250-2fndp to ip-10-10-1-11
+11m         Normal    Scheduled              pod/posture-agent-29829252-72q96        Successfully assigned crapi/posture-agent-29829252-72q96 to ip-10-10-1-12
+9m29s       Normal    Scheduled              pod/posture-agent-29829254-zcbvt        Successfully assigned crapi/posture-agent-29829254-zcbvt to ip-10-10-1-12
+7m29s       Normal    Scheduled              pod/posture-agent-29829256-vlwkt        Successfully assigned crapi/posture-agent-29829256-vlwkt to ip-10-10-1-12
+27m         Normal    Scheduled              pod/posture-agent-29829236-pzkvq        Successfully assigned crapi/posture-agent-29829236-pzkvq to ip-10-10-1-11
+45m         Normal    Scheduled              pod/posture-agent-29829218-7c6fj        Successfully assigned crapi/posture-agent-29829218-7c6fj to ip-10-10-1-10
+21m         Normal    Scheduled              pod/posture-agent-29829242-pr9bx        Successfully assigned crapi/posture-agent-29829242-pr9bx to ip-10-10-1-11
+5m29s       Normal    Scheduled              pod/posture-agent-29829258-c5gt2        Successfully assigned crapi/posture-agent-29829258-c5gt2 to ip-10-10-1-12
+47m         Normal    Scheduled              pod/posture-agent-29829216-c58p6        Successfully assigned crapi/posture-agent-29829216-c58p6 to ip-10-10-1-10
+2m18s       Normal    Scheduled              pod/bff-86c8785b8-swnnw                 Successfully assigned crapi/bff-86c8785b8-swnnw to ip-10-10-1-12
+2m18s       Normal    Scheduled              pod/waf-5bd74d97c6-mrp4c                Successfully assigned crapi/waf-5bd74d97c6-mrp4c to ip-10-10-1-12
+44m         Normal    Scheduled              pod/security-scanner-9xz6h              Successfully assigned crapi/security-scanner-9xz6h to ip-10-10-1-10
+59m         Normal    Started                pod/posture-agent-29829204-r78dt        Started container posture-agent
+59m         Normal    SuccessfulCreate       job/posture-agent-29829204              Created pod: posture-agent-29829204-r78dt
+59m         Normal    Pulled                 pod/posture-agent-29829204-r78dt        Container image "alpine/k8s:1.31.13" already present on machine
+59m         Normal    Created                pod/posture-agent-29829204-r78dt        Created container posture-agent
+59m         Normal    Completed              job/posture-agent-29829204              Job completed
+57m         Normal    Pulled                 pod/posture-agent-29829206-g4qmk        Container image "alpine/k8s:1.31.13" already present on machine
+57m         Normal    SuccessfulCreate       job/posture-agent-29829206              Created pod: posture-agent-29829206-g4qmk
+57m         Normal    Created                pod/posture-agent-29829206-g4qmk        Created container posture-agent
+57m         Normal    Started                pod/posture-agent-29829206-g4qmk        Started container posture-agent
+57m         Normal    Completed              job/posture-agent-29829206              Job completed
+55m         Normal    Pulled                 pod/posture-agent-29829208-snqdc        Container image "alpine/k8s:1.31.13" already present on machine
+55m         Normal    Created                pod/posture-agent-29829208-snqdc        Created container posture-agent
+55m         Normal    SuccessfulCreate       job/posture-agent-29829208              Created pod: posture-agent-29829208-snqdc
+55m         Normal    Started                pod/posture-agent-29829208-snqdc        Started container posture-agent
+55m         Normal    Completed              job/posture-agent-29829208              Job completed
+53m         Normal    SuccessfulCreate       job/posture-agent-29829210              Created pod: posture-agent-29829210-wbv68
+53m         Normal    Pulled                 pod/posture-agent-29829210-wbv68        Container image "alpine/k8s:1.31.13" already present on machine
+53m         Normal    Created                pod/posture-agent-29829210-wbv68        Created container posture-agent
+53m         Normal    Started                pod/posture-agent-29829210-wbv68        Started container posture-agent
+53m         Normal    Completed              job/posture-agent-29829210              Job completed
+51m         Normal    SuccessfulCreate       job/posture-agent-29829212              Created pod: posture-agent-29829212-gf5fx
+51m         Normal    Pulled                 pod/posture-agent-29829212-gf5fx        Container image "alpine/k8s:1.31.13" already present on machine
+51m         Normal    Created                pod/posture-agent-29829212-gf5fx        Created container posture-agent
+51m         Normal    Started                pod/posture-agent-29829212-gf5fx        Started container posture-agent
+51m         Normal    Completed              job/posture-agent-29829212              Job completed
+49m         Normal    SuccessfulCreate       job/posture-agent-29829214              Created pod: posture-agent-29829214-w2bhx
+49m         Normal    Pulled                 pod/posture-agent-29829214-w2bhx        Container image "alpine/k8s:1.31.13" already present on machine
+49m         Normal    Created                pod/posture-agent-29829214-w2bhx        Created container posture-agent
+49m         Normal    Started                pod/posture-agent-29829214-w2bhx        Started container posture-agent
+49m         Normal    Completed              job/posture-agent-29829214              Job completed
+47m         Normal    Started                pod/posture-agent-29829216-c58p6        Started container posture-agent
+47m         Normal    SuccessfulCreate       job/posture-agent-29829216              Created pod: posture-agent-29829216-c58p6
+47m         Normal    Pulled                 pod/posture-agent-29829216-c58p6        Container image "alpine/k8s:1.31.13" already present on machine
+47m         Normal    Created                pod/posture-agent-29829216-c58p6        Created container posture-agent
+47m         Normal    Completed              job/posture-agent-29829216              Job completed
+45m         Normal    SuccessfulCreate       job/posture-agent-29829218              Created pod: posture-agent-29829218-7c6fj
+45m         Normal    Pulled                 pod/posture-agent-29829218-7c6fj        Container image "alpine/k8s:1.31.13" already present on machine
+45m         Normal    Created                pod/posture-agent-29829218-7c6fj        Created container posture-agent
+45m         Normal    Started                pod/posture-agent-29829218-7c6fj        Started container posture-agent
+45m         Normal    Completed              job/posture-agent-29829218              Job completed
+44m         Normal    SuccessfulCreate       job/security-scanner                    Created pod: security-scanner-9xz6h
+44m         Normal    Pulled                 pod/security-scanner-9xz6h              Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+44m         Normal    Created                pod/security-scanner-9xz6h              Created container istio-init
+44m         Normal    Started                pod/security-scanner-9xz6h              Started container istio-init
+44m         Normal    Pulling                pod/security-scanner-9xz6h              Pulling image "python:3.12-alpine"
+44m         Normal    Pulled                 pod/security-scanner-9xz6h              Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+44m         Normal    Created                pod/security-scanner-9xz6h              Created container istio-proxy
+44m         Normal    Started                pod/security-scanner-9xz6h              Started container security-scanner
+44m         Normal    Created                pod/security-scanner-9xz6h              Created container security-scanner
+44m         Normal    Pulled                 pod/security-scanner-9xz6h              Successfully pulled image "python:3.12-alpine" in 4.563s (4.563s including waiting)
+44m         Normal    Started                pod/security-scanner-9xz6h              Started container istio-proxy
+43m         Normal    SuccessfulCreate       job/posture-agent-29829220              Created pod: posture-agent-29829220-8mjrb
+43m         Normal    Pulled                 pod/posture-agent-29829220-8mjrb        Container image "alpine/k8s:1.31.13" already present on machine
+43m         Normal    Created                pod/posture-agent-29829220-8mjrb        Created container posture-agent
+43m         Normal    Started                pod/posture-agent-29829220-8mjrb        Started container posture-agent
+43m         Normal    Completed              job/posture-agent-29829220              Job completed
+41m         Normal    Pulled                 pod/posture-agent-29829222-857wh        Container image "alpine/k8s:1.31.13" already present on machine
+41m         Normal    SuccessfulCreate       job/posture-agent-29829222              Created pod: posture-agent-29829222-857wh
+41m         Normal    Created                pod/posture-agent-29829222-857wh        Created container posture-agent
+41m         Normal    Started                pod/posture-agent-29829222-857wh        Started container posture-agent
+41m         Normal    Completed              job/posture-agent-29829222              Job completed
+39m         Normal    Pulled                 pod/posture-agent-29829224-mjb2q        Container image "alpine/k8s:1.31.13" already present on machine
+39m         Normal    SuccessfulCreate       job/posture-agent-29829224              Created pod: posture-agent-29829224-mjb2q
+39m         Normal    Created                pod/posture-agent-29829224-mjb2q        Created container posture-agent
+39m         Normal    Started                pod/posture-agent-29829224-mjb2q        Started container posture-agent
+39m         Normal    SuccessfulDelete       cronjob/posture-agent                   (combined from similar events): Deleted job posture-agent-29829220
+39m         Normal    Completed              job/posture-agent-29829224              Job completed
+37m         Normal    Started                pod/posture-agent-29829226-6jm4h        Started container posture-agent
+37m         Normal    Created                pod/posture-agent-29829226-6jm4h        Created container posture-agent
+37m         Normal    Pulled                 pod/posture-agent-29829226-6jm4h        Container image "alpine/k8s:1.31.13" already present on machine
+37m         Normal    SuccessfulCreate       job/posture-agent-29829226              Created pod: posture-agent-29829226-6jm4h
+37m         Normal    Completed              job/posture-agent-29829226              Job completed
+35m         Normal    SuccessfulCreate       job/posture-agent-29829228              Created pod: posture-agent-29829228-lps9g
+35m         Normal    Pulled                 pod/posture-agent-29829228-lps9g        Container image "alpine/k8s:1.31.13" already present on machine
+35m         Normal    Created                pod/posture-agent-29829228-lps9g        Created container posture-agent
+35m         Normal    Started                pod/posture-agent-29829228-lps9g        Started container posture-agent
+35m         Normal    Completed              job/posture-agent-29829228              Job completed
+33m         Normal    Started                pod/posture-agent-29829230-wfk46        Started container posture-agent
+33m         Normal    SuccessfulCreate       job/posture-agent-29829230              Created pod: posture-agent-29829230-wfk46
+33m         Normal    Pulled                 pod/posture-agent-29829230-wfk46        Container image "alpine/k8s:1.31.13" already present on machine
+33m         Normal    Created                pod/posture-agent-29829230-wfk46        Created container posture-agent
+33m         Normal    Completed              job/posture-agent-29829230              Job completed
+31m         Normal    SuccessfulCreate       job/posture-agent-29829232              Created pod: posture-agent-29829232-fmjbd
+31m         Normal    Pulled                 pod/posture-agent-29829232-fmjbd        Container image "alpine/k8s:1.31.13" already present on machine
+31m         Normal    Created                pod/posture-agent-29829232-fmjbd        Created container posture-agent
+31m         Normal    Started                pod/posture-agent-29829232-fmjbd        Started container posture-agent
+31m         Normal    Completed              job/posture-agent-29829232              Job completed
+29m         Normal    SuccessfulCreate       job/posture-agent-29829234              Created pod: posture-agent-29829234-67qlb
+29m         Normal    Pulled                 pod/posture-agent-29829234-67qlb        Container image "alpine/k8s:1.31.13" already present on machine
+29m         Normal    Created                pod/posture-agent-29829234-67qlb        Created container posture-agent
+29m         Normal    Started                pod/posture-agent-29829234-67qlb        Started container posture-agent
+29m         Normal    Completed              job/posture-agent-29829234              Job completed
+27m         Normal    Started                pod/posture-agent-29829236-pzkvq        Started container posture-agent
+27m         Normal    Created                pod/posture-agent-29829236-pzkvq        Created container posture-agent
+27m         Normal    Pulled                 pod/posture-agent-29829236-pzkvq        Container image "alpine/k8s:1.31.13" already present on machine
+27m         Normal    SuccessfulCreate       job/posture-agent-29829236              Created pod: posture-agent-29829236-pzkvq
+27m         Normal    Completed              job/posture-agent-29829236              Job completed
+25m         Normal    Started                pod/posture-agent-29829238-tdvt8        Started container posture-agent
+25m         Normal    SuccessfulCreate       job/posture-agent-29829238              Created pod: posture-agent-29829238-tdvt8
+25m         Normal    Pulled                 pod/posture-agent-29829238-tdvt8        Container image "alpine/k8s:1.31.13" already present on machine
+25m         Normal    Created                pod/posture-agent-29829238-tdvt8        Created container posture-agent
+25m         Normal    Completed              job/posture-agent-29829238              Job completed
+23m         Normal    SuccessfulCreate       replicaset/bff-f4fcf7fbb                Created pod: bff-f4fcf7fbb-6lcxd
+23m         Normal    ScalingReplicaSet      deployment/bff                          Scaled up replica set bff-f4fcf7fbb to 1
+23m         Normal    Started                pod/bff-f4fcf7fbb-6lcxd                 Started container istio-init
+23m         Normal    Started                pod/bff-f4fcf7fbb-6lcxd                 Started container bff
+23m         Normal    Pulled                 pod/bff-f4fcf7fbb-6lcxd                 Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+23m         Normal    Created                pod/bff-f4fcf7fbb-6lcxd                 Created container istio-init
+23m         Normal    Started                pod/bff-f4fcf7fbb-6lcxd                 Started container istio-proxy
+23m         Normal    Created                pod/bff-f4fcf7fbb-6lcxd                 Created container istio-proxy
+23m         Normal    Pulled                 pod/bff-f4fcf7fbb-6lcxd                 Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+23m         Normal    Pulled                 pod/bff-f4fcf7fbb-6lcxd                 Container image "ztlab/bff:1.0.0" already present on machine
+23m         Normal    Created                pod/bff-f4fcf7fbb-6lcxd                 Created container bff
+23m         Warning   Unhealthy              pod/bff-f4fcf7fbb-6lcxd                 Startup probe failed: Get "http://10.42.1.64:15021/healthz/ready": dial tcp 10.42.1.64:15021: connect: connection refused
+23m         Normal    Pulled                 pod/posture-agent-29829240-qgpqb        Container image "alpine/k8s:1.31.13" already present on machine
+23m         Normal    Started                pod/posture-agent-29829240-qgpqb        Started container posture-agent
+23m         Normal    SuccessfulCreate       job/posture-agent-29829240              Created pod: posture-agent-29829240-qgpqb
+23m         Normal    Created                pod/posture-agent-29829240-qgpqb        Created container posture-agent
+23m         Normal    Killing                pod/bff-65bc75dbf8-gwx6j                Stopping container istio-proxy
+23m         Normal    ScalingReplicaSet      deployment/bff                          Scaled down replica set bff-65bc75dbf8 to 0 from 1
+23m         Normal    SuccessfulDelete       replicaset/bff-65bc75dbf8               Deleted pod: bff-65bc75dbf8-gwx6j
+23m         Normal    Killing                pod/bff-65bc75dbf8-gwx6j                Stopping container bff
+23m         Warning   Unhealthy              pod/bff-65bc75dbf8-gwx6j                Readiness probe failed: Get "http://10.42.1.48:15020/app-health/bff/readyz": dial tcp 10.42.1.48:15020: connect: connection refused
+23m         Normal    Completed              job/posture-agent-29829240              Job completed
+23m         Warning   Unhealthy              pod/bff-65bc75dbf8-gwx6j                Readiness probe failed: Get "http://10.42.1.48:15021/healthz/ready": context deadline exceeded (Client.Timeout exceeded while awaiting headers)
+21m         Normal    SuccessfulCreate       job/posture-agent-29829242              Created pod: posture-agent-29829242-pr9bx
+21m         Normal    Pulled                 pod/posture-agent-29829242-pr9bx        Container image "alpine/k8s:1.31.13" already present on machine
+21m         Normal    Created                pod/posture-agent-29829242-pr9bx        Created container posture-agent
+21m         Normal    Started                pod/posture-agent-29829242-pr9bx        Started container posture-agent
+21m         Normal    Completed              job/posture-agent-29829242              Job completed
+21m         Normal    SuccessfulCreate       replicaset/redis-7ddbb46c68             Created pod: redis-7ddbb46c68-nwldj
+21m         Normal    ScalingReplicaSet      deployment/redis                        Scaled up replica set redis-7ddbb46c68 to 1
+21m         Normal    ScalingReplicaSet      deployment/bff                          Scaled up replica set bff-dc7447c56 to 1
+21m         Normal    Pulled                 pod/crapi-community-7796457dfd-zk9nq    Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Pulled                 pod/redis-7ddbb46c68-nwldj              Container image "redis:7-alpine" already present on machine
+21m         Normal    Created                pod/redis-7ddbb46c68-nwldj              Created container redis
+21m         Normal    SuccessfulCreate       replicaset/crapi-community-7796457dfd   Created pod: crapi-community-7796457dfd-zk9nq
+21m         Normal    ScalingReplicaSet      deployment/crapi-community              Scaled up replica set crapi-community-7796457dfd to 1
+21m         Normal    SuccessfulCreate       replicaset/crapi-web-6f889b5bc          Created pod: crapi-web-6f889b5bc-46mx4
+21m         Normal    ScalingReplicaSet      deployment/crapi-web                    Scaled up replica set crapi-web-6f889b5bc to 1
+21m         Normal    SuccessfulCreate       replicaset/waf-59b67b9c48               Created pod: waf-59b67b9c48-9ntds
+21m         Normal    ScalingReplicaSet      deployment/waf                          Scaled up replica set waf-59b67b9c48 to 1
+21m         Normal    SuccessfulCreate       replicaset/opa-server-7685fc584c        Created pod: opa-server-7685fc584c-xdlrs
+21m         Normal    Created                pod/crapi-community-7796457dfd-zk9nq    Created container istio-init
+21m         Normal    Started                pod/crapi-web-6f889b5bc-46mx4           Started container istio-init
+21m         Normal    ScalingReplicaSet      deployment/opa-server                   Scaled up replica set opa-server-7685fc584c to 1
+21m         Normal    SuccessfulCreate       replicaset/bff-dc7447c56                Created pod: bff-dc7447c56-qg2bp
+21m         Normal    Created                pod/crapi-web-6f889b5bc-46mx4           Created container istio-init
+21m         Normal    Started                pod/redis-7ddbb46c68-nwldj              Started container redis
+21m         Normal    Pulled                 pod/crapi-web-6f889b5bc-46mx4           Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    SuccessfulCreate       replicaset/crapi-workshop-868ccf8f55    Created pod: crapi-workshop-868ccf8f55-nzpkb
+21m         Normal    Started                pod/waf-59b67b9c48-9ntds                Started container istio-init
+21m         Normal    ScalingReplicaSet      deployment/crapi-workshop               Scaled up replica set crapi-workshop-868ccf8f55 to 1
+21m         Normal    Created                pod/waf-59b67b9c48-9ntds                Created container istio-init
+21m         Normal    Pulled                 pod/waf-59b67b9c48-9ntds                Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Created                pod/opa-server-7685fc584c-xdlrs         Created container istio-init
+21m         Normal    Pulled                 pod/bff-dc7447c56-qg2bp                 Container image "ztlab/bff:1.0.0" already present on machine
+21m         Normal    Pulled                 pod/crapi-community-7796457dfd-zk9nq    Container image "crapi/crapi-community@sha256:8ba0c7eda86ae065a673f1fa554d0109a24f25c5a8d65097ae024e5ee715c54e" already present on machine
+21m         Normal    Created                pod/bff-dc7447c56-qg2bp                 Created container bff
+21m         Normal    Pulled                 pod/crapi-workshop-868ccf8f55-nzpkb     Container image "crapi/crapi-workshop@sha256:d4d2d94d35a31e211b04d5a771881f5ae13e358e8fa0804463ae3bace05dd815" already present on machine
+21m         Normal    Pulled                 pod/crapi-web-6f889b5bc-46mx4           Container image "crapi/crapi-web@sha256:b27d246c646bd33898e7d1d2095b6e7576c0993a7b81a73aa7386929493d7151" already present on machine
+21m         Normal    Created                pod/crapi-community-7796457dfd-zk9nq    Created container crapi-community
+21m         Normal    Created                pod/crapi-web-6f889b5bc-46mx4           Created container crapi-web
+21m         Normal    Created                pod/crapi-workshop-868ccf8f55-nzpkb     Created container crapi-workshop
+21m         Normal    Started                pod/waf-59b67b9c48-9ntds                Started container istio-proxy
+21m         Normal    Started                pod/opa-server-7685fc584c-xdlrs         Started container istio-proxy
+21m         Normal    Created                pod/waf-59b67b9c48-9ntds                Created container istio-proxy
+21m         Normal    Created                pod/opa-server-7685fc584c-xdlrs         Created container istio-proxy
+21m         Normal    Pulled                 pod/waf-59b67b9c48-9ntds                Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/waf-59b67b9c48-9ntds                Started container waf
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-xdlrs         Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/opa-server-7685fc584c-xdlrs         Started container opa
+21m         Normal    Created                pod/waf-59b67b9c48-9ntds                Created container waf
+21m         Normal    Created                pod/opa-server-7685fc584c-xdlrs         Created container opa
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-xdlrs         Container image "openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517" already present on machine
+21m         Normal    Pulled                 pod/waf-59b67b9c48-9ntds                Container image "owasp/modsecurity-crs@sha256:1503b5ab7b8f8799d1525cd2a1690dfcdd5cc251a705523aa5783dd20e038b1b" already present on machine
+21m         Normal    Started                pod/crapi-workshop-868ccf8f55-nzpkb     Started container istio-init
+21m         Normal    Started                pod/bff-dc7447c56-qg2bp                 Started container istio-init
+21m         Normal    Created                pod/crapi-workshop-868ccf8f55-nzpkb     Created container istio-init
+21m         Normal    Created                pod/bff-dc7447c56-qg2bp                 Created container istio-init
+21m         Normal    Pulled                 pod/bff-dc7447c56-qg2bp                 Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Pulled                 pod/crapi-workshop-868ccf8f55-nzpkb     Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/opa-server-7685fc584c-xdlrs         Started container istio-init
+21m         Normal    Started                pod/crapi-community-7796457dfd-zk9nq    Started container istio-init
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-xdlrs         Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Created                pod/crapi-workshop-868ccf8f55-nzpkb     Created container istio-proxy
+21m         Normal    Started                pod/crapi-workshop-868ccf8f55-nzpkb     Started container crapi-workshop
+21m         Warning   Unhealthy              pod/crapi-workshop-868ccf8f55-nzpkb     Startup probe failed: Get "http://10.42.1.68:15021/healthz/ready": dial tcp 10.42.1.68:15021: connect: connection refused
+21m         Normal    Started                pod/crapi-workshop-868ccf8f55-nzpkb     Started container istio-proxy
+21m         Normal    Started                pod/crapi-community-7796457dfd-zk9nq    Started container istio-proxy
+21m         Normal    Started                pod/crapi-web-6f889b5bc-46mx4           Started container istio-proxy
+21m         Normal    Pulled                 pod/crapi-workshop-868ccf8f55-nzpkb     Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Warning   Unhealthy              pod/opa-server-7685fc584c-xdlrs         Startup probe failed: Get "http://10.42.2.59:15021/healthz/ready": dial tcp 10.42.2.59:15021: connect: connection refused
+21m         Normal    Created                pod/crapi-web-6f889b5bc-46mx4           Created container istio-proxy
+21m         Normal    Created                pod/crapi-community-7796457dfd-zk9nq    Created container istio-proxy
+21m         Normal    Pulled                 pod/crapi-web-6f889b5bc-46mx4           Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/bff-dc7447c56-qg2bp                 Started container bff
+21m         Normal    Pulled                 pod/bff-dc7447c56-qg2bp                 Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/crapi-web-6f889b5bc-46mx4           Started container crapi-web
+21m         Normal    Created                pod/bff-dc7447c56-qg2bp                 Created container istio-proxy
+21m         Normal    Started                pod/crapi-community-7796457dfd-zk9nq    Started container crapi-community
+21m         Normal    Pulled                 pod/crapi-community-7796457dfd-zk9nq    Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/bff-dc7447c56-qg2bp                 Started container istio-proxy
+21m         Warning   Unhealthy              pod/crapi-web-6f889b5bc-46mx4           Startup probe failed: Get "http://10.42.1.66:15021/healthz/ready": dial tcp 10.42.1.66:15021: connect: connection refused
+21m         Warning   Unhealthy              pod/crapi-community-7796457dfd-zk9nq    Startup probe failed: Get "http://10.42.1.67:15021/healthz/ready": dial tcp 10.42.1.67:15021: connect: connection refused
+21m         Warning   Unhealthy              pod/bff-dc7447c56-qg2bp                 Startup probe failed: Get "http://10.42.0.179:15021/healthz/ready": dial tcp 10.42.0.179:15021: connect: connection refused
+21m         Normal    ScalingReplicaSet      deployment/opa-server                   Scaled up replica set opa-server-7685fc584c to 2 from 1
+21m         Normal    ScalingReplicaSet      deployment/opa-server                   Scaled down replica set opa-server-865bbbd9d9 to 2 from 3
+21m         Normal    SuccessfulCreate       replicaset/opa-server-7685fc584c        Created pod: opa-server-7685fc584c-2m2qd
+21m         Normal    Killing                pod/opa-server-865bbbd9d9-t7nv8         Stopping container istio-proxy
+21m         Normal    SuccessfulDelete       replicaset/opa-server-865bbbd9d9        Deleted pod: opa-server-865bbbd9d9-t7nv8
+21m         Normal    Killing                pod/opa-server-865bbbd9d9-t7nv8         Stopping container opa
+21m         Normal    Created                pod/opa-server-7685fc584c-2m2qd         Created container istio-init
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-2m2qd         Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/opa-server-7685fc584c-2m2qd         Started container istio-init
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-2m2qd         Container image "openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517" already present on machine
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-2m2qd         Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Warning   Unhealthy              pod/opa-server-865bbbd9d9-t7nv8         Readiness probe failed: Get "http://10.42.2.9:15020/app-health/opa/readyz": dial tcp 10.42.2.9:15020: connect: connection refused
+21m         Normal    Created                pod/opa-server-7685fc584c-2m2qd         Created container opa
+21m         Normal    Started                pod/opa-server-7685fc584c-2m2qd         Started container opa
+21m         Normal    Created                pod/opa-server-7685fc584c-2m2qd         Created container istio-proxy
+21m         Normal    Started                pod/opa-server-7685fc584c-2m2qd         Started container istio-proxy
+21m         Normal    ScalingReplicaSet      deployment/redis                        Scaled down replica set redis-7958cc6d6 to 0 from 1
+21m         Normal    Killing                pod/waf-74dc9b9846-bvrhq                Stopping container istio-proxy
+21m         Normal    Killing                pod/waf-74dc9b9846-bvrhq                Stopping container waf
+21m         Normal    SuccessfulDelete       replicaset/waf-74dc9b9846               Deleted pod: waf-74dc9b9846-bvrhq
+21m         Normal    ScalingReplicaSet      deployment/waf                          Scaled down replica set waf-74dc9b9846 to 0 from 1
+21m         Normal    Killing                pod/redis-7958cc6d6-cqddf               Stopping container redis
+21m         Normal    SuccessfulDelete       replicaset/redis-7958cc6d6              Deleted pod: redis-7958cc6d6-cqddf
+21m         Normal    ScalingReplicaSet      deployment/bff                          Scaled down replica set bff-f4fcf7fbb to 0 from 1
+21m         Normal    SuccessfulDelete       replicaset/bff-f4fcf7fbb                Deleted pod: bff-f4fcf7fbb-6lcxd
+21m         Normal    Killing                pod/bff-f4fcf7fbb-6lcxd                 Stopping container bff
+21m         Normal    Killing                pod/bff-f4fcf7fbb-6lcxd                 Stopping container istio-proxy
+21m         Warning   Unhealthy              pod/waf-74dc9b9846-bvrhq                Readiness probe failed: HTTP probe failed with statuscode: 503
+21m         Warning   Unhealthy              pod/waf-74dc9b9846-bvrhq                Readiness probe failed: Get "http://10.42.1.50:15020/app-health/waf/readyz": dial tcp 10.42.1.50:15020: connect: connection refused
+21m         Normal    SuccessfulDelete       replicaset/opa-server-865bbbd9d9        Deleted pod: opa-server-865bbbd9d9-wl4sm
+21m         Normal    ScalingReplicaSet      deployment/opa-server                   Scaled down replica set opa-server-865bbbd9d9 to 1 from 2
+21m         Normal    ScalingReplicaSet      deployment/opa-server                   Scaled up replica set opa-server-7685fc584c to 3 from 2
+21m         Normal    Killing                pod/opa-server-865bbbd9d9-wl4sm         Stopping container opa
+21m         Normal    Killing                pod/opa-server-865bbbd9d9-wl4sm         Stopping container istio-proxy
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-vkmng         Container image "openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517" already present on machine
+21m         Normal    Created                pod/opa-server-7685fc584c-vkmng         Created container istio-init
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-vkmng         Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    SuccessfulCreate       replicaset/opa-server-7685fc584c        Created pod: opa-server-7685fc584c-vkmng
+21m         Normal    Started                pod/opa-server-7685fc584c-vkmng         Started container istio-init
+21m         Normal    Created                pod/opa-server-7685fc584c-vkmng         Created container opa
+21m         Normal    Created                pod/opa-server-7685fc584c-vkmng         Created container istio-proxy
+21m         Normal    Started                pod/opa-server-7685fc584c-vkmng         Started container opa
+21m         Normal    Pulled                 pod/opa-server-7685fc584c-vkmng         Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+21m         Normal    Started                pod/opa-server-7685fc584c-vkmng         Started container istio-proxy
+21m         Warning   Unhealthy              pod/opa-server-865bbbd9d9-wl4sm         Readiness probe failed: HTTP probe failed with statuscode: 503
+21m         Warning   Unhealthy              pod/opa-server-865bbbd9d9-wl4sm         Readiness probe failed: Get "http://10.42.0.48:15020/app-health/opa/readyz": dial tcp 10.42.0.48:15020: connect: connection refused
+21m         Normal    ScalingReplicaSet      deployment/crapi-web                    Scaled down replica set crapi-web-bf59fb69c to 0 from 1
+21m         Normal    Killing                pod/crapi-web-bf59fb69c-vftg5           Stopping container crapi-web
+21m         Normal    SuccessfulDelete       replicaset/crapi-web-bf59fb69c          Deleted pod: crapi-web-bf59fb69c-vftg5
+21m         Normal    Killing                pod/crapi-community-79dddc95d8-vhfg5    Stopping container istio-proxy
+21m         Normal    SuccessfulDelete       replicaset/crapi-community-79dddc95d8   Deleted pod: crapi-community-79dddc95d8-vhfg5
+21m         Normal    Killing                pod/crapi-community-79dddc95d8-vhfg5    Stopping container crapi-community
+21m         Normal    ScalingReplicaSet      deployment/crapi-community              Scaled down replica set crapi-community-79dddc95d8 to 0 from 1
+21m         Normal    Killing                pod/crapi-web-bf59fb69c-vftg5           Stopping container istio-proxy
+20m         Warning   Unhealthy              pod/crapi-community-79dddc95d8-vhfg5    Readiness probe failed: Get "http://10.42.0.47:15020/app-health/crapi-community/readyz": dial tcp 10.42.0.47:15020: connect: connection refused
+20m         Normal    Killing                pod/opa-server-865bbbd9d9-qk2bz         Stopping container opa
+20m         Normal    ScalingReplicaSet      deployment/opa-server                   Scaled down replica set opa-server-865bbbd9d9 to 0 from 1
+20m         Normal    SuccessfulDelete       replicaset/opa-server-865bbbd9d9        Deleted pod: opa-server-865bbbd9d9-qk2bz
+20m         Normal    Killing                pod/opa-server-865bbbd9d9-qk2bz         Stopping container istio-proxy
+20m         Warning   Unhealthy              pod/opa-server-865bbbd9d9-qk2bz         Readiness probe failed: Get "http://10.42.1.52:15020/app-health/opa/readyz": dial tcp 10.42.1.52:15020: connect: connection refused
+20m         Warning   Unhealthy              pod/opa-server-865bbbd9d9-qk2bz         Readiness probe failed: HTTP probe failed with statuscode: 503
+20m         Normal    ScalingReplicaSet      deployment/crapi-workshop               Scaled down replica set crapi-workshop-8567cc7d5c to 0 from 1
+20m         Normal    Killing                pod/crapi-workshop-8567cc7d5c-rdxrh     Stopping container crapi-workshop
+20m         Normal    SuccessfulDelete       replicaset/crapi-workshop-8567cc7d5c    Deleted pod: crapi-workshop-8567cc7d5c-rdxrh
+20m         Normal    Killing                pod/crapi-workshop-8567cc7d5c-rdxrh     Stopping container istio-proxy
+20m         Warning   Unhealthy              pod/crapi-web-bf59fb69c-vftg5           Readiness probe failed: Get "http://10.42.1.49:15021/healthz/ready": dial tcp 10.42.1.49:15021: connect: connection refused
+20m         Warning   Unhealthy              pod/crapi-web-bf59fb69c-vftg5           Readiness probe failed: Get "http://10.42.1.49:15020/app-health/crapi-web/readyz": dial tcp 10.42.1.49:15020: connect: connection refused
+20m         Warning   Unhealthy              pod/crapi-workshop-8567cc7d5c-rdxrh     Readiness probe failed: Get "http://10.42.1.51:15020/app-health/crapi-workshop/readyz": dial tcp 10.42.1.51:15020: connect: connection refused
+20m         Warning   Unhealthy              pod/crapi-workshop-8567cc7d5c-rdxrh     Readiness probe failed: Get "http://10.42.1.51:15021/healthz/ready": dial tcp 10.42.1.51:15021: connect: connection refused
+19m         Normal    Pulled                 pod/posture-agent-29829244-xjl5m        Container image "alpine/k8s:1.31.13" already present on machine
+19m         Normal    SuccessfulCreate       job/posture-agent-29829244              Created pod: posture-agent-29829244-xjl5m
+19m         Normal    Started                pod/posture-agent-29829244-xjl5m        Started container posture-agent
+19m         Normal    Created                pod/posture-agent-29829244-xjl5m        Created container posture-agent
+19m         Normal    Completed              job/posture-agent-29829244              Job completed
+17m         Normal    Started                pod/posture-agent-29829246-w9vvk        Started container posture-agent
+17m         Normal    Created                pod/posture-agent-29829246-w9vvk        Created container posture-agent
+17m         Normal    Pulled                 pod/posture-agent-29829246-w9vvk        Container image "alpine/k8s:1.31.13" already present on machine
+17m         Normal    SuccessfulCreate       job/posture-agent-29829246              Created pod: posture-agent-29829246-w9vvk
+17m         Normal    Completed              job/posture-agent-29829246              Job completed
+15m         Normal    SuccessfulCreate       job/posture-agent-29829248              Created pod: posture-agent-29829248-pcz67
+15m         Normal    Pulled                 pod/posture-agent-29829248-pcz67        Container image "alpine/k8s:1.31.13" already present on machine
+15m         Normal    Created                pod/posture-agent-29829248-pcz67        Created container posture-agent
+15m         Normal    Started                pod/posture-agent-29829248-pcz67        Started container posture-agent
+15m         Normal    Completed              job/posture-agent-29829248              Job completed
+13m         Normal    SuccessfulCreate       job/posture-agent-29829250              Created pod: posture-agent-29829250-2fndp
+13m         Normal    Pulled                 pod/posture-agent-29829250-2fndp        Container image "alpine/k8s:1.31.13" already present on machine
+13m         Normal    Created                pod/posture-agent-29829250-2fndp        Created container posture-agent
+13m         Normal    Started                pod/posture-agent-29829250-2fndp        Started container posture-agent
+13m         Normal    Completed              job/posture-agent-29829250              Job completed
+12m         Normal    Killing                pod/waf-59b67b9c48-9ntds                Stopping container istio-proxy
+12m         Normal    Killing                pod/waf-59b67b9c48-9ntds                Stopping container waf
+12m         Normal    SuccessfulCreate       replicaset/waf-59b67b9c48               Created pod: waf-59b67b9c48-gmgtx
+12m         Normal    Created                pod/waf-59b67b9c48-gmgtx                Created container istio-init
+12m         Normal    Pulled                 pod/waf-59b67b9c48-gmgtx                Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+12m         Normal    Started                pod/waf-59b67b9c48-gmgtx                Started container istio-init
+12m         Normal    Started                pod/waf-59b67b9c48-gmgtx                Started container istio-proxy
+12m         Normal    Created                pod/waf-59b67b9c48-gmgtx                Created container istio-proxy
+12m         Normal    Pulled                 pod/waf-59b67b9c48-gmgtx                Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+12m         Normal    Started                pod/waf-59b67b9c48-gmgtx                Started container waf
+12m         Normal    Created                pod/waf-59b67b9c48-gmgtx                Created container waf
+12m         Normal    Pulled                 pod/waf-59b67b9c48-gmgtx                Container image "owasp/modsecurity-crs@sha256:1503b5ab7b8f8799d1525cd2a1690dfcdd5cc251a705523aa5783dd20e038b1b" already present on machine
+12m         Warning   Unhealthy              pod/waf-59b67b9c48-gmgtx                Startup probe failed: Get "http://10.42.1.82:15021/healthz/ready": dial tcp 10.42.1.82:15021: connect: connection refused
+11m         Normal    SuccessfulCreate       job/posture-agent-29829252              Created pod: posture-agent-29829252-72q96
+11m         Normal    Pulled                 pod/posture-agent-29829252-72q96        Container image "alpine/k8s:1.31.13" already present on machine
+11m         Normal    Created                pod/posture-agent-29829252-72q96        Created container posture-agent
+11m         Normal    Started                pod/posture-agent-29829252-72q96        Started container posture-agent
+11m         Normal    Completed              job/posture-agent-29829252              Job completed
+9m29s       Normal    SuccessfulCreate       job/posture-agent-29829254              Created pod: posture-agent-29829254-zcbvt
+9m29s       Normal    Created                pod/posture-agent-29829254-zcbvt        Created container posture-agent
+9m29s       Normal    Pulled                 pod/posture-agent-29829254-zcbvt        Container image "alpine/k8s:1.31.13" already present on machine
+9m29s       Normal    Started                pod/posture-agent-29829254-zcbvt        Started container posture-agent
+9m26s       Normal    Completed              job/posture-agent-29829254              Job completed
+7m41s       Normal    TaintManagerEviction   pod/opa-server-7685fc584c-vkmng         Cancelling deletion of Pod crapi/opa-server-7685fc584c-vkmng
+7m41s       Normal    TaintManagerEviction   pod/crapi-community-7796457dfd-zk9nq    Cancelling deletion of Pod crapi/crapi-community-7796457dfd-zk9nq
+7m41s       Normal    TaintManagerEviction   pod/crapi-workshop-868ccf8f55-nzpkb     Cancelling deletion of Pod crapi/crapi-workshop-868ccf8f55-nzpkb
+7m41s       Normal    TaintManagerEviction   pod/crapi-web-6f889b5bc-46mx4           Cancelling deletion of Pod crapi/crapi-web-6f889b5bc-46mx4
+7m41s       Normal    TaintManagerEviction   pod/mongodb-0                           Cancelling deletion of Pod crapi/mongodb-0
+7m41s       Normal    TaintManagerEviction   pod/waf-59b67b9c48-gmgtx                Cancelling deletion of Pod crapi/waf-59b67b9c48-gmgtx
+7m29s       Normal    SuccessfulCreate       job/posture-agent-29829256              Created pod: posture-agent-29829256-vlwkt
+7m29s       Normal    Pulled                 pod/posture-agent-29829256-vlwkt        Container image "alpine/k8s:1.31.13" already present on machine
+7m29s       Normal    Started                pod/posture-agent-29829256-vlwkt        Started container posture-agent
+7m29s       Normal    Created                pod/posture-agent-29829256-vlwkt        Created container posture-agent
+7m26s       Normal    Completed              job/posture-agent-29829256              Job completed
+5m29s       Normal    Started                pod/posture-agent-29829258-c5gt2        Started container posture-agent
+5m29s       Normal    Created                pod/posture-agent-29829258-c5gt2        Created container posture-agent
+5m29s       Normal    Pulled                 pod/posture-agent-29829258-c5gt2        Container image "alpine/k8s:1.31.13" already present on machine
+5m29s       Normal    SuccessfulCreate       job/posture-agent-29829258              Created pod: posture-agent-29829258-c5gt2
+5m26s       Normal    Completed              job/posture-agent-29829258              Job completed
+3m29s       Normal    Started                pod/posture-agent-29829260-c76nw        Started container posture-agent
+3m29s       Normal    Created                pod/posture-agent-29829260-c76nw        Created container posture-agent
+3m29s       Normal    Pulled                 pod/posture-agent-29829260-c76nw        Container image "alpine/k8s:1.31.13" already present on machine
+3m29s       Normal    SuccessfulCreate       job/posture-agent-29829260              Created pod: posture-agent-29829260-c76nw
+3m29s       Normal    SuccessfulCreate       cronjob/posture-agent                   (combined from similar events): Created job posture-agent-29829260
+3m26s       Normal    Completed              job/posture-agent-29829260              Job completed
+2m19s       Normal    ScalingReplicaSet      deployment/crapi-community              Scaled up replica set crapi-community-78c6cf7974 to 1
+2m19s       Normal    SuccessfulCreate       replicaset/crapi-community-78c6cf7974   Created pod: crapi-community-78c6cf7974-2dgbq
+2m19s       Normal    SuccessfulCreate       replicaset/crapi-web-58cccbbcb7         Created pod: crapi-web-58cccbbcb7-99jv2
+2m19s       Normal    Pulled                 pod/waf-5bd74d97c6-mrp4c                Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m19s       Normal    ScalingReplicaSet      deployment/crapi-workshop               Scaled up replica set crapi-workshop-7787f7dc95 to 1
+2m19s       Normal    SuccessfulCreate       replicaset/crapi-workshop-7787f7dc95    Created pod: crapi-workshop-7787f7dc95-lwm9f
+2m19s       Normal    ScalingReplicaSet      deployment/crapi-web                    Scaled up replica set crapi-web-58cccbbcb7 to 1
+2m19s       Normal    Created                pod/waf-5bd74d97c6-mrp4c                Created container istio-init
+2m19s       Normal    SuccessfulCreate       replicaset/waf-5bd74d97c6               Created pod: waf-5bd74d97c6-mrp4c
+2m19s       Normal    ScalingReplicaSet      deployment/waf                          Scaled up replica set waf-5bd74d97c6 to 1
+2m19s       Normal    SuccessfulCreate       replicaset/bff-86c8785b8                Created pod: bff-86c8785b8-swnnw
+2m19s       Normal    ScalingReplicaSet      deployment/bff                          Scaled up replica set bff-86c8785b8 to 1
+2m18s       Normal    Created                pod/crapi-community-78c6cf7974-2dgbq    Created container istio-init
+2m18s       Normal    SuccessfulCreate       replicaset/opa-server-bcb587767         Created pod: opa-server-bcb587767-ld5jl
+2m18s       Normal    Created                pod/crapi-web-58cccbbcb7-99jv2          Created container istio-init
+2m18s       Normal    Created                pod/bff-86c8785b8-swnnw                 Created container istio-init
+2m18s       Normal    Pulled                 pod/crapi-community-78c6cf7974-2dgbq    Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m18s       Normal    Started                pod/crapi-web-58cccbbcb7-99jv2          Started container istio-init
+2m18s       Normal    Pulled                 pod/crapi-web-58cccbbcb7-99jv2          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m18s       Normal    Started                pod/bff-86c8785b8-swnnw                 Started container istio-init
+2m18s       Normal    Pulled                 pod/crapi-workshop-7787f7dc95-lwm9f     Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m18s       Normal    Created                pod/crapi-workshop-7787f7dc95-lwm9f     Created container istio-init
+2m18s       Normal    Started                pod/crapi-community-78c6cf7974-2dgbq    Started container istio-init
+2m18s       Normal    Pulled                 pod/opa-server-bcb587767-ld5jl          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m18s       Normal    Started                pod/crapi-workshop-7787f7dc95-lwm9f     Started container istio-init
+2m18s       Normal    Created                pod/opa-server-bcb587767-ld5jl          Created container istio-init
+2m18s       Normal    Pulled                 pod/bff-86c8785b8-swnnw                 Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m18s       Normal    ScalingReplicaSet      deployment/opa-server                   Scaled up replica set opa-server-bcb587767 to 1
+2m18s       Normal    Started                pod/waf-5bd74d97c6-mrp4c                Started container istio-init
+2m17s       Normal    Started                pod/waf-5bd74d97c6-mrp4c                Started container istio-proxy
+2m17s       Normal    Pulling                pod/crapi-workshop-7787f7dc95-lwm9f     Pulling image "crapi/crapi-workshop@sha256:d4d2d94d35a31e211b04d5a771881f5ae13e358e8fa0804463ae3bace05dd815"
+2m17s       Normal    Pulled                 pod/opa-server-bcb587767-ld5jl          Container image "openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517" already present on machine
+2m17s       Normal    Pulling                pod/crapi-community-78c6cf7974-2dgbq    Pulling image "crapi/crapi-community@sha256:8ba0c7eda86ae065a673f1fa554d0109a24f25c5a8d65097ae024e5ee715c54e"
+2m17s       Normal    Created                pod/bff-86c8785b8-swnnw                 Created container bff
+2m17s       Normal    Created                pod/opa-server-bcb587767-ld5jl          Created container opa
+2m17s       Normal    Created                pod/waf-5bd74d97c6-mrp4c                Created container waf
+2m17s       Normal    Started                pod/waf-5bd74d97c6-mrp4c                Started container waf
+2m17s       Normal    Started                pod/opa-server-bcb587767-ld5jl          Started container opa
+2m17s       Normal    Started                pod/bff-86c8785b8-swnnw                 Started container bff
+2m17s       Normal    Pulled                 pod/bff-86c8785b8-swnnw                 Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m17s       Normal    Pulled                 pod/waf-5bd74d97c6-mrp4c                Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m17s       Normal    Pulled                 pod/opa-server-bcb587767-ld5jl          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m17s       Normal    Created                pod/opa-server-bcb587767-ld5jl          Created container istio-proxy
+2m17s       Normal    Created                pod/waf-5bd74d97c6-mrp4c                Created container istio-proxy
+2m17s       Normal    Created                pod/bff-86c8785b8-swnnw                 Created container istio-proxy
+2m17s       Normal    Pulling                pod/crapi-web-58cccbbcb7-99jv2          Pulling image "crapi/crapi-web@sha256:b27d246c646bd33898e7d1d2095b6e7576c0993a7b81a73aa7386929493d7151"
+2m17s       Normal    Started                pod/opa-server-bcb587767-ld5jl          Started container istio-proxy
+2m17s       Normal    Started                pod/bff-86c8785b8-swnnw                 Started container istio-proxy
+2m17s       Normal    Started                pod/opa-server-bcb587767-ld5jl          Started container istio-init
+2m17s       Normal    Pulled                 pod/bff-86c8785b8-swnnw                 Container image "ztlab/bff:1.0.0" already present on machine
+2m17s       Normal    Pulled                 pod/waf-5bd74d97c6-mrp4c                Container image "owasp/modsecurity-crs@sha256:1503b5ab7b8f8799d1525cd2a1690dfcdd5cc251a705523aa5783dd20e038b1b" already present on machine
+2m16s       Warning   Unhealthy              pod/waf-5bd74d97c6-mrp4c                Startup probe failed: Get "http://10.42.2.76:15021/healthz/ready": dial tcp 10.42.2.76:15021: connect: connection refused
+2m16s       Warning   Unhealthy              pod/opa-server-bcb587767-ld5jl          Startup probe failed: Get "http://10.42.2.81:15021/healthz/ready": dial tcp 10.42.2.81:15021: connect: connection refused
+2m12s       Normal    ScalingReplicaSet      deployment/opa-server                   Scaled up replica set opa-server-bcb587767 to 2 from 1
+2m12s       Normal    Killing                pod/waf-59b67b9c48-gmgtx                Stopping container waf
+2m12s       Normal    Started                pod/crapi-community-78c6cf7974-2dgbq    Started container istio-proxy
+2m12s       Normal    ScalingReplicaSet      deployment/opa-server                   Scaled down replica set opa-server-7685fc584c to 2 from 3
+2m12s       Normal    SuccessfulDelete       replicaset/opa-server-7685fc584c        Deleted pod: opa-server-7685fc584c-xdlrs
+2m12s       Normal    Killing                pod/opa-server-7685fc584c-xdlrs         Stopping container opa
+2m12s       Normal    ScalingReplicaSet      deployment/waf                          Scaled down replica set waf-59b67b9c48 to 0 from 1
+2m12s       Normal    Pulled                 pod/crapi-community-78c6cf7974-2dgbq    Successfully pulled image "crapi/crapi-community@sha256:8ba0c7eda86ae065a673f1fa554d0109a24f25c5a8d65097ae024e5ee715c54e" in 4.725s (4.725s including waiting)
+2m12s       Normal    SuccessfulDelete       replicaset/waf-59b67b9c48               Deleted pod: waf-59b67b9c48-gmgtx
+2m12s       Normal    Killing                pod/opa-server-7685fc584c-xdlrs         Stopping container istio-proxy
+2m12s       Normal    Created                pod/crapi-community-78c6cf7974-2dgbq    Created container crapi-community
+2m12s       Normal    Killing                pod/waf-59b67b9c48-gmgtx                Stopping container istio-proxy
+2m12s       Normal    Created                pod/crapi-community-78c6cf7974-2dgbq    Created container istio-proxy
+2m12s       Normal    Started                pod/crapi-community-78c6cf7974-2dgbq    Started container crapi-community
+2m12s       Normal    SuccessfulCreate       replicaset/opa-server-bcb587767         Created pod: opa-server-bcb587767-qpkpt
+2m12s       Normal    Pulled                 pod/crapi-community-78c6cf7974-2dgbq    Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m11s       Normal    Created                pod/opa-server-bcb587767-qpkpt          Created container istio-proxy
+2m11s       Normal    Pulled                 pod/opa-server-bcb587767-qpkpt          Container image "openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517" already present on machine
+2m11s       Normal    Created                pod/opa-server-bcb587767-qpkpt          Created container opa
+2m11s       Normal    Started                pod/opa-server-bcb587767-qpkpt          Started container opa
+2m11s       Normal    Pulled                 pod/opa-server-bcb587767-qpkpt          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m11s       Normal    Started                pod/opa-server-bcb587767-qpkpt          Started container istio-init
+2m11s       Normal    Started                pod/opa-server-bcb587767-qpkpt          Started container istio-proxy
+2m11s       Normal    Created                pod/opa-server-bcb587767-qpkpt          Created container istio-init
+2m11s       Normal    Pulled                 pod/opa-server-bcb587767-qpkpt          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m10s       Normal    Created                pod/crapi-web-58cccbbcb7-99jv2          Created container crapi-web
+2m10s       Normal    Pulled                 pod/crapi-web-58cccbbcb7-99jv2          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m10s       Normal    Created                pod/crapi-web-58cccbbcb7-99jv2          Created container istio-proxy
+2m10s       Normal    Started                pod/crapi-web-58cccbbcb7-99jv2          Started container istio-proxy
+2m10s       Warning   Unhealthy              pod/opa-server-7685fc584c-xdlrs         Readiness probe failed: Get "http://10.42.2.59:15020/app-health/opa/readyz": dial tcp 10.42.2.59:15020: connect: connection refused
+2m10s       Warning   Unhealthy              pod/opa-server-bcb587767-qpkpt          Startup probe failed: Get "http://10.42.1.83:15021/healthz/ready": dial tcp 10.42.1.83:15021: connect: connection refused
+2m10s       Normal    Started                pod/crapi-web-58cccbbcb7-99jv2          Started container crapi-web
+2m10s       Normal    Pulled                 pod/crapi-web-58cccbbcb7-99jv2          Successfully pulled image "crapi/crapi-web@sha256:b27d246c646bd33898e7d1d2095b6e7576c0993a7b81a73aa7386929493d7151" in 6.886s (6.886s including waiting)
+2m9s        Warning   Unhealthy              pod/waf-59b67b9c48-gmgtx                Readiness probe failed: Get "http://10.42.1.82:15020/app-health/waf/readyz": dial tcp 10.42.1.82:15020: connect: connection refused
+2m9s        Normal    ScalingReplicaSet      deployment/bff                          Scaled down replica set bff-dc7447c56 to 0 from 1
+2m9s        Normal    Killing                pod/bff-dc7447c56-qg2bp                 Stopping container bff
+2m9s        Normal    SuccessfulDelete       replicaset/bff-dc7447c56                Deleted pod: bff-dc7447c56-qg2bp
+2m9s        Normal    Killing                pod/bff-dc7447c56-qg2bp                 Stopping container istio-proxy
+2m8s        Normal    Pulled                 pod/crapi-workshop-7787f7dc95-lwm9f     Successfully pulled image "crapi/crapi-workshop@sha256:d4d2d94d35a31e211b04d5a771881f5ae13e358e8fa0804463ae3bace05dd815" in 9.087s (9.087s including waiting)
+2m8s        Normal    Created                pod/crapi-workshop-7787f7dc95-lwm9f     Created container crapi-workshop
+2m8s        Normal    Started                pod/crapi-workshop-7787f7dc95-lwm9f     Started container crapi-workshop
+2m8s        Normal    Pulled                 pod/crapi-workshop-7787f7dc95-lwm9f     Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m8s        Normal    Created                pod/crapi-workshop-7787f7dc95-lwm9f     Created container istio-proxy
+2m8s        Normal    Started                pod/crapi-workshop-7787f7dc95-lwm9f     Started container istio-proxy
+2m6s        Normal    ScalingReplicaSet      deployment/opa-server                   Scaled down replica set opa-server-7685fc584c to 1 from 2
+2m6s        Normal    SuccessfulDelete       replicaset/opa-server-7685fc584c        Deleted pod: opa-server-7685fc584c-vkmng
+2m6s        Normal    Killing                pod/opa-server-7685fc584c-vkmng         Stopping container opa
+2m6s        Normal    ScalingReplicaSet      deployment/opa-server                   Scaled up replica set opa-server-bcb587767 to 3 from 2
+2m6s        Normal    Killing                pod/opa-server-7685fc584c-vkmng         Stopping container istio-proxy
+2m6s        Normal    SuccessfulCreate       replicaset/opa-server-bcb587767         Created pod: opa-server-bcb587767-sbhh6
+2m5s        Normal    Pulled                 pod/opa-server-bcb587767-sbhh6          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m5s        Normal    Created                pod/opa-server-bcb587767-sbhh6          Created container istio-init
+2m5s        Normal    Started                pod/opa-server-bcb587767-sbhh6          Started container istio-init
+2m4s        Warning   Unhealthy              pod/bff-dc7447c56-qg2bp                 Readiness probe failed: HTTP probe failed with statuscode: 503
+2m4s        Normal    Pulled                 pod/opa-server-bcb587767-sbhh6          Container image "openpolicyagent/opa@sha256:1792991ca9646526b8c95c59cbb525ce33bf78458800182d78f6fa884d5ec517" already present on machine
+2m4s        Normal    Created                pod/opa-server-bcb587767-sbhh6          Created container opa
+2m4s        Normal    Started                pod/opa-server-bcb587767-sbhh6          Started container opa
+2m4s        Normal    Pulled                 pod/opa-server-bcb587767-sbhh6          Container image "docker.io/istio/proxyv2:1.22.3" already present on machine
+2m4s        Normal    Created                pod/opa-server-bcb587767-sbhh6          Created container istio-proxy
+2m4s        Normal    Started                pod/opa-server-bcb587767-sbhh6          Started container istio-proxy
+2m4s        Warning   Unhealthy              pod/opa-server-7685fc584c-vkmng         Readiness probe failed: HTTP probe failed with statuscode: 503
+2m3s        Warning   Unhealthy              pod/opa-server-7685fc584c-vkmng         Readiness probe failed: Get "http://10.42.1.69:15020/app-health/opa/readyz": dial tcp 10.42.1.69:15020: connect: connection refused
+119s        Normal    ScalingReplicaSet      deployment/crapi-web                    Scaled down replica set crapi-web-6f889b5bc to 0 from 1
+119s        Normal    Killing                pod/crapi-web-6f889b5bc-46mx4           Stopping container crapi-web
+119s        Normal    SuccessfulDelete       replicaset/crapi-web-6f889b5bc          Deleted pod: crapi-web-6f889b5bc-46mx4
+119s        Normal    Killing                pod/crapi-web-6f889b5bc-46mx4           Stopping container istio-proxy
+115s        Normal    ScalingReplicaSet      deployment/opa-server                   Scaled down replica set opa-server-7685fc584c to 0 from 1
+115s        Normal    SuccessfulDelete       replicaset/opa-server-7685fc584c        Deleted pod: opa-server-7685fc584c-2m2qd
+115s        Normal    Killing                pod/opa-server-7685fc584c-2m2qd         Stopping container opa
+115s        Normal    Killing                pod/opa-server-7685fc584c-2m2qd         Stopping container istio-proxy
+114s        Warning   Unhealthy              pod/opa-server-7685fc584c-2m2qd         Readiness probe failed: Get "http://10.42.0.181:15020/app-health/opa/readyz": dial tcp 10.42.0.181:15020: connect: connection refused
+108s        Normal    ScalingReplicaSet      deployment/crapi-community              Scaled down replica set crapi-community-7796457dfd to 0 from 1
+108s        Normal    SuccessfulDelete       replicaset/crapi-community-7796457dfd   Deleted pod: crapi-community-7796457dfd-zk9nq
+108s        Normal    Killing                pod/crapi-community-7796457dfd-zk9nq    Stopping container crapi-community
+108s        Normal    Killing                pod/crapi-community-7796457dfd-zk9nq    Stopping container istio-proxy
+108s        Warning   Unhealthy              pod/crapi-community-7796457dfd-zk9nq    Readiness probe failed: HTTP probe failed with statuscode: 503
+108s        Normal    ScalingReplicaSet      deployment/crapi-workshop               Scaled down replica set crapi-workshop-868ccf8f55 to 0 from 1
+108s        Normal    Killing                pod/crapi-workshop-868ccf8f55-nzpkb     Stopping container crapi-workshop
+108s        Normal    SuccessfulDelete       replicaset/crapi-workshop-868ccf8f55    Deleted pod: crapi-workshop-868ccf8f55-nzpkb
+108s        Normal    Killing                pod/crapi-workshop-868ccf8f55-nzpkb     Stopping container istio-proxy
+108s        Warning   Unhealthy              pod/crapi-community-7796457dfd-zk9nq    Readiness probe failed: Get "http://10.42.1.67:15020/app-health/crapi-community/readyz": dial tcp 10.42.1.67:15020: connect: connection refused
+97s         Warning   Unhealthy              pod/crapi-web-6f889b5bc-46mx4           Readiness probe failed: Get "http://10.42.1.66:15021/healthz/ready": dial tcp 10.42.1.66:15021: connect: connection refused
+92s         Warning   Unhealthy              pod/crapi-web-6f889b5bc-46mx4           Readiness probe failed: Get "http://10.42.1.66:15020/app-health/crapi-web/readyz": dial tcp 10.42.1.66:15020: connect: connection refused
+89s         Normal    SuccessfulCreate       job/posture-agent-29829262              Created pod: posture-agent-29829262-65d8f
+89s         Normal    Pulled                 pod/posture-agent-29829262-65d8f        Container image "alpine/k8s:1.31.13" already present on machine
+89s         Normal    Created                pod/posture-agent-29829262-65d8f        Created container posture-agent
+89s         Normal    Started                pod/posture-agent-29829262-65d8f        Started container posture-agent
+86s         Normal    Completed              job/posture-agent-29829262              Job completed
+84s         Warning   Unhealthy              pod/crapi-workshop-868ccf8f55-nzpkb     Readiness probe failed: Get "http://10.42.1.68:15020/app-health/crapi-workshop/readyz": dial tcp 10.42.1.68:15020: connect: connection refused
+82s         Warning   Unhealthy              pod/crapi-workshop-868ccf8f55-nzpkb     Readiness probe failed: Get "http://10.42.1.68:15021/healthz/ready": dial tcp 10.42.1.68:15021: connect: connection refused
