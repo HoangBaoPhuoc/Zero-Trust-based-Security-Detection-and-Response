@@ -195,9 +195,21 @@ for cid in ('crapi-bff','crapi-bff-stepup'):
             'consentRequired':False,'config':{'included.client.audience':'crapi-bff','id.token.claim':'false','access.token.claim':'true'}}]})
     print('client +',cid)
 
+# §B1b: pool nạn nhân BOLA — tạo victim01..victim15 trong Keycloak (idempotent,
+# 409 → call() trả None) với password Test1234! để N1/crapi_bola đăng nhập được;
+# khớp VICTIM_USERS của seed-job.yaml (signup crAPI + claim xe).
+VICTIMS=['victim%02d'%k for k in range(1,16)]
+for u in VICTIMS:
+    ex=call('GET','/admin/realms/%s/users?username=%s&exact=true'%(REALM,u)) or []
+    if ex: continue
+    call('POST','/admin/realms/%s/users'%REALM,{'username':u,'email':u+'@ztlab.local',
+        'enabled':True,'emailVerified':True,'firstName':'Victim','lastName':u[-2:],
+        'credentials':[{'type':'password','value':'Test1234!','temporary':False}]})
+    print('victim +',u)
 ROLE_ADD={'testuser01':['crapi-user'],'testuser02':['crapi-user'],'merchant01':['crapi-user','crapi-mechanic'],
           'analyst01':['soc-analyst'],'demoadmin':['crapi-user','crapi-mechanic','crapi-admin','soc-analyst'],
           'stepup-demo':['crapi-user']}
+ROLE_ADD.update({u:['crapi-user'] for u in VICTIMS})
 allroles={r['name']:r for r in call('GET','/admin/realms/%s/roles'%REALM)}
 for uname,rs in ROLE_ADD.items():
     us=call('GET','/admin/realms/%s/users?username=%s&exact=true'%(REALM,uname)) or []
@@ -253,8 +265,28 @@ deploy_crapi_opa() {
     $k delete peerauthentication opa-permissive -n crapi --ignore-not-found >/dev/null 2>&1 || true
     $k delete destinationrule opa-service-plaintext -n crapi --ignore-not-found >/dev/null 2>&1 || true
   done
+  # Giai đoạn B §1.1: CronJob fetch JWKS/discovery cục bộ — CHỈ AWS (chỉ AWS PDP
+  # verify token; OpenStack crosscloud không dùng JWKS). opa.yaml mount
+  # opa-jwks-data với optional:true nên OpenStack OPA vẫn boot khi CM vắng mặt.
+  if [[ -f "$CRAPI_DIR/opa-jwks-cronjob.yaml" ]]; then
+    kaws apply -f "$CRAPI_DIR/opa-jwks-cronjob.yaml"
+  fi
   wait_rollout "$AWS_CONTEXT" crapi deployment/opa-server 180s
   wait_rollout "$OS_CONTEXT"  crapi deployment/opa-server 180s
+  # Seed opa-jwks-data NGAY (không chờ tới 5 phút cho CronJob tick đầu) để OPA
+  # verify được token từ đầu. Chạy một Job từ CronJob rồi chờ hoàn tất; OPA
+  # (--watch) tự nạp data mới trong vài giây. Fetch lỗi → Job fail, cảnh báo
+  # (không chặn deploy — CronJob sẽ thử lại mỗi 5 phút).
+  if kaws -n crapi get cronjob opa-jwks-fetcher >/dev/null 2>&1; then
+    local seed="jwks-seed-$(date +%s)"
+    kaws -n crapi create job "$seed" --from=cronjob/opa-jwks-fetcher >/dev/null 2>&1 || true
+    if kaws -n crapi wait --for=condition=complete "job/$seed" --timeout=90s >/dev/null 2>&1; then
+      ok "opa-jwks-data đã seed (AWS)"
+    else
+      warn "seed opa-jwks-data chưa xong — CronJob opa-jwks-fetcher sẽ thử lại mỗi 5'"
+    fi
+    kaws -n crapi delete job "$seed" --ignore-not-found >/dev/null 2>&1 || true
+  fi
   # 2026-10-04 (redeploy lên cụm OpenStack cũ): pod OPA tạo trong lúc
   # SPIRE/istioctl install của deploy-app.sh đang chạy ra KHÔNG có istio-proxy
   # (istiod không hề nhận request inject cho chúng). DestinationRule

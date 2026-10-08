@@ -20,16 +20,30 @@ crapi_preflight
 
 ATTEMPTS="${ATTEMPTS:-15}"
 UA="$BROWSER_UA"
-log "Brute force Keycloak login testuser01 — $ATTEMPTS lần mật khẩu sai"
+# §B1: MODE=dense (train) → 1 username, nhiều mật khẩu sai, dồn dập (burst).
+#      MODE=spray (holdout) → NHIỀU username, CÙNG một mật khẩu sai (password
+#      spraying kinh điển), rải chậm (slow_drip). Nghiệm thu đếm số username
+#      riêng biệt trong LOGIN_ERROR của Loki + phân phối khoảng cách.
+MODE="${VP_MODE:-${MODE:-dense}}"
+[[ "${VP_USERNAMES:-}" == "many" ]] && MODE="spray"
+SPRAY_USERS=(testuser01 merchant01 stepup-demo ghost01 ghost02 ghost03 ghost04 operator01)
+SPRAY_PASS="${SPRAY_PASS:-Winter2026!}"
+log "Brute force Keycloak — MODE=$MODE ATTEMPTS=$ATTEMPTS PACE=${PACE:-burst}"
 
 fail_count=0
 declare -a _tls_opts; mapfile -t _tls_opts < <(crapi_curl_tls_opts)
 for i in $(seq 1 "$ATTEMPTS"); do
+  [[ $i -gt 1 ]] && crapi_pace_sleep "$i" "$ATTEMPTS"
+  if [[ "$MODE" == "spray" ]]; then
+    user="${SPRAY_USERS[$(( (i - 1) % ${#SPRAY_USERS[@]} ))]}"; pass="$SPRAY_PASS"
+  else
+    user="testuser01"; pass="wrong-pass-$i"
+  fi
   jar="$(mktemp)"
   page="$(curl -s -A "$UA" "${_tls_opts[@]}" -c "$jar" -b "$jar" -L "$BFF_URL/auth/start")"
   action="$(printf '%s' "$page" | grep -oE 'action="[^"]+"' | head -1 | sed -E 's/^action="//;s/"$//;s/&amp;/\&/g')"
   code="$(curl -s -A "$UA" "${_tls_opts[@]}" -c "$jar" -b "$jar" -L -o /dev/null -w '%{http_code}' \
-    --data-urlencode "username=testuser01" --data-urlencode "password=wrong-pass-$i" "$action")"
+    --data-urlencode "username=$user" --data-urlencode "password=$pass" "$action")"
   # login sai → Keycloak render lại trang login (200) hoặc 401; KHÔNG có
   # /auth/callback?code=. Coi là "fail" nếu không đăng nhập được.
   [[ "$code" != "302" ]] && fail_count=$((fail_count + 1))

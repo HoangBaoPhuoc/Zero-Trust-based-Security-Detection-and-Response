@@ -12,6 +12,22 @@
 # placement allocation candidates).
 set -euo pipefail
 log()  { echo "[aio-preflight] $*"; }
+
+# Giai đoạn B §1.5 — SỬA TẬN GỐC đồng hồ, không chỉ phản ứng triệu chứng.
+# Gốc sự cố 2026-10-04: RTC ghi theo GIỜ ĐỊA PHƯƠNG (dual-boot Windows) nhưng
+# Linux đọc RTC là UTC → lệch +7h lúc boot → chrony bước lùi 25 199 s → Kolla
+# kẹt. Logic khởi động lại container bên dưới chỉ CHỮA triệu chứng mỗi lần.
+# `set-local-rtc 0` buộc Linux coi RTC là UTC vĩnh viễn → không còn lệch lúc
+# boot. Idempotent (chạy lại vô hại); cần quyền (sudo), không fatal nếu thiếu.
+if command -v timedatectl >/dev/null 2>&1; then
+  if [[ "$(timedatectl show -p LocalRTC --value 2>/dev/null || echo no)" == "yes" ]]; then
+    log "RTC đang ở giờ địa phương — đặt lại UTC (set-local-rtc 0) để chặn gốc lệch giờ lúc boot"
+    sudo timedatectl set-local-rtc 0 --adjust-system-clock 2>/dev/null \
+      || log "CẢNH BÁO: không set được local-rtc (thiếu quyền?) — chạy tay: sudo timedatectl set-local-rtc 0 --adjust-system-clock"
+  else
+    log "RTC đã ở UTC (LocalRTC=no) — ok"
+  fi
+fi
 # CLI: dùng bản trong kolla-venv (7.x, có `server create --no-network`). Bản snap 5.8 không tạo được VM
 # không NIC ("nics must be a list or a tuple" — gặp thật ở lần dựng 2026-10-04) và không nhận microversion.
 OSC="$HOME/kolla-venv/bin/openstack"; [[ -x "$OSC" ]] || OSC=""
