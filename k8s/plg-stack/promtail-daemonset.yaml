@@ -119,6 +119,12 @@ data:
                 path: path
                 response_code: response_code
                 response_time: response_time
+                # Giai đoạn B §1.3 (H6): upstream_service_time trích vào extracted
+                # map (truy vấn `| json upstream_service_time`). CỐ Ý KHÔNG đưa
+                # vào `labels:` dưới đây — giá trị ms liên tục, cardinality cao,
+                # promote thành nhãn sẽ làm Loki sụp. Nằm trong body JSON như
+                # các field đo lường khác (response_time/bytes_sent).
+                upstream_service_time: upstream_service_time
                 upstream: upstream
                 source_ip: source_ip
                 bytes_sent: bytes_sent

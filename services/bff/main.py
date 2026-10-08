@@ -28,6 +28,7 @@ crAPI GIỮ ẢNH GỐC, KHÔNG sửa source.
 from __future__ import annotations
 
 import base64
+import contextvars
 import hashlib
 import json
 import logging
@@ -276,6 +277,34 @@ def _session_sid(request: Request) -> str | None:
     return env.get("sid") if env else None
 
 
+# ── Giai đoạn B §1.4: khoá ghép phiên trong log ─────────────────────────────
+# Đặc trưng theo phiên (độ dài phiên, số hành động) cần ghép các dòng log của
+# CÙNG một phiên. Trước đây _audit() KHÔNG in sid → không ghép được, và cũng
+# không có khoá ghép sang dòng envoy-access tương ứng. Nay:
+#   - sid        : định danh PHIÊN ổn định (gom nhiều request của 1 phiên)
+#   - request_id : X-Request-Id do Envoy sinh ở ingress → GHÉP 1-1 với
+#                  envoy-access.trace_id (cùng field %REQ(X-REQUEST-ID)%)
+# Cả hai nằm trong BODY dòng log (rec), KHÔNG phải nhãn stream Loki — nhãn
+# cardinality cao làm Loki sụp (cảnh báo §1.4). Dùng ContextVar để mọi lời gọi
+# _audit trong một request tự có khoá, không phải sửa ~10 call site.
+_ctx_sid: contextvars.ContextVar[str | None] = contextvars.ContextVar("bff_sid", default=None)
+_ctx_request_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("bff_request_id", default=None)
+
+
+@app.middleware("http")
+async def _session_correlation_mw(request: Request, call_next):
+    # _load chỉ verify chữ ký cookie (không chạm store) nên rẻ, an toàn cho /health.
+    sid = _session_sid(request)
+    rid = request.headers.get("x-request-id") or None
+    t_sid = _ctx_sid.set(sid)
+    t_rid = _ctx_request_id.set(rid)
+    try:
+        return await call_next(request)
+    finally:
+        _ctx_sid.reset(t_sid)
+        _ctx_request_id.reset(t_rid)
+
+
 # Vòng 2026-09-29 — phát hiện khi chạy tải nền 10 phút: access token Keycloak sống
 # 300 s nhưng BFF chưa từng làm mới nó (refresh_token được lưu mà không dùng). Sau
 # 5 phút, MỌI request của phiên tới workshop/community mang X-Access-Token đã hết
@@ -404,7 +433,10 @@ def _evaluate_device_cert(request: Request) -> dict:
 
 
 async def _audit(event: str, **kw: Any) -> None:
-    rec = {"event": event, "service": SERVICE, "cloud": CLOUD, "ts": time.time(), **kw}
+    # §1.4: sid + request_id (khoá ghép phiên) vào BODY mọi dòng audit. Lấy từ
+    # ContextVar của request hiện tại; call site có thể override bằng kw.
+    rec = {"event": event, "service": SERVICE, "cloud": CLOUD, "ts": time.time(),
+           "sid": _ctx_sid.get(), "request_id": _ctx_request_id.get(), **kw}
     logger.info(json.dumps(rec))
     if not LOKI_URL:
         return

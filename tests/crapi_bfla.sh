@@ -26,8 +26,18 @@ declare -a TRIES=(
   "DELETE /identity/api/v2/admin/videos/1"
   "PUT /workshop/api/management/shop/orders/1"
 )
-denied=0
+# §B1: PACE + INTERLEAVE. Holdout bfla_slowdrip_interleaved = rải chậm, XEN giữa
+# hành động hợp lệ (đọc) để lẫn vào phiên bình thường. Train = burst thuần.
+INTERLEAVE="${VP_INTERLEAVE_WITH_VALID:-false}"
+READS_OK=(/identity/api/v2/user/dashboard /workshop/api/shop/products /community/api/v2/community/posts/recent)
+log "PACE=${PACE:-burst} INTERLEAVE=$INTERLEAVE"
+denied=0; _i=0; _n=${#TRIES[@]}
 for t in "${TRIES[@]}"; do
+  _i=$((_i + 1))
+  [[ $_i -gt 1 ]] && crapi_pace_sleep "$_i" "$_n"
+  if [[ "$INTERLEAVE" == "true" || "$INTERLEAVE" == "True" ]]; then
+    crapi_call "$J" GET "${READS_OK[RANDOM % ${#READS_OK[@]}]}" >/dev/null   # đọc hợp lệ xen vào
+  fi
   m="${t% *}"; p="${t#* }"
   code="$(crapi_call "$J" "$m" "$p" '{"x":1}')"
   log "  $m $p → HTTP $code"

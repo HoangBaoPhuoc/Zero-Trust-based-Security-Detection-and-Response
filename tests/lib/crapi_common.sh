@@ -90,6 +90,29 @@ crapi_login() {
   printf '%s' "$jar"
 }
 
+# ── Giai đoạn B §B1: THỰC THI nhịp độ (không chỉ ghi nhãn) ───────────────────
+# Orchestrator crapi_campaign_phaseb.sh đặt (từ policy/variant-split.yaml):
+#   PACE=burst|slow_drip ; DURATION_MIN = tổng phút rải cho slow_drip (mặc 30).
+# crapi_pace_sleep <index> <total_N>: nghỉ TRƯỚC request kế.
+#   burst     → 0–0.3s  (khoảng cách giữa request < 1s)
+#   slow_drip → ~ DURATION_MIN*60/N mỗi request, jitter ±50% → tổng ≈ DURATION_MIN
+#               phút, khoảng cách hàng chục giây tới vài phút CÓ phương sai (không
+#               đều tăm tắp). Tối thiểu 1s để chắc chắn khác burst.
+# Đây là phần THỰC THI mà nghiệm thu §B1 đo lại từ timestamp Loki (hai phân phối
+# khoảng cách phải khác nhau rõ rệt) — nếu chỉ ghi nhãn, biến thể giữ riêng
+# KHÔNG tồn tại thật (cùng hình dạng H18).
+crapi_pace_sleep() {
+  local idx="${1:-0}" n="${2:-10}"
+  case "${PACE:-burst}" in
+    slow_drip)
+      sleep "$(python3 -c "import random
+dur=float(${DURATION_MIN:-30})*60.0; n=max(1,int(${n})); base=dur/n
+print(round(max(1.0, random.uniform(0.5*base, 1.5*base)),2))")" ;;
+    *)
+      sleep "$(python3 -c "import random;print(round(random.uniform(0.0,0.3),2))")" ;;
+  esac
+}
+
 # crapi_call <jar> <method> <path> [<data>] → in mã HTTP
 crapi_call() {
   local jar="$1" method="$2" path="$3" data="${4:-}"
