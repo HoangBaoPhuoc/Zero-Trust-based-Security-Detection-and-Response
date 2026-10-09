@@ -1,0 +1,120 @@
+# policy/variant-split.yaml — NGUỒN SỰ THẬT cho việc tách nhóm biến thể tấn công.
+#
+# Giai đoạn B §0.2 (ĐÃ CHỐT — KHÔNG SỬA). Trục chính tách train/holdout là
+# NHỊP ĐỘ: burst → nhóm train; slow-drip → nhóm giữ riêng (test-only).
+#
+# Cả hai nhóm SINH TRONG CÙNG MỘT ĐỢT THU — tách tập chỉ xảy ra khi chia
+# train/test ở Giai đoạn C. Bộ chạy chiến dịch (tests/crapi_run_campaign.sh)
+# ĐỌC file này, KHÔNG hardcode biến thể. `variant_group` của mỗi lượt được ghi
+# thẳng vào runs.jsonl để Giai đoạn C biết lượt nào thuộc holdout.
+#
+# Quy ước:
+#   families[].train    : danh sách biến thể đưa vào nhóm TRAIN
+#   families[].holdout  : danh sách biến thể GIỮ RIÊNG (chỉ xuất hiện ở test)
+#   mỗi biến thể: {id, pace, params{...}, note}
+#   pace ∈ {burst, slow_drip}  — khớp quy ước script scenario (SPREAD/PACE).
+#
+# id là định danh ổn định; crapi_run_campaign.sh map id → script scenario +
+# tham số. Thêm/bớt biến thể = sửa file này, không sửa script.
+
+version: 2                   # §B1b: tách trục — mỗi họ CHỈ một trục phân nhóm,
+                             # các trục còn lại biến thiên trong CẢ HAI nhóm.
+frozen: true                 # tránh chỉnh tay giữa chừng đợt thu
+# Trục phân nhóm mỗi họ (một trục khác biệt có hệ thống train↔holdout):
+#   pace (burst→train, slow_drip→holdout): bola, bfla, brute_force,
+#        access_denied_spike, large_response
+#   source (crapi-community→train, crapi-web→holdout): lateral_movement
+# Các trục khác (bề rộng/victims, mode dense|spray, interleave, responses) CỐ Ý
+# biến thiên trong cả train lẫn holdout để KHÔNG confound với trục phân nhóm —
+# nhờ vậy "≥70% recall trên biến thể giữ riêng" quy được về đúng MỘT nguyên nhân.
+split_axis: per_family       # xem bảng trên; không còn một trục chung duy nhất
+
+families:
+  # §B1b: BỀ RỘNG (số nạn nhân) KHÔNG còn là trục phân nhóm — nó biến thiên
+  # TRONG CẢ HAI nhóm (thấp 2–3 và cao 8–10). NHỊP ĐỘ là trục phân nhóm DUY NHẤT
+  # (burst=train, slow_drip=holdout). Lý do: bề rộng và nhịp độ tác động NGƯỢC
+  # CHIỀU về độ khó (slow-drip khó hơn, nhiều nạn nhân dễ hơn) — trộn hai trục
+  # làm con số "≥70% recall trên biến thể giữ riêng" không giải thích được.
+  # Nạn nhân rút từ POOL (crapi_bola.sh VICTIM_POOL) + ghi vào runs.jsonl.
+  - name: bola
+    scenario: crapi_bola.sh
+    train:
+      - { id: bola_burst_lo, pace: burst, params: { victims: 2 }, note: "burst, bề rộng thấp" }
+      - { id: bola_burst_lo3, pace: burst, params: { victims: 3 }, note: "burst, bề rộng thấp" }
+      - { id: bola_burst_hi8, pace: burst, params: { victims: 8 }, note: "burst, bề rộng cao" }
+      - { id: bola_burst_hi, pace: burst, params: { victims: 10 }, note: "burst, bề rộng cao" }
+    holdout:
+      - { id: bola_slowdrip_lo, pace: slow_drip, params: { victims: 2, duration_min: 30 }, note: "slow-drip, bề rộng thấp" }
+      - { id: bola_slowdrip_lo3, pace: slow_drip, params: { victims: 3, duration_min: 30 }, note: "slow-drip, bề rộng thấp" }
+      - { id: bola_slowdrip_hi8, pace: slow_drip, params: { victims: 8, duration_min: 30 }, note: "slow-drip, bề rộng cao" }
+      - { id: bola_slowdrip_hi, pace: slow_drip, params: { victims: 10, duration_min: 30 }, note: "slow-drip, bề rộng cao" }
+
+  # §B1b: NHỊP ĐỘ là trục. interleave (xen hành động hợp lệ) biến thiên TRONG
+  # CẢ HAI nhóm (trước chỉ holdout mới interleave → confound với nhịp độ).
+  - name: bfla
+    scenario: crapi_bfla.sh
+    train:
+      - { id: bfla_burst_plain, pace: burst, params: { interleave_with_valid: false }, note: "burst, không xen" }
+      - { id: bfla_burst_inter, pace: burst, params: { interleave_with_valid: true }, note: "burst, xen đọc hợp lệ" }
+    holdout:
+      - { id: bfla_slow_plain, pace: slow_drip, params: { interleave_with_valid: false, duration_min: 30 }, note: "slow-drip, không xen" }
+      - { id: bfla_slow_inter, pace: slow_drip, params: { interleave_with_valid: true, duration_min: 30 }, note: "slow-drip, xen trong phiên hợp lệ" }
+
+  - name: lateral_movement
+    scenario: crapi_lateral_movement.sh
+    train:
+      - id: lateral_community
+        pace: burst
+        params: { source_principal: "crapi-community" }
+        note: "nguồn crapi-community"
+    holdout:
+      - id: lateral_web
+        pace: burst
+        params: { source_principal: "crapi-web" }
+        note: "nguồn crapi-web (khác train về NGUỒN, không phải nhịp độ)"
+
+  # §B1b: NHỊP ĐỘ là trục. mode (dense 1 user / spray nhiều user) biến thiên
+  # TRONG CẢ HAI nhóm (không confound với nhịp độ như trước).
+  - name: brute_force
+    scenario: crapi_brute_force.sh
+    train:
+      - { id: brute_burst_dense, pace: burst, params: { mode: dense }, note: "burst, 1 username" }
+      - { id: brute_burst_spray, pace: burst, params: { mode: spray }, note: "burst, nhiều username" }
+    holdout:
+      - { id: brute_slow_dense, pace: slow_drip, params: { mode: dense, duration_min: 30 }, note: "slow-drip, 1 username" }
+      - { id: brute_slow_spray, pace: slow_drip, params: { mode: spray, duration_min: 30 }, note: "slow-drip spray (password spraying kinh điển)" }
+
+  - name: access_denied_spike
+    scenario: crapi_access_denied.sh
+    train:
+      - id: denied_burst
+        pace: burst
+        params: {}
+        note: "burst"
+    holdout:
+      - id: denied_slowdrip
+        pace: slow_drip
+        params: {}
+        note: "slow-drip"
+
+  - name: privilege_escalation
+    scenario: crapi_privilege_escalation.sh
+    train:
+      - id: privesc_default
+        pace: burst
+        params: {}
+        note: "chỉ 1 biến thể, nằm trong train"
+    holdout: []            # cố ý rỗng — privesc chỉ có 1 biến thể
+
+  # §B1b: NHỊP ĐỘ là trục. Cả hai nhóm = exfil CỘNG DỒN (nhiều response nhỏ) để
+  # hình dạng response KHÔNG confound với nhịp độ. ("1 response lớn" là đường
+  # phát hiện bằng LUẬT ngưỡng-đơn, không phải bài toán holdout của ML — tách
+  # riêng, không nằm trong split này.) responses (12 vs 20) biến thiên trong cả hai.
+  - name: large_response
+    scenario: crapi_large_response.sh
+    train:
+      - { id: exfil_burst_12, pace: burst, params: { accumulate: true, responses: 12, min_bytes: 1048576 }, note: "burst, 12 response nhỏ cộng dồn" }
+      - { id: exfil_burst_20, pace: burst, params: { accumulate: true, responses: 20, min_bytes: 1048576 }, note: "burst, 20 response nhỏ cộng dồn" }
+    holdout:
+      - { id: exfil_slow_12, pace: slow_drip, params: { accumulate: true, responses: 12, min_bytes: 1048576, duration_min: 30 }, note: "slow-drip, 12 response nhỏ cộng dồn" }
+      - { id: exfil_slow_20, pace: slow_drip, params: { accumulate: true, responses: 20, min_bytes: 1048576, duration_min: 30 }, note: "slow-drip, 20 response nhỏ cộng dồn" }

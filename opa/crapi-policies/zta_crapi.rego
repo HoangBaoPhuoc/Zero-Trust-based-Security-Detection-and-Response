@@ -39,41 +39,35 @@ bearer_token := t if {
   t := substring(raw, 7, -1)
 }
 
-# A1: Keycloak moved to OpenStack — OPA (AWS) reaches it via the cross-cloud
-# selectorless Service keycloak-openstack:30091 (→ os-k3s-master NodePort → WG).
-# Only the AWS PDP (zta/crapi/authz/allow) evaluates this; the OpenStack PDP
-# (crosscloud) never does, so the name not resolving there is harmless.
-jwks_response := http.send({
-  "method": "GET",
-  "url": "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/protocol/openid-connect/certs",
-  "force_cache": true,
-  "force_cache_duration_seconds": 300,
-  "raise_error": false,
-})
-
-discovery_response := http.send({
-  "method": "GET",
-  "url": "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/.well-known/openid-configuration",
-  "force_cache": true,
-  "force_cache_duration_seconds": 300,
-  "raise_error": false,
-})
-
+# Giai đoạn B §1.1: JWKS/discovery nay đọc TỪ DATA DOCUMENT CỤC BỘ, KHÔNG còn
+# http.send trên đường quyết định. Lý do: http.send(force_cache 300s) cross-cloud
+# làm OPA nạp lại JWKS/discovery qua WAN mỗi 300s → đỉnh p99 100–410ms, một thành
+# phần tuần hoàn chu kỳ 300s trong toàn bộ telemetry (nhiễu hệ thống, không liên
+# quan tấn công). CronJob k8s/crapi/opa-jwks-cronjob.yaml fetch JWKS + OIDC
+# discovery mỗi 5 phút và ghi ConfigMap `opa-jwks-data` (key data.json) →
+# mount /policies-data → OPA nạp thành data.zta.crapi.kc (OPA chạy với --watch
+# nên đọc tươi khi CronJob ghi đè). Chỉ AWS PDP cần cái này; OpenStack crosscloud
+# không verify token nên volume để optional (opa.yaml dùng chung 2 cluster).
+#
+# HẠN CHẾ (ghi vào HAN-CHE-VA-HUONG-PHAT-TRIEN.md): nếu Keycloak xoay khoá ký
+# giữa hai lần CronJob (≤5 phút), token ký bằng khoá mới bị từ chối tới khi
+# đồng bộ. Chấp nhận được trong lab (Keycloak không tự xoay khoá theo lịch).
+# Data document mout ngoài package này (data.kc_oidc.*, do opa-jwks-cronjob.yaml
+# ghi). KHÔNG dùng data.zta.crapi.* vì package này LÀ zta.crapi.authz — tham
+# chiếu data.zta.crapi kéo cả package vào → OPA báo rego_recursion_error.
 default expected_issuer := "http://keycloak.ztlab.local:8180/realms/ztlab"
 
-expected_issuer := discovery_response.body.issuer if {
-  not discovery_response.error
-  discovery_response.status_code == 200
-  discovery_response.body.issuer
+expected_issuer := iss if {
+  iss := data.kc_oidc.issuer
+  iss != ""
 }
 
 jwt_verify_result := io.jwt.decode_verify(bearer_token, {
-  "cert": jwks_response.raw_body,
+  "cert": data.kc_oidc.jwks_raw,
   "iss": expected_issuer,
   "aud": "crapi-bff",
 }) if {
-  not jwks_response.error
-  jwks_response.status_code == 200
+  data.kc_oidc.jwks_raw != ""
 }
 
 jwt_signature_valid if { jwt_verify_result[0] == true }

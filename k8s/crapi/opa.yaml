@@ -70,13 +70,20 @@ spec:
             - "--addr=0.0.0.0:8181"
             - "--config-file=/etc/opa/opa-config.yaml"
             - "--ignore=.*"
+            # Giai đoạn B §1.1: --watch để OPA đọc tươi khi CronJob
+            # opa-jwks-cronjob.yaml ghi đè ConfigMap opa-jwks-data (JWKS/issuer
+            # Keycloak) mount ở /policies-data → data.zta.crapi.kc. Thay cho
+            # http.send cross-cloud mỗi 300s (nhiễu p99 lưỡng đỉnh).
+            - "--watch"
             - "/policies"
+            - "/policies-data"
           ports:
             - { name: http, containerPort: 8181 }
             - { name: grpc-authz, containerPort: 9191 }
           volumeMounts:
             - { name: opa-config, mountPath: /etc/opa, readOnly: true }
             - { name: opa-policies, mountPath: /policies, readOnly: true }
+            - { name: opa-jwks-data, mountPath: /policies-data, readOnly: true }
           livenessProbe:
             httpGet: { path: /health, port: http }
             initialDelaySeconds: 10
@@ -93,6 +100,11 @@ spec:
           configMap: { name: opa-config }
         - name: opa-policies
           configMap: { name: opa-policies-crapi }
+        # Giai đoạn B §1.1: dữ liệu JWKS/issuer do opa-jwks-cronjob.yaml ghi.
+        # optional:true — OpenStack không có CM này (crosscloud không verify
+        # token) nên OPA ở đó vẫn boot; AWS luôn có (deploy-crapi.sh seed trước).
+        - name: opa-jwks-data
+          configMap: { name: opa-jwks-data, optional: true }
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
