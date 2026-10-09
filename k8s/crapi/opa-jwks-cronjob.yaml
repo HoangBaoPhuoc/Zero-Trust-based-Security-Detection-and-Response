@@ -1,0 +1,126 @@
+# Giai đoạn B §1.1 — JWKS/OIDC-discovery cục bộ cho OPA (AWS PDP).
+#
+# VÌ SAO: zta_crapi.rego trước đây gọi http.send(force_cache 300s) cross-cloud
+# tới Keycloak mỗi 300s NGAY TRÊN ĐƯỜNG QUYẾT ĐỊNH → đỉnh p99 100–410ms theo
+# chu kỳ 300s. Trong 150 giờ telemetry đó là một thành phần tuần hoàn không liên
+# quan tấn công; nếu đặc trưng có yếu tố độ trễ thì đây là nhiễu hệ thống không
+# gỡ được sau khi đã thu. CronJob này tách việc fetch RA KHỎI đường quyết định:
+# fetch mỗi 5 phút (async), ghi ConfigMap opa-jwks-data (key data.json) →
+# opa.yaml mount /policies-data → OPA (--watch) nạp thành data.zta.crapi.kc.
+#
+# CHỈ CHẠY TRÊN AWS: chỉ zta/crapi/authz/allow (AWS) verify token người dùng;
+# OpenStack crosscloud không dùng JWKS (crosscloud_crapi.rego). deploy-crapi.sh
+# apply file này chỉ với kaws.
+#
+# Egress đã mở sẵn cho mọi pod ns crapi (aws-allow-list.yaml): ipBlock
+# 192.168.101.0/24:30091 (keycloak-openstack selectorless → NodePort → WG),
+# kube-system:53 (DNS), API server (đã chứng minh qua posture-agent dùng kubectl).
+# Không bật sidecar (như posture-agent): job ngắn, fetch JWKS là endpoint OIDC
+# công khai qua L4, tránh race sidecar-readiness.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opa-jwks-fetcher
+  namespace: crapi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opa-jwks-fetcher
+  namespace: crapi
+rules:
+  # Ghi ConfigMap opa-jwks-data. resourceNames giới hạn đúng 1 CM — fetcher
+  # không sờ được opa-policies-crapi/opa-config (mặt phẳng chính sách thật).
+  # create cần ở cấp resource (không gắn được resourceNames) nên tách rule.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["opa-jwks-data"]
+    verbs: ["get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opa-jwks-fetcher
+  namespace: crapi
+subjects:
+  - kind: ServiceAccount
+    name: opa-jwks-fetcher
+    namespace: crapi
+roleRef:
+  kind: Role
+  name: opa-jwks-fetcher
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: opa-jwks-fetcher
+  namespace: crapi
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 60
+      template:
+        metadata:
+          annotations:
+            sidecar.istio.io/inject: "false"  # job ngắn, fetch OIDC công khai qua L4
+        spec:
+          serviceAccountName: opa-jwks-fetcher
+          restartPolicy: Never
+          containers:
+            - name: fetcher
+              image: alpine/k8s:1.31.13
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                allowPrivilegeEscalation: false
+              env:
+                # keycloak-openstack selectorless Service (= endpoint OPA đang dùng).
+                - name: KC_CERTS_URL
+                  value: "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/protocol/openid-connect/certs"
+                - name: KC_DISCOVERY_URL
+                  value: "http://keycloak-openstack.crapi.svc.cluster.local:30091/realms/ztlab/.well-known/openid-configuration"
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -uo pipefail
+
+                  # Fetch JWKS + discovery. KHÔNG ghi đè ConfigMap nếu fetch lỗi
+                  # — giữ data cũ để OPA tiếp tục verify (fail-safe, không để một
+                  # lần Keycloak chập chờn làm rớt toàn bộ token hợp lệ).
+                  JWKS_RAW="$(curl -sf -m 10 "$KC_CERTS_URL")"
+                  if [ -z "$JWKS_RAW" ] || ! echo "$JWKS_RAW" | jq -e '.keys | length > 0' >/dev/null 2>&1; then
+                    echo "[opa-jwks-fetcher] JWKS fetch failed/empty — giữ ConfigMap cũ, thoát"
+                    exit 1
+                  fi
+
+                  ISSUER="$(curl -sf -m 10 "$KC_DISCOVERY_URL" | jq -r '.issuer // empty')"
+                  [ -z "$ISSUER" ] && ISSUER="http://keycloak.ztlab.local:8180/realms/ztlab"
+
+                  # data.json → data.kc_oidc.{jwks_raw,issuer,fetched_at}.
+                  # Namespace TÁCH khỏi zta.crapi.* (package OPA) để không gây
+                  # rego_recursion_error. jwks_raw là CHUỖI JWKS thô
+                  # (io.jwt.decode_verify `cert` cần string), không phải object.
+                  DATA_JSON="$(jq -n \
+                    --arg jwks "$JWKS_RAW" \
+                    --arg iss "$ISSUER" \
+                    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                    '{kc_oidc:{jwks_raw:$jwks,issuer:$iss,fetched_at:$ts}}')"
+
+                  TMP="$(mktemp -d)"
+                  printf '%s' "$DATA_JSON" > "$TMP/data.json"
+
+                  kubectl -n crapi create configmap opa-jwks-data \
+                    --from-file=data.json="$TMP/data.json" \
+                    --dry-run=client -o yaml | kubectl -n crapi apply -f -
+
+                  echo "[opa-jwks-fetcher] cập nhật opa-jwks-data: issuer=${ISSUER} keys=$(echo "$JWKS_RAW" | jq '.keys | length')"

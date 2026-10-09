@@ -28,6 +28,11 @@ stringData:
   # stepup-demo bị chính crapi-workshop trả 401 (token bff-minted không resolve
   # được user) dù Zero-Trust (OPA) đã cho qua — step-up không demo trọn được.
   users: "testuser01,testuser02,merchant01,analyst01,demoadmin,stepup-demo"
+  # §B1b: POOL NẠN NHÂN BOLA — ≥15 user CÓ XE để crapi_bola.sh luân phiên nạn
+  # nhân (variant-split VICTIMS tới 10). Mật khẩu = VICTIM_PASSWORD (Test1234!
+  # khớp Keycloak để N1 đăng nhập các user này cho vehicleid lộ qua community).
+  victim_users: "victim01,victim02,victim03,victim04,victim05,victim06,victim07,victim08,victim09,victim10,victim11,victim12,victim13,victim14,victim15"
+  victim_password: "Test1234!"
 ---
 apiVersion: batch/v1
 kind: Job
@@ -56,44 +61,99 @@ spec:
               valueFrom: { secretKeyRef: { name: crapi-seed, key: password } }
             - name: SEED_USERS
               valueFrom: { secretKeyRef: { name: crapi-seed, key: users } }
+            - name: VICTIM_USERS
+              valueFrom: { secretKeyRef: { name: crapi-seed, key: victim_users } }
+            - name: VICTIM_PASSWORD
+              valueFrom: { secretKeyRef: { name: crapi-seed, key: victim_password } }
           command: ["python3", "-c"]
           args:
             - |
-              import urllib.request, json, os, time
+              import urllib.request, urllib.error, urllib.parse, json, os, time, re
               I = "http://crapi-identity.crapi.svc.cluster.local:8080"
-              def post(p, body):
-                  r = urllib.request.Request(I+p, data=json.dumps(body).encode(),
-                      headers={"Content-Type":"application/json"}, method="POST")
+              MAILHOG = "http://mailhog.crapi.svc.cluster.local:8025"  # §B1b: 8025 đã mở trong os-allow-list
+              def req(method, p, body=None, token=None, base=I, timeout=25):
+                  h = {"Content-Type": "application/json"}
+                  if token: h["Authorization"] = "Bearer " + token
+                  data = json.dumps(body).encode() if body is not None else None
+                  r = urllib.request.Request(base + p, data=data, headers=h, method=method)
                   try:
-                      return urllib.request.urlopen(r, timeout=25).status
+                      resp = urllib.request.urlopen(r, timeout=timeout)
+                      raw = resp.read().decode("utf-8", "replace")
+                      try: return resp.status, json.loads(raw)
+                      except Exception: return resp.status, raw
                   except urllib.error.HTTPError as e:
-                      # Kèm thân phản hồi: chạy lại trên DB đã có user thì
-                      # identity trả 403 (đã đăng ký) — phải phân biệt được với
-                      # 403 do chặn (OPA/mesh), chỉ mã trạng thái thì không đủ.
-                      try:
-                          body = e.read().decode("utf-8", "replace")[:100].replace("\n", " ")
-                      except Exception:
-                          body = ""
-                      return f"{e.code} {body}".strip()
+                      try: raw = e.read().decode("utf-8", "replace")
+                      except Exception: raw = ""
+                      try: return e.code, json.loads(raw)
+                      except Exception: return e.code, raw[:200].replace("\n", " ")
+                  except Exception as e:
+                      return None, str(e)[:120]
+              def _st(t):
+                  s, b = t
+                  return f"{s} {b if isinstance(b,str) else ''}".strip()
+
               ok = False
               for _ in range(60):
                   try:
                       if urllib.request.urlopen(I+"/identity/health_check", timeout=5).status == 200:
                           ok = True; break
-                  except Exception:
-                      pass
+                  except Exception: pass
                   time.sleep(5)
               print("identity ready:", ok)
-              print("reset-test-users:", post("/identity/api/auth/reset-test-users", {}))
+              print("reset-test-users:", _st(req("POST", "/identity/api/auth/reset-test-users", {})))
+
+              def signup(u, email, pw, i):
+                  return _st(req("POST", "/identity/api/auth/signup",
+                      {"name": u.title(), "email": email, "number": f"9{i:09d}", "password": pw}))
+
+              # ── §B1b: claim XE qua luồng crAPI-native (email VIN+pincode → mailhog → add_vehicle)
+              def mailhog_vin_pin(email):
+                  # tìm email mới nhất gửi tới <email>, rút VIN + pincode từ thân.
+                  s, body = req("GET", "/api/v2/search?kind=to&query=" + urllib.parse.quote(email),
+                                base=MAILHOG, timeout=20)
+                  items = (body or {}).get("items", []) if isinstance(body, dict) else []
+                  for it in items:
+                      txt = ((it.get("Content") or {}).get("Body") or "")
+                      txt = txt.replace("=\r\n", "").replace("\r\n", "\n")  # mở quoted-printable nhẹ
+                      vin = re.search(r'VIN[\s:#-]*([A-HJ-NPR-Z0-9]{10,20})', txt, re.I)
+                      pin = re.search(r'[Pp]in\s*[Cc]ode[\s:#-]*([0-9]{3,8})', txt)
+                      if vin and pin:
+                          return vin.group(1), pin.group(1)
+                  return None, None
+              def claim_vehicle(email, pw):
+                  s, tok = req("POST", "/identity/api/auth/login", {"email": email, "password": pw})
+                  token = tok.get("token") if isinstance(tok, dict) else None
+                  if not token:
+                      return f"login fail ({s})"
+                  s, vs = req("GET", "/identity/api/v2/vehicle/vehicles", token=token)
+                  if isinstance(vs, list) and vs: return "đã có xe"
+                  if isinstance(vs, dict) and vs.get("vehicles"): return "đã có xe"
+                  req("POST", "/identity/api/v2/vehicle/resend_email", {}, token=token)  # kích hoạt email
+                  for _ in range(12):
+                      vin, pin = mailhog_vin_pin(email)
+                      if vin and pin: break
+                      time.sleep(5)
+                  if not (vin and pin): return "KHÔNG lấy được VIN/pincode từ mailhog"
+                  s, r = req("POST", "/identity/api/v2/vehicle/add_vehicle", {"vin": vin, "pincode": pin}, token=token)
+                  return f"add_vehicle {s} (vin={vin[:6]}…)"
+
               pw = os.environ["SEED_PASSWORD"]
               for i, u in enumerate(os.environ["SEED_USERS"].split(",")):
                   u = u.strip()
-                  if not u:
-                      continue
-                  st = post("/identity/api/auth/signup",
-                      {"name": u.title(), "email": f"{u}@ztlab.local",
-                       "number": f"9{i:09d}", "password": pw})
-                  print(f"signup {u}: {st}")
+                  if not u: continue
+                  print(f"signup {u}:", signup(u, f"{u}@ztlab.local", pw, i))
+
+              # §B1b: pool nạn nhân — signup bằng VICTIM_PASSWORD (khớp Keycloak) + claim xe.
+              vpw = os.environ.get("VICTIM_PASSWORD", "Test1234!")
+              claimed = 0
+              vlist = [v.strip() for v in os.environ.get("VICTIM_USERS", "").split(",") if v.strip()]
+              for j, u in enumerate(vlist):
+                  email = f"{u}@ztlab.local"
+                  print(f"signup {u}:", signup(u, email, vpw, 100 + j))
+                  res = claim_vehicle(email, vpw)
+                  if "add_vehicle 2" in res or "đã có xe" in res: claimed += 1
+                  print(f"  claim {u}: {res}")
+              print(f"§B1b victims: {claimed}/{len(vlist)} có xe")
               print("seed done")
               try:
                   urllib.request.urlopen(urllib.request.Request(

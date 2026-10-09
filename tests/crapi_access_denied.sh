@@ -21,6 +21,10 @@ source "$HERE/lib/crapi_common.sh"
 crapi_preflight
 
 denied=0 total=0
+# §B1: PACE thực thi trên chuỗi request sinh deny (burst vs slow_drip). N xấp xỉ
+# tổng số request của khúc này để slow_drip rải đúng DURATION_MIN.
+PACE_N=14
+log "PACE=${PACE:-burst}"
 
 WEB_POD="$(crapi_pod crapi-web)"
 if [[ -n "$WEB_POD" ]]; then
@@ -28,6 +32,7 @@ if [[ -n "$WEB_POD" ]]; then
   for path in /workshop/api/shop/products /community/api/v2/community/home /workshop/api/shop/orders; do
     for i in 1 2 3; do
       total=$((total + 1))
+      [[ $total -gt 1 ]] && crapi_pace_sleep "$total" "$PACE_N"
       code="$(kubectl --context "$KUBE_AWS" -n "$NS" exec "$WEB_POD" -c crapi-web -- \
         sh -c "wget -q -O /dev/null -T6 -S http://crapi-workshop.crapi.svc.cluster.local:8000${path} 2>&1 \
           | grep -oE 'HTTP/[0-9.]+ [0-9]{3}' | tail -1 | grep -oE '[0-9]{3}\$'" 2>/dev/null || echo 000)"
@@ -46,6 +51,7 @@ CRAPI_CLIENT_KEY="$CA_DIR/issued/test-noncompliant/device.key"
 Jb="$(crapi_login testuser01 'Test1234!')"
 for i in 1 2 3 4 5; do
   total=$((total + 1))
+  [[ $total -gt 1 ]] && crapi_pace_sleep "$total" "$PACE_N"
   code="$(crapi_call "$Jb" POST /workshop/api/shop/orders '{"product_id":1,"quantity":1}')"
   log "   POST orders (posture=non-compliant) attempt $i → $code"
   [[ "$code" == "403" ]] && denied=$((denied + 1))

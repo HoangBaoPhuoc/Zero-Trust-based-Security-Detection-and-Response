@@ -18,14 +18,21 @@ SCENARIO="crapi_lateral_movement"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib/crapi_common.sh"
 
-ATTACKER_POD="$(crapi_pod crapi-community)"
-[[ -n "$ATTACKER_POD" ]] || fail "không tìm được pod crapi-community"
-log "Attacker: $ATTACKER_POD (SVID spiffe://ztlab.local/aws/crapi-community)"
+# §B1: THỰC THI nguồn. SOURCE = crapi-community (train) | crapi-web (holdout) —
+# exec THẬT từ pod đó (không chỉ ghi tên); nghiệm thu xác nhận source_principal
+# trong decision log đúng là pod đã đổi. Tên container = tên app (crapi-web cũng
+# có wget — xem crapi_access_denied.sh). ATTEMPTS điều chỉnh được.
+SOURCE="${VP_SOURCE_PRINCIPAL:-${SOURCE:-crapi-community}}"
+ATTEMPTS="${ATTEMPTS:-5}"
+ATTACKER_POD="$(crapi_pod "$SOURCE")"
+[[ -n "$ATTACKER_POD" ]] || fail "không tìm được pod $SOURCE"
+log "Attacker: $ATTACKER_POD (SVID spiffe://ztlab.local/aws/$SOURCE) PACE=${PACE:-burst}"
 log "Mục tiêu: POST http://crapi-workshop:8000/workshop/api/shop/orders (ngoài service_acl)"
 
 denied=0
-for i in 1 2 3 4 5; do
-  code="$(kubectl --context "$KUBE_AWS" -n "$NS" exec "$ATTACKER_POD" -c crapi-community -- \
+for i in $(seq 1 "$ATTEMPTS"); do
+  [[ $i -gt 1 ]] && crapi_pace_sleep "$i" "$ATTEMPTS"
+  code="$(kubectl --context "$KUBE_AWS" -n "$NS" exec "$ATTACKER_POD" -c "$SOURCE" -- \
     sh -c 'wget -q -O /dev/null -T8 -S \
       --header="Content-Type: application/json" \
       --post-data="{\"lateral\":true}" \
@@ -33,11 +40,10 @@ for i in 1 2 3 4 5; do
       | grep -oE "HTTP/[0-9.]+ [0-9]{3}" | tail -1 | grep -oE "[0-9]{3}$"' 2>/dev/null || echo "000")"
   log "  attempt $i → HTTP ${code:-000}"
   [[ "$code" == "403" || "$code" == "000" ]] && denied=$((denied + 1))
-  sleep 1
 done
 
-[[ $denied -ge 4 ]] || fail "OPA chỉ chặn $denied/5 (cần ≥4) — kiểm tra service_acl / AuthorizationPolicy crapi-workshop"
-log "OPA chặn $denied/5 — lateral movement community→workshop bị từ chối tại mesh (mТLS SVID + service_acl)"
+[[ $denied -ge $(( ATTEMPTS - 1 )) ]] || fail "OPA chỉ chặn $denied/$ATTEMPTS (cần ≥$(( ATTEMPTS - 1 ))) — kiểm tra service_acl / AuthorizationPolicy crapi-workshop"
+log "OPA chặn $denied/$ATTEMPTS — lateral movement $SOURCE→workshop bị từ chối tại mesh (mТLS SVID + service_acl)"
 
 sleep 3
 n="$(loki_count '{job="opa-decisions", opa_result="false"} |~ "/workshop/api/shop/orders"')"
