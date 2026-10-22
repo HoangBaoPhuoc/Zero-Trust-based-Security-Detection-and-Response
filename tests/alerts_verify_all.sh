@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mục 3.4 (đóng sổ 2026-10-04) — kiểm SỐNG cả 9 alert rule của AUDIT-THUC-THI.md §6 trên cụm hiện tại.
+# Mục 3.4 (đóng sổ 2026-10-04) — kiểm SỐNG cả 9 alert rule của baocao-hatang/AUDIT-THUC-THI.md §6 trên cụm hiện tại.
 # Mỗi rule: chạy kịch bản kích hoạt THẬT → chờ rule Firing (Grafana ruler API) → chờ evidence bundle MỚI
 # (ts ≥ T0) khớp alert_name ở incident-analyzer → ghi 1 dòng bằng chứng. TUẦN TỰ, không chồng kịch bản.
 #

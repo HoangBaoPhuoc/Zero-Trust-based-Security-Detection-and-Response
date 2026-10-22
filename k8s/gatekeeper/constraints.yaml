@@ -1,5 +1,5 @@
 # Phần 2 remediation (2026-09-18) — DEAD POLICY tìm thấy khi audit thực thi
-# (AUDIT-THUC-THI.md): cả 2 constraint dưới đây trỏ `namespaces: ["financial"]`
+# (baocao-hatang/AUDIT-THUC-THI.md): cả 2 constraint dưới đây trỏ `namespaces: ["financial"]`
 # — namespace đó đã bị XOÁ HẲN từ đợt migration crAPI (financial app → OWASP
 # crAPI, xem project_crapi_migration trong memory), không còn pod nào để đối
 # chiếu. `kubectl get constraint` báo TOTAL-VIOLATIONS=0 cho cả 2, NHƯNG đó là
@@ -42,7 +42,7 @@ spec:
 # postgres/redis/mailhog (image upstream OWASP crAPI + bên thứ 3) — SỬA image
 # ứng dụng ĐÍCH để qua được policy sẽ phá vỡ tính tái lập của thực nghiệm (đây
 # là "challenge" cố ý của crAPI, không phải lỗ hổng hạ tầng cần vá — xem
-# HE-THONG-CHI-TIET.md §1 "Ranh giới đóng góp"). Dùng labelSelector thay vì
+# baocao-hatang/HE-THONG-CHI-TIET.md §1 "Ranh giới đóng góp"). Dùng labelSelector thay vì
 # namespace để bật `deny` ĐÚNG PHẠM VI kiểm soát được, không đụng ứng dụng
 # đích, không cần loại trừ tay từng image riêng lẻ (namespaces để trống —
 # nhãn trải cả ns `crapi` lẫn `plg-stack`, nơi incident-analyzer chạy).

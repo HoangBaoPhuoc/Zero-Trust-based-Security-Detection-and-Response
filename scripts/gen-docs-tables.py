@@ -2,7 +2,7 @@
 """Sinh docs/GENERATED-SERVICE-GRAPH.md từ policy/service-graph-crapi.yaml
 (Phần 2.3, remediation 2026-09).
 
-Trước bản sửa này, HE-THONG-CHI-TIET.md có 3 bảng viết tay (SPIFFE §4.1, ma
+Trước bản sửa này, baocao-hatang/HE-THONG-CHI-TIET.md có 3 bảng viết tay (SPIFFE §4.1, ma
 trận edge L7 §4.3, danh sách edge L4 §4.4) mô tả LẠI cùng dữ liệu đã có trong
 service-graph-crapi.yaml — và đã trôi (§4.1 ghi AWS(4) trong khi gate thực tế
 là 6, thiếu waf/prometheus; §4.3 thiếu waf→bff; §4.4 thiếu Keycloak). Sinh
@@ -35,7 +35,7 @@ def main() -> None:
         "# Service graph — bảng sinh tự động",
         "",
         "> **GENERATED FILE — KHÔNG SỬA TAY.** Nguồn: `policy/service-graph-crapi.yaml`.",
-        "> Sinh lại: `python3 scripts/gen-docs-tables.py`. Tham chiếu từ `HE-THONG-CHI-TIET.md`",
+        "> Sinh lại: `python3 scripts/gen-docs-tables.py`. Tham chiếu từ `baocao-hatang/HE-THONG-CHI-TIET.md`",
         "> thay vì lặp lại nội dung — sửa graph rồi chạy lại generator, đừng sửa file này.",
         "",
         "## 1. Danh sách SPIFFE entry",

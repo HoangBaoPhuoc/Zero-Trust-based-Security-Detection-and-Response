@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # KỊCH BẢN — Data Exfiltration: Large Response (T1041) — mục 3 vòng 2026-09-29
 #
-# Trước đây chỉ làm tay (AUDIT-THUC-THI.md §6, phiên 2026-09-18). Script hoá để
+# Trước đây chỉ làm tay (baocao-hatang/AUDIT-THUC-THI.md §6, phiên 2026-09-18). Script hoá để
 # bằng chứng Firing lặp lại được:
 #   1. login testuser01, POST 2 community post ~700 KB mỗi cái (< 1 MB giới hạn body nginx/WAF)
 #   2. GET /community/api/v2/community/posts/recent → response > 1 MB (2 post lớn)

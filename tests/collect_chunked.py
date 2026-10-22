@@ -71,9 +71,18 @@ class Ledger:
                 line = line.strip()
                 if line:
                     try:
-                        out.append(json.loads(line))
+                        d = json.loads(line)
                     except json.JSONDecodeError:
-                        pass  # dòng cụt do chết giữa lúc ghi: bỏ qua, không sửa file
+                        continue  # dòng cụt do chết giữa lúc ghi: bỏ qua, không sửa file
+                    # §B4 mục 0 (2026-10-12): --ledger CÓ THỂ là tests/runs.jsonl dùng
+                    # CHUNG với crapi_run_campaign.sh/crapi_noise_n2.sh (bản ghi
+                    # {class, run_id, ...} KHÔNG có chunk_id/event) — bỏ qua êm, không
+                    # phải lỗi. Trước đây (không lọc) crash KeyError ngay dòng đầu không
+                    # phải chunk record, giống đúng kiểu lỗi "tin im lặng" B3 đã dạy:
+                    # phải kiểm tường minh thay vì giả định cấu trúc dòng.
+                    if "chunk_id" not in d or "event" not in d:
+                        continue
+                    out.append(d)
         return out
 
     def append(self, rec):
@@ -278,13 +287,31 @@ def run_chunk(ledger, loki, args, seq):
     posthoc = {}
     if status != "aborted":
         time.sleep(args.settle)  # để batch đang bay (và batch gửi bù) tới Loki trước khi hậu kiểm
-        try:
-            for c in CLOUDS:
-                gaps, nb = loki.bucket_gaps(c, t_start, t_end, args.bucket, args.max_gap)
-                posthoc[c] = {"gaps": gaps, "nonempty_buckets": nb,
-                              "expected_buckets": int((t_end - t_start) // args.bucket)}
-        except Exception as e:  # không hậu kiểm được → không tính (không đếm vào khoảng không)
-            status, reason = "gap", f"hậu kiểm Loki thất bại: {e}"
+        # §B6 mục 3.1 — ROOT CAUSE khúc 8: một cú giật kết nối Loki THOÁNG QUA ở
+        # hậu kiểm (không phải khoảng khuyết dữ liệu thật — export sau đó OK,
+        # /ready trả 200 ngay) từng kết luận "gap" ngay lần lỗi ĐẦU TIÊN, bỏ cả
+        # khúc. Retry args.posthoc_retries lần (mặc định 3), cách nhau
+        # args.posthoc_retry_wait giây (mặc định 8s), TRƯỚC KHI kết luận gap —
+        # chỉ "gap" khi cả N lần hậu kiểm đều lỗi KẾT NỐI, hoặc khi hậu kiểm
+        # THÀNH CÔNG nhưng thật sự thấy khoảng khuyết (nhánh dưới, không đổi).
+        last_exc = None
+        for attempt in range(1, args.posthoc_retries + 1):
+            try:
+                posthoc = {}
+                for c in CLOUDS:
+                    gaps, nb = loki.bucket_gaps(c, t_start, t_end, args.bucket, args.max_gap)
+                    posthoc[c] = {"gaps": gaps, "nonempty_buckets": nb,
+                                  "expected_buckets": int((t_end - t_start) // args.bucket)}
+                last_exc = None
+                break
+            except Exception as e:  # lỗi KẾT NỐI hậu kiểm — khác khoảng khuyết thật
+                last_exc = e
+                if attempt < args.posthoc_retries:
+                    print(f"[collect] {chunk_id}: hậu kiểm Loki lỗi (lần {attempt}/{args.posthoc_retries}): "
+                          f"{e} — thử lại sau {args.posthoc_retry_wait}s", flush=True)
+                    time.sleep(args.posthoc_retry_wait)
+        if last_exc is not None:  # cả N lần đều lỗi kết nối → không hậu kiểm được, không tính
+            status, reason = "gap", (f"hậu kiểm Loki thất bại sau {args.posthoc_retries} lần thử: {last_exc}")
         if status is None:
             if fresh_violations or any(posthoc[c]["gaps"] for c in CLOUDS):
                 status = "gap"
@@ -329,6 +356,10 @@ def main():
     ap.add_argument("--probe-interval", type=float, default=10)
     ap.add_argument("--bucket", type=int, default=10)
     ap.add_argument("--settle", type=float, default=45)
+    ap.add_argument("--posthoc-retries", type=int, default=3,
+                     help="§B6 mục 3.1: số lần thử hậu kiểm Loki trước khi kết luận gap do lỗi kết nối")
+    ap.add_argument("--posthoc-retry-wait", type=float, default=8,
+                     help="§B6 mục 3.1: giây nghỉ giữa các lần thử hậu kiểm")
     ap.add_argument("--pause", type=float, default=10, help="nghỉ giữa hai khúc (s)")
     ap.add_argument("--precondition-timeout", type=float, default=1800)
     ap.add_argument("--report", action="store_true")

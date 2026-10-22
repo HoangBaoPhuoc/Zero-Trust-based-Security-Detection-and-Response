@@ -3,7 +3,7 @@
 # phát hiện được qua community/posts/recent (crapi_bola.sh chọn nạn nhân) mà
 # KHÔNG phụ thuộc N1 chạy bao lâu. Chạy trong PHA 0 (trước cổng).
 #
-# VÌ SAO KHÔNG làm trong seed-job.yaml (dù prompt đề nghị): seed-job chạy ở
+# VÌ SAO KHÔNG làm trong seed-job.yaml (dù kế hoạch ban đầu đề nghị): seed-job chạy ở
 # OpenStack (cạnh identity), còn crapi-community ở AWS. service-graph KHÔNG có
 # edge cross-cloud openstack/crapi-seed → aws/crapi-community (crapi-seed là
 # spire_only, không mô hình hoá egress tới community) → OPA/mesh CHẶN; cũng không

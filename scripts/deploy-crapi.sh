@@ -378,7 +378,7 @@ restart_workloads_for_sds() {
   # LÀ kịch bản "restart đồng thời nhiều workload" gây ra
   # diagnostics/2026-09-19-mesh-connectivity-incident (root cause thật: lỗi
   # nền tảng iptables-legacy/nf_tables của network-policy controller nhúng
-  # trong k3s — cùng họ với AUDIT-THUC-THI.md §3.2, nhưng có lúc chặn nhầm cả
+  # trong k3s — cùng họ với baocao-hatang/AUDIT-THUC-THI.md §3.2, nhưng có lúc chặn nhầm cả
   # traffic HỢP LỆ, không tự phục hồi). KHÔNG vá được lỗi nền tảng đó, nên đổi
   # sang restart TUẦN TỰ từng deployment + chờ rollout xong thật, giảm số pod
   # churn đồng thời trên cùng node.
@@ -401,7 +401,7 @@ verify_mesh_connectivity() {
   # một cụm với TOÀN BỘ pod 2/2 Running vẫn có waf->bff (đúng cặp
   # service_acl cho phép) trả 503/"Connection refused" ở tầng L4 (lỗi nền
   # tảng iptables-legacy/nf_tables của kube-router nhúng trong k3s, xem
-  # restart_workloads_for_sds() + AUDIT-THUC-THI.md §3.2) — im lặng, không
+  # restart_workloads_for_sds() + baocao-hatang/AUDIT-THUC-THI.md §3.2) — im lặng, không
   # `kubectl get pods` nào phát hiện ra. Gọi request THẬT giữa 1-2 cặp
   # service_acl cho phép, kiểm HTTP code thật — deploy nào dính lỗi này FAIL
   # RÕ RÀNG thay vì báo "OK" giả.
@@ -503,7 +503,7 @@ main() {
   # opa-server:9191 từ sidecar Keycloak: "Connection refused" trên cả 3 pod
   # opa, trong khi :8181 luôn thành công — LƯU Ý: điều này ngược lại kết luận
   # "NetworkPolicy ns crapi không được kube-router enforce" của
-  # AUDIT-THUC-THI.md 2026-09-19 cho các rule ipBlock/rule rỗng cổng khác; rule
+  # baocao-hatang/AUDIT-THUC-THI.md 2026-09-19 cho các rule ipBlock/rule rỗng cổng khác; rule
   # port-list đơn giản này RÕ RÀNG có hiệu lực thật trên hạ tầng đang dùng).
   # kc-crapi-setup vẫn 403 y hệt bug OPA dù OPA đã Ready — root cause khác,
   # cùng lớp lỗi "thứ tự áp chính sách" trong main() này.

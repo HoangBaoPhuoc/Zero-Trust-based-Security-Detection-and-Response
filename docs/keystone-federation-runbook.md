@@ -3,13 +3,13 @@
 **Trạng thái: chưa thực thi.** Cần quyền SSH trực tiếp vào OpenStack controller
 (`172.16.99.250` theo `OS_AUTH_URL` trong `.env`) — đã thử `ssh ubuntu@172.16.99.250`
 và `ssh root@172.16.99.250`, cả hai đều "Host key verification failed" (không có
-key/credential nào được cấp cho phiên làm việc này). Đây là giới hạn quyền truy
-cập thật, không phải rủi ro tôi chọn bỏ qua — việc này nằm ngoài phạm vi
+key/credential nào được cấp cho máy triển khai). Đây là giới hạn quyền truy
+cập thật, không phải rủi ro được chọn bỏ qua — việc này nằm ngoài phạm vi
 Terraform/Ansible của repo (chỉ provision VM, không quản lý chính OpenStack
 control plane) nên không tự động hoá được từ đây.
 
-Bạn cần tự SSH vào controller (`ssh <user>@172.16.99.250`, dùng đúng credential
-bạn có) và chạy các bước dưới theo thứ tự.
+Cần SSH trực tiếp vào controller (`ssh <user>@172.16.99.250`, dùng credential
+quản trị OpenStack) và chạy các bước dưới theo thứ tự.
 
 ## Trước khi bắt đầu — sao lưu
 
@@ -125,4 +125,4 @@ openstack identity provider delete keycloak   # nếu cần gỡ hẳn
 
 ---
 
-*Runbook này viết dựa trên kiến trúc chuẩn Kolla-Ansible/Keystone + mod_auth_openidc — cần điều chỉnh theo cấu hình thật của lab bạn (vị trí file config, cách container hoá) trước khi chạy từng lệnh.*
+*Runbook này viết dựa trên kiến trúc chuẩn Kolla-Ansible/Keystone + mod_auth_openidc — cần điều chỉnh theo cấu hình thật của hạ tầng OpenStack (vị trí file config, cách container hoá) trước khi chạy từng lệnh.*

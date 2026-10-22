@@ -38,6 +38,17 @@ FAMILY = {
     "large_response":       ('{job="envoy-access"}',                 r'posts/recent', None, False),
 }
 
+# §B3 mục 5.2 (2026-10-12 — quyết định, nhánh (b)): hai họ này KHÔNG giữ trục
+# "khoảng cách giữa request" — brute_force giữ trục SỐ USERNAME (dense/spray),
+# large_response giữ trục SỐ RESPONSE CỘNG DỒN (12/20) — nên ngưỡng burst<1.0s/
+# slow>5.0s của 5 họ thuần-nhịp không mô tả đúng chúng (đo trực tiếp B2:
+# brute_force burst median≈1.47s do round-trip login cố hữu; large_response
+# slow_drip median≈0.788s do đơn vị đo là "trên một response" không phải
+# "giữa request"). MIỄN khỏi PASS/FAIL nhịp, vẫn tính & lưu bằng chứng thống kê
+# (không bỏ qua đo đạc) — xem policy/variant-split.yaml và
+# docs/FEATURES-GIAIDOAN-C.md cho lý do đầy đủ.
+PACE_EXEMPT = {"brute_force", "large_response"}
+
 def load_variant_pace(split_file):
     """variant id (ví dụ bola_slowdrip) → pace."""
     import yaml
@@ -83,6 +94,26 @@ def loki_lines(loki, selector, t0, t1):
         if not data or last <= cur: break
         cur = last + 1
     return sorted(out)
+
+def dedup_by_trace_id(lines):
+    """1 request logic đi qua NHIỀU hop mesh (gateway/waf/bff/identity...) đều
+    cùng `job="envoy-access"` → mỗi hop ghi 1 dòng log riêng, timestamp lệch
+    nhau vài ms. Không dedupe thì gap_stats() tính luôn cả khoảng-cách-giữa-hop
+    (gần 0) lẫn khoảng-cách-giữa-request-thật, kéo median xuống gần 0 bất kể
+    PACE thật — sự cố thật 2026-10-12: pace_accept báo FAIL cho cả 5 họ dù
+    crapi_pace_sleep() thực thi đúng. Giữ dòng SỚM NHẤT cho mỗi trace_id; dòng
+    thiếu trace_id (stream không có field này) giữ nguyên, không dedupe được.
+    """
+    seen = set(); out = []
+    for ts, ln in lines:
+        m = re.search(r'"trace_id"\s*:\s*"([^"]+)"', ln)
+        tid = m.group(1) if m else None
+        if tid is None:
+            out.append((ts, ln)); continue
+        if tid in seen:
+            continue
+        seen.add(tid); out.append((ts, ln))
+    return out
 
 def gap_stats(ts):
     gaps = [b - a for a, b in zip(ts, ts[1:])]
@@ -139,13 +170,19 @@ def run(args):
     series = {}
     for name, rrun in (("burst", burst), ("slow_drip", slow)):
         lines = [(ts, ln) for ts, ln in loki_lines(args.loki, sel, rrun["t0"], rrun["t1"]) if rx.search(ln)]
+        lines = dedup_by_trace_id(lines)
         ts = [t for t, _ in lines]
         series[name] = {"window": [rrun["t0"], rrun["t1"]], "timestamps": [round(t, 3) for t in ts],
                         "stats": gap_stats(ts)}
         if target_re: series[name]["distinct_targets"] = distinct_targets(lines, target_re)
         if use_src:   series[name]["distinct_source_principals"] = distinct_sources(lines)
-    ok, reasons = verdict(series["burst"]["stats"], series["slow_drip"]["stats"], args.burst_max, args.slow_min)
-    result["series"] = series; result["pass"] = ok; result["reasons"] = reasons
+    exempt = args.family in PACE_EXEMPT
+    if exempt:
+        ok, reasons = None, [f"MIỄN khỏi bài kiểm nhịp (§B3 mục 5.2) — trục giữ riêng của họ '{args.family}' "
+                              "không phải khoảng cách giữa request, xem policy/variant-split.yaml"]
+    else:
+        ok, reasons = verdict(series["burst"]["stats"], series["slow_drip"]["stats"], args.burst_max, args.slow_min)
+    result["series"] = series; result["pass"] = ok; result["exempt"] = exempt; result["reasons"] = reasons
     import os; os.makedirs(args.out, exist_ok=True)
     path = os.path.join(args.out, f"pace-accept-{args.family}.json")
     json.dump(result, open(path, "w"), indent=2, ensure_ascii=False)
@@ -159,8 +196,9 @@ def run(args):
         print(f"  SOURCE principals: burst={series['burst'].get('distinct_source_principals')} "
               f"slow={series['slow_drip'].get('distinct_source_principals')}")
     for r in reasons: print(f"  - {r}")
-    print(f"[accept] {'PASS' if ok else 'FAIL'} — bằng chứng → {path}")
-    sys.exit(0 if ok else 1)
+    verdict_str = "EXEMPT" if exempt else ("PASS" if ok else "FAIL")
+    print(f"[accept] {verdict_str} — bằng chứng → {path}")
+    sys.exit(0 if (exempt or ok) else 1)
 
 def selftest():
     # burst: gaps ~0.2s; slow_drip: gaps ~tens of seconds với phương sai

@@ -158,7 +158,7 @@ Integrity. Hai rule mới (`Log Pipeline Silent`, `Health-Check Silent`) chưa k
 - Trước destroy: `terraform plan` không target AWS + OpenStack: **No changes** (`results/closeout/rebuild/tfplan-*-pre-destroy.txt`).
 - Lần 1: destroy 4 m 58 s; deploy hỏng ở Terraform OpenStack sau 31 phút (VM kẹt BUILD — đồng hồ host AIO, mục 2.1) → `openstack-aio-preflight.sh`.
 - Lần 2: destroy 2 m 11 s; hỏng ngay ở tiền kiểm mới (CLI snap 5.8 không tạo được VM không NIC) → dùng CLI kolla-venv.
-- Lần 3: destroy 55 s; bước 1–10 xanh, bị Claude Code dừng giữa bước 11 vì máy thiếu RAM; người dùng chạy tiếp `--from-step 11` trên đúng các VM
+- Lần 3: destroy 55 s; bước 1–10 xanh, bị dừng giữa bước 11 vì máy thiếu RAM; chạy tiếp thủ công `--from-step 11` trên đúng các VM
   vừa tạo: **34 m 31 s, 0 FAIL**, Step 8b (stack quan sát + 1652 dòng log OpenStack/5 phút qua WireGuard) và Step 8c (mesh) OK, **1 WARN**: SAML
   bị bỏ qua vì `--from-step 11` không nạp `.env` — lỗi thứ ba, đã sửa (`.env` luôn được nạp) và áp lại SAML (cert Keycloak cũ 09-29 → mới).
 - Sau deploy: plan OpenStack `No changes`; plan AWS chỉ trôi giá trị output (`public_ip` gateway sau khi gắn EIP), 0 thay đổi tài nguyên.
@@ -169,7 +169,7 @@ Integrity. Hai rule mới (`Log Pipeline Silent`, `Health-Check Silent`) chưa k
 | Hở | Có làm hỏng đợt thu? | Biện pháp |
 |---|---|---|
 | Mất tài khoản/quyền AWS (nguyên nhân 09-30) | **CÓ** — mất cụm | thu chia khúc; giữ snapshot tfstate; dựng lại từ trống đã chứng minh (~40–60 phút) |
-| RAM máy AIO (15 GB; 5 VM ≈ 6,6 GB) — 2 lần tiến trình bị dừng vì thiếu RAM trong vòng này | **CÓ** — bộ thu/bộ sinh tải bị giết | chạy bộ thu ngoài Claude Code (terminal riêng) hoặc đặt `CLAUDE_CODE_DISABLE_BG_SHELL_PRESSURE_REAP=1`; đóng ứng dụng nặng |
+| RAM máy AIO (15 GB; 5 VM ≈ 6,6 GB) — 2 lần tiến trình bị dừng vì thiếu RAM trong vòng này | **CÓ** — bộ thu/bộ sinh tải bị giết | chạy bộ thu ở terminal riêng; đóng ứng dụng nặng |
 | Đồng hồ host AIO lệch sau khởi động (dual-boot) | **CÓ** nếu host khởi động lại giữa đợt | `openstack-aio-preflight.sh` trước khi dựng/khôi phục; tận gốc: `timedatectl set-local-rtc 0` + Windows dùng RTC UTC |
 | Gián đoạn WAN > ~2,5 h (Promtail) / > ~2–4 h (SVID) | CÓ — khúc bị `gap`, có thể mất log | bộ thu đánh `gap`; khôi phục theo §10.3 |
 | **Trạng thái cạn dần trong phiên dài** (mới): `stepup-demo` hết 100 credit sau 10 đơn → mọi đơn sau trả 400 | **CÓ — gán nhãn sai có hệ thống** (cùng họ H16): tỉ lệ 400 tăng theo thời gian phiên | bộ sinh tải phải nạp lại credit (coupon) hoặc chọn hành động không tiêu hao; theo dõi tỉ lệ non-200 theo giờ |

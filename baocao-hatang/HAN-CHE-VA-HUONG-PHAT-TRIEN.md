@@ -173,7 +173,7 @@ mọi thứ đã dựng, và vẫn `fail` nếu mesh không thông. Chạy `depl
   chỉnh lùi 7 h sau khi Kolla khởi động; sửa trong code: `scripts/openstack-aio-preflight.sh`); lần 2 hỏng ở chính bước tiền kiểm mới
   (CLI snap 5.8 không tạo được VM không NIC; sửa); lần 3 xanh: 0 FAIL, nghiệm thu Step 8b (stack quan sát + log OpenStack qua WireGuard)
   và Step 8c (mesh) đều OK. Chi tiết, thời gian và các WARN: `SAN-SANG-GIAI-DOAN-B.md` mục 3.6; log `results/closeout/rebuild/`.
-- **Giới hạn còn lại:** lần 3 bị Claude Code dừng giữa bước 11 vì máy thiếu RAM (5 VM OpenStack ≈ 7,6 GB / 15 GB) và được chạy tiếp
+- **Giới hạn còn lại:** lần 3 bị dừng giữa bước 11 vì máy thiếu RAM (5 VM OpenStack ≈ 7,6 GB / 15 GB) và được chạy tiếp
   bằng `--from-step 11` trên đúng các VM vừa tạo — vẫn là hạ tầng từ trống, nhưng không phải một lệnh liền mạch. Lần chạy tiếp làm lộ lỗi
   thứ ba (`--from-step > 2` không nạp `.env` → SAML bị bỏ qua mà deploy vẫn báo xanh; đã sửa). Bước 3c thực hiện `terraform apply
   -target` lên tài nguyên AWS IAM thật (SAML provider + role).

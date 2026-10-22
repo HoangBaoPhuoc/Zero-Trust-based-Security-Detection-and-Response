@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# All-in-one deploy — chạy toàn bộ Bước 1 → 14 của DEPLOY.md (Phần 1) bằng 1 lệnh,
+# All-in-one deploy — chạy toàn bộ Bước 1 → 14 của baocao-hatang/DEPLOY.md (Phần 1) bằng 1 lệnh,
 # từ hạ tầng trống (sau `terraform destroy`) tới cluster chạy đầy đủ ứng dụng.
 # Tầng hạ tầng (SSH key, Terraform, Ansible, inventory, tunnel) do script này lo;
 # tầng ứng dụng K8s được uỷ quyền cho scripts/deploy-app.sh ở bước cuối.
@@ -13,7 +13,7 @@
 #   bash scripts/deploy-all.sh --skip-tools     # bỏ Bước 1 (apt install) — máy đã cài đủ
 #   bash scripts/deploy-all.sh --from-step 9    # chạy lại từ 1 bước cụ thể (debug)
 #
-# Xem DEPLOY.md để biết chi tiết từng bước tương ứng.
+# Xem baocao-hatang/DEPLOY.md để biết chi tiết từng bước tương ứng.
 
 set -euo pipefail
 
@@ -75,7 +75,7 @@ if run_step 1; then
     command -v openstack >/dev/null || fail "Chưa có OpenStack CLI — cài thủ công trước (thường qua venv riêng)"
 
     if ! command -v docker >/dev/null; then
-      fail "Chưa có Docker — cài Docker CE trước khi tiếp tục (xem DEPLOY.md Bước 1)"
+      fail "Chưa có Docker — cài Docker CE trước khi tiếp tục (xem baocao-hatang/DEPLOY.md Bước 1)"
     fi
     sudo systemctl enable --now docker
     if ! groups "$USER" | grep -q docker; then
@@ -92,6 +92,21 @@ fi
 # đã tạo SAML provider từ file metadata còn sót của Keycloak cũ — deploy báo xanh với SSO hỏng).
 if [[ -f .env ]]; then set -a; source <(grep -v '^#' .env | grep '='); set +a; fi
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-southeast-1}"
+
+# Chuẩn bị máy deployer — LUÔN chạy (kể cả --from-step N): swap chống OOM, rule NAT cho SSH tới floating IP
+# OpenStack, ~/.ssh/config cho ProxyJump. Idempotent. Chi tiết 3 sự cố 2026-10-10: xem đầu file script.
+bash scripts/deployer-host-preflight.sh || warn "deployer-host-preflight báo lỗi — xem log phía trên; tiếp tục nhưng có thể gặp OOM/SSH timeout"
+
+# Máy deployer ra mạng external OpenStack bằng IP của br-exnat (10.10.10.1). Security group os-gateway chỉ
+# mở SSH cho CIDR này — default trong terraform/openstack/variables.tf (172.10.10.1/32) không đúng máy này
+# → SSH timeout ở Bước 10. Chỉ tự dò khi .env chưa đặt; đặt trong .env luôn thắng.
+if [[ -z "${TF_VAR_management_cidr:-}${TF_VAR_aio_provider_cidr:-}" ]]; then
+  _exnat_ip=$(ip -4 -o addr show dev br-exnat 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+  if [[ -n "$_exnat_ip" ]]; then
+    export TF_VAR_management_cidr="$_exnat_ip/32" TF_VAR_aio_provider_cidr="$_exnat_ip/32"
+    log "SSH vào OpenStack cho phép từ $_exnat_ip/32 (IP br-exnat, tự dò)"
+  fi
+fi
 
 step 2 "Credentials .env"
 if run_step 2; then
@@ -261,7 +276,7 @@ if run_step 10; then
   until ansible -i ansible/inventory/hosts.yml all -m ping >/tmp/ansible-ping.log 2>&1; do
     if [[ $(date +%s) -ge $DEADLINE ]]; then
       cat /tmp/ansible-ping.log
-      fail "SSH/ping không thành công sau 5 phút — kiểm tra security group / TF_VAR_key_pair_name (xem bảng lỗi thường gặp trong DEPLOY.md)"
+      fail "SSH/ping không thành công sau 5 phút — kiểm tra security group / TF_VAR_key_pair_name (xem bảng lỗi thường gặp trong baocao-hatang/DEPLOY.md)"
     fi
     sleep 10
   done
@@ -326,4 +341,4 @@ ELAPSED=$(( $(date +%s) - START_TS ))
 echo -e "\n${GREEN}══════════════════════════════════════════${NC}"
 echo -e "${GREEN} First deploy hoàn tất trong $((ELAPSED/60))m $((ELAPSED%60))s${NC}"
 echo -e "${GREEN}══════════════════════════════════════════${NC}"
-echo "Xem DEPLOY.md Phần 2 cho vận hành hàng ngày (redeploy code, demo, health check)."
+echo "Xem baocao-hatang/DEPLOY.md Phần 2 cho vận hành hàng ngày (redeploy code, demo, health check)."

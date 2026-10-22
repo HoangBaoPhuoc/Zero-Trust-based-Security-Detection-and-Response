@@ -54,7 +54,7 @@ echo $AWS_ACCESS_KEY_ID   # phải hiện key, không được trống
 ### Bước 3 — Tạo SSH key cho AWS
 
 ```bash
-export AWS_KEY_PAIR_NAME="ztlab-key-0726"   # thay 0726 bằng tháng/năm của bạn
+export AWS_KEY_PAIR_NAME="ztlab-key-0726"   # thay 0726 bằng tháng/năm hiện tại
 export SSH_KEY="$HOME/.ssh/$AWS_KEY_PAIR_NAME"
 export TF_VAR_key_pair_name="$AWS_KEY_PAIR_NAME"
 

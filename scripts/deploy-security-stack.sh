@@ -356,8 +356,10 @@ deploy_step_3_spire_aws() {
     --dry-run=client -o yaml | kubectl --context $AWS_CONTEXT apply -f -
 
   log_info "Labeling nodes for SPIRE server on AWS..."
-  SECURITY_NODE=$(kubectl --context $AWS_CONTEXT get nodes --no-headers \
-    -o custom-columns=NAME:.metadata.name | head -1)
+  # jsonpath thay cho `| head -1`: khi file này được `source` vào deploy-app.sh (set -euo pipefail),
+  # `head -1` thoát sớm → kubectl nhận SIGPIPE (141) → pipefail + set -e làm cả deploy thoát im lặng.
+  SECURITY_NODE=$(kubectl --context $AWS_CONTEXT get nodes \
+    -o jsonpath='{.items[0].metadata.name}')
   if [ -z "$SECURITY_NODE" ]; then
     log_error "No nodes found in AWS cluster"
     exit 1
@@ -405,8 +407,9 @@ deploy_step_3_spire_os() {
     --dry-run=client -o yaml | kubectl --context $OS_CONTEXT apply -f -
 
   log_info "Labeling nodes for SPIRE server on OpenStack..."
-  IDENTITY_NODE=$(kubectl --context $OS_CONTEXT get nodes --no-headers \
-    -o custom-columns=NAME:.metadata.name | head -1)
+  # jsonpath thay cho `| head -1` — lý do như phía AWS ở trên (SIGPIPE + pipefail khi được source).
+  IDENTITY_NODE=$(kubectl --context $OS_CONTEXT get nodes \
+    -o jsonpath='{.items[0].metadata.name}')
   if [ -z "$IDENTITY_NODE" ]; then
     log_error "No nodes found in OpenStack cluster"
     exit 1

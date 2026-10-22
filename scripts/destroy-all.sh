@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# All-in-one destroy — gỡ toàn bộ hạ tầng AWS + OpenStack (Phần 3 của DEPLOY.md) bằng 1 lệnh.
+# All-in-one destroy — gỡ toàn bộ hạ tầng AWS + OpenStack (Phần 3 của baocao-hatang/DEPLOY.md) bằng 1 lệnh.
 #
 # Mặc định GIỮ LẠI: SSH key-pair (ztlab-key / zta-siem-soar-key) và image/flavor
 # OpenStack — để lần `deploy-all.sh` kế tiếp không phải tạo/upload lại từ đầu.

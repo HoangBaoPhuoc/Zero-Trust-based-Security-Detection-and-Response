@@ -119,7 +119,14 @@ SENSITIVE_ACTIONS = [
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_urlsafe(32)
 SESSION_COOKIE = "ztlab_bff_session"
 PKCE_COOKIE = "ztlab_bff_pkce"
-SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE", "3600"))
+# §B3 mục 5.1 (2026-10-12): 3600s va với hồ sơ "long" của N1 (mặc định 60–120'
+# khi LONG_OVER_4H không set) — phiên bị cắt đúng-như-thiết-kế ở mốc 1h, N1 đọc
+# thành 401 hàng loạt và tự dừng (STOPFLAG), bị hiểu lầm là bug trong khi là
+# xung đột cấu hình. Nâng lên 6h: an toàn trên cả mốc 120' của "long" cơ bản
+# VÀ mốc 4h+ của hồ sơ hồi quy H17 (xem LONG_OVER_4H trong crapi_load_n1.sh)
+# — hồ sơ H17 vẫn vượt TTL SVID 4h trước khi vượt SESSION_MAX_AGE, nên phép
+# thử H17 vẫn đo đúng hành vi hết hạn SVID, không bị trộn với cắt phiên BFF.
+SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE", "21600"))
 HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "").lower() == "true"
 
 # ── Phần 1.3 (remediation 2026-09): device cert đã verify ở biên mesh thật

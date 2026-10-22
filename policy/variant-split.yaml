@@ -75,6 +75,16 @@ families:
 
   # §B1b: NHỊP ĐỘ là trục. mode (dense 1 user / spray nhiều user) biến thiên
   # TRONG CẢ HAI nhóm (không confound với nhịp độ như trước).
+  # §B3 mục 5.2 (2026-10-12 — QUYẾT ĐỊNH, chọn nhánh (b)): MIỄN khỏi
+  # tests/phaseb_pace_accept.py (ngưỡng nhịp burst<1.0s / slow_drip>5.0s của 5
+  # họ "thuần nhịp" khác). Trục giữ riêng của brute_force là SỐ USERNAME khác
+  # nhau trong một lượt (dense=1 vs spray=nhiều), không phải khoảng cách giữa
+  # request — bài kiểm nhịp đo khoảng cách request lại đo đúng round-trip của
+  # một lượt login (độ trễ cố hữu, không co giãn được theo tham số --gap) nên
+  # burst của brute_force luôn median ~1.47s > ngưỡng 1.0s. Đo trực tiếp B2:
+  # brute_force 2/5 FAIL cùng với large_response, 3/5 còn lại (bola,
+  # access_denied_spike, bfla) PASS sau khi sửa bug #4 (dedup trace_id) — tức
+  # đây là lỗi THIẾT KẾ BÀI KIỂM, không phải lỗi dữ liệu/script.
   - name: brute_force
     scenario: crapi_brute_force.sh
     train:
@@ -110,6 +120,13 @@ families:
   # hình dạng response KHÔNG confound với nhịp độ. ("1 response lớn" là đường
   # phát hiện bằng LUẬT ngưỡng-đơn, không phải bài toán holdout của ML — tách
   # riêng, không nằm trong split này.) responses (12 vs 20) biến thiên trong cả hai.
+  # §B3 mục 5.2 (2026-10-12 — QUYẾT ĐỊNH, chọn nhánh (b)): MIỄN khỏi
+  # tests/phaseb_pace_accept.py cùng lý do với brute_force ở trên. Trục giữ
+  # riêng của large_response là SỐ RESPONSE NHỎ CỘNG DỒN (responses: 12 vs 20)
+  # — đơn vị đo là "trên một response", không phải "khoảng cách giữa request
+  # kề nhau" như 5 họ thuần nhịp; bài kiểm nhịp hiện tại gán sai đơn vị nên
+  # slow_drip của large_response ra median=0.788s < ngưỡng 5.0s dù thiết kế
+  # đúng (mỗi response cộng dồn vẫn rải đúng --gap, chỉ là phép đo sai trục).
   - name: large_response
     scenario: crapi_large_response.sh
     train:

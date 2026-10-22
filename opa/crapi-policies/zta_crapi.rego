@@ -49,7 +49,7 @@ bearer_token := t if {
 # nên đọc tươi khi CronJob ghi đè). Chỉ AWS PDP cần cái này; OpenStack crosscloud
 # không verify token nên volume để optional (opa.yaml dùng chung 2 cluster).
 #
-# HẠN CHẾ (ghi vào HAN-CHE-VA-HUONG-PHAT-TRIEN.md): nếu Keycloak xoay khoá ký
+# HẠN CHẾ (ghi vào baocao-hatang/HAN-CHE-VA-HUONG-PHAT-TRIEN.md): nếu Keycloak xoay khoá ký
 # giữa hai lần CronJob (≤5 phút), token ký bằng khoá mới bị từ chối tới khi
 # đồng bộ. Chấp nhận được trong lab (Keycloak không tự xoay khoá theo lịch).
 # Data document mout ngoài package này (data.kc_oidc.*, do opa-jwks-cronjob.yaml

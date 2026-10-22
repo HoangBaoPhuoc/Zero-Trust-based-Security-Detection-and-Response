@@ -71,6 +71,7 @@ spec:
         - { port: 1025, protocol: TCP }
         - { port: 5432, protocol: TCP }
         - { port: 8025, protocol: TCP }
+        - { port: 8080, protocol: TCP }
         - { port: 8181, protocol: TCP }
         - { port: 9191, protocol: TCP }
         - { port: 15006, protocol: TCP }

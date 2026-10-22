@@ -60,21 +60,49 @@ if [[ -z "$DUR_CAP" && "$GAP" -lt 600 ]]; then
 fi
 
 # Trích danh sách lượt từ YAML: mỗi dòng TSV = family scenario group variant_id pace params_json
+#
+# §B6 mục 3.3 — ROOT CAUSE (phân tích mốc 50h, 2026-10-16): thứ tự cũ là
+# FAMILY-MAJOR (hết mọi lượt bola mới sang bfla, ... tới access_denied_spike,
+# privilege_escalation, large_response ở CUỐI danh sách YAML), rồi lặp
+# --repeat. Một khúc có hạn giờ (collect_chunked.py SIGTERM cả group đúng lúc
+# hết CHUNK_MINUTES) CẮT Ở GẦN NHƯ CÙNG VỊ TRÍ trong thứ tự này mỗi lần →
+# access_denied_spike/privilege_escalation/large_response (cuối danh sách)
+# nhận ít lượt hơn hẳn KHÔNG PHẢI vì được cấp ít tấn công hơn mà vì CHƯA BAO
+# GIỜ TỚI LƯỢT trước khi bị cắt (9 khúc: holdout:denied_slowdrip=2,
+# exfil_*=1/1). Xếp ROUND-ROBIN qua các family (xen train/holdout trong từng
+# family) để MỌI family có lượt SỚM trong hàng đợi bất kể cắt ở đâu — KHÔNG
+# đổi policy/variant-split.yaml (đã đóng băng), chỉ đổi THỨ TỰ cấp lượt.
 mapfile -t VARIANTS < <(python3 - "$SPLIT_FILE" "$SEL_GROUPS" "$FAMILIES" <<'PY'
 import sys, json, yaml
 split_file, groups_csv, fams_csv = sys.argv[1], sys.argv[2], sys.argv[3]
 groups = set(g.strip() for g in groups_csv.split(",") if g.strip())
 fams = set(f.strip() for f in fams_csv.split(",") if f.strip())
 doc = yaml.safe_load(open(split_file))
+
+fam_queues = []
 for fam in doc["families"]:
     if fams and fam["name"] not in fams:
         continue
-    for grp in ("train", "holdout"):
-        if grp not in groups:
-            continue
-        for v in fam.get(grp) or []:
+    tr = list(fam.get("train") or [])
+    ho = list(fam.get("holdout") or [])
+    seq = []
+    for t, h in zip(tr, ho):
+        if "train" in groups: seq.append(("train", t))
+        if "holdout" in groups: seq.append(("holdout", h))
+    if "train" in groups:
+        seq += [("train", v) for v in tr[len(ho):]]
+    if "holdout" in groups:
+        seq += [("holdout", v) for v in ho[len(tr):]]
+    if seq:
+        fam_queues.append((fam["name"], fam["scenario"], seq))
+
+maxlen = max((len(q) for _, _, q in fam_queues), default=0)
+for idx in range(maxlen):
+    for name, scenario, seq in fam_queues:
+        if idx < len(seq):
+            grp, v = seq[idx]
             print("\t".join([
-                fam["name"], fam["scenario"], grp, v["id"],
+                name, scenario, grp, v["id"],
                 v.get("pace", ""), json.dumps(v.get("params") or {}, ensure_ascii=False),
             ]))
 PY

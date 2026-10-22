@@ -24,6 +24,43 @@
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: os-pod-crapi-identity
+  namespace: crapi
+spec:
+  podSelector:
+    matchLabels:
+      app: crapi-identity
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: crapi-seed
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+    # Ý ĐỊNH thật: 192.168.101.0/24 (private_cidr của cụm đích) — kube-router
+    # (iptables v1.8.7 nf_tables) không match được ipBlock CIDR cụ thể cho
+    # traffic NAT qua gateway cross-cloud (đã thử /24 lẫn /32 chính xác, đều
+    # fail; chỉ 0.0.0.0/0 chạy) nên dòng dưới PHẢI dùng 0.0.0.0/0, giới hạn đúng
+    # port — bảo vệ thật cho hop này là L7 (STRICT mТLS + OPA ext_authz), xem
+    # scripts/gen-networkpolicy.py cho lý do đầy đủ (Phần 1.6 remediation
+    # 2026-09-18: workaround của CNI, không phải ý định thiết kế).
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - port: 8080
+          protocol: TCP
+        - port: 15006
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: os-pod-keycloak
   namespace: identity
 spec:

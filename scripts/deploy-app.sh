@@ -644,7 +644,7 @@ deploy_aws_saml_federation() {
     return
   fi
   if ! aws sts get-caller-identity >/dev/null 2>&1; then
-    warn "No AWS credentials in environment (see DEPLOY.md Step 2: export \$(grep -v '^#' .env | xargs)) — skipping AWS SAML federation"
+    warn "No AWS credentials in environment (see baocao-hatang/DEPLOY.md Step 2: export \$(grep -v '^#' .env | xargs)) — skipping AWS SAML federation"
     return
   fi
 

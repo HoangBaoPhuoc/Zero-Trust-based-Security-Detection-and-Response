@@ -59,6 +59,11 @@ service_acl := {
       "GET": ["/realms"],
     },
   },
+  "spiffe://ztlab.local/aws/opa-jwks-fetcher": {
+    "spiffe://ztlab.local/openstack/keycloak": {
+      "GET": ["/realms"],
+    },
+  },
   "spiffe://ztlab.local/aws/waf": {
     "spiffe://ztlab.local/aws/bff": {
       "GET": ["/"],
@@ -68,6 +73,12 @@ service_acl := {
       "PATCH": ["/"],
       "HEAD": ["/"],
       "OPTIONS": ["/"],
+    },
+  },
+  "spiffe://ztlab.local/openstack/crapi-seed": {
+    "spiffe://ztlab.local/openstack/crapi-identity": {
+      "GET": ["/identity/api/v2/vehicle/vehicles"],
+      "POST": ["/identity/api/v2/vehicle/resend_email", "/identity/api/v2/vehicle/add_vehicle"],
     },
   },
   "spiffe://ztlab.local/openstack/kc-admin-setup": {

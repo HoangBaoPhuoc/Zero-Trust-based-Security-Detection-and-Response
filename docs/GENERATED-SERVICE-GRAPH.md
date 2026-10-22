@@ -1,7 +1,7 @@
 # Service graph — bảng sinh tự động
 
 > **GENERATED FILE — KHÔNG SỬA TAY.** Nguồn: `policy/service-graph-crapi.yaml`.
-> Sinh lại: `python3 scripts/gen-docs-tables.py`. Tham chiếu từ `HE-THONG-CHI-TIET.md`
+> Sinh lại: `python3 scripts/gen-docs-tables.py`. Tham chiếu từ `baocao-hatang/HE-THONG-CHI-TIET.md`
 > thay vì lặp lại nội dung — sửa graph rồi chạy lại generator, đừng sửa file này.
 
 ## 1. Danh sách SPIFFE entry
