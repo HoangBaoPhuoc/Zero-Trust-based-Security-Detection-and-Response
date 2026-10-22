@@ -202,7 +202,29 @@ def evaluate_scope(df, fmt, scope, args) -> dict:
     else:
         res["unseen_variant"] = "không đủ dương để tách biến thể train/holdout"
     res["top_features_AB"] = top_features(configs["A+B"]["model"], te[A + B])
+    if args.save_model and scope == args.save_scope:
+        res["saved_model"] = save_model(configs["A+B"], fmt, scope, args)
     return res
+
+
+def save_model(cfg: dict, fmt: str, scope: str, args) -> str:
+    """Đóng gói mô hình A+B đã huấn luyện cho Bước 5 (dịch vụ chấm điểm shadow
+    mode). Lưu kèm thứ tự cột đặc trưng và ngưỡng FPR 1% chọn trên validation —
+    `ml/score.py` nạp lại đúng ba thứ này để chấm điểm log trực tuyến giống hệt
+    lúc huấn luyện. Không lưu dữ liệu, chỉ artifact mô hình."""
+    import joblib
+    os.makedirs(args.model_out, exist_ok=True)
+    path = os.path.join(args.model_out, "bola_detector.joblib")
+    joblib.dump({
+        "model": cfg["model"],
+        "feature_cols": cfg["cols"],
+        "threshold": cfg["thr"],
+        "format": fmt,
+        "scope": scope,
+        "fpr_target": args.fpr,
+        "backend": "xgboost" if HAVE_XGB else "sklearn-hgb",
+    }, path)
+    return path
 
 
 def verdict(r: dict, fpr: float) -> list[str]:
@@ -236,6 +258,11 @@ def main():
     ap.add_argument("--warmup-sec", type=float, default=1800, help="bỏ cửa sổ khi lịch sử entity còn ngắn (chỉ bảng v2)")
     ap.add_argument("--fpr", type=float, default=0.01)
     ap.add_argument("--boot", type=int, default=1000)
+    ap.add_argument("--save-model", action="store_true",
+                    help="đóng gói mô hình A+B (+ cột đặc trưng + ngưỡng) cho Bước 5")
+    ap.add_argument("--save-scope", default="same-user",
+                    help="phạm vi dùng để lưu mô hình (mặc định same-user — phép kiểm shortcut của đề cương)")
+    ap.add_argument("--model-out", default=os.path.join(os.path.dirname(__file__), "model"))
     args = ap.parse_args()
     df, fmt = load(args.features)
     os.makedirs(args.out, exist_ok=True)
@@ -257,6 +284,8 @@ def main():
                           f"| {v.get('fpr_at_val_thr', '')} | {v.get('run_recall_at_val_thr', '')} |")
             md += ["", f"Đặc trưng quan trọng (A+B): {r['top_features_AB']}", ""]
         md += verdict(r, args.fpr) + [""]
+        if r.get("saved_model"):
+            md += [f"Mô hình đã đóng gói (Bước 5): `{r['saved_model']}`", ""]
     json.dump(results, open(os.path.join(args.out, "eval_result.json"), "w"), indent=2, ensure_ascii=False, default=str)
     open(os.path.join(args.out, "eval_report.md"), "w").write("\n".join(md))
     print("\n".join(md))

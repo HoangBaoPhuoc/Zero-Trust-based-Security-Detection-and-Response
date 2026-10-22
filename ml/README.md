@@ -7,8 +7,23 @@ dùng recall theo cửa sổ 5 phút tại FPR 1%).
 | File | Việc |
 |---|---|
 | `features_v2.py` | Log thô Giai đoạn B → bảng đặc trưng: cửa sổ 300 s trượt 60 s, nhóm A/B theo đề cương, nhãn theo lượt |
-| `evaluate.py` | Baseline / A / A+B (XGBoost), chia theo khúc có khúc đệm, PR-AUC, recall@FPR 1%, CI bootstrap theo lượt, đối chứng âm, biến thể chưa thấy, 3 phạm vi âm |
+| `evaluate.py` | Baseline / A / A+B (XGBoost), chia theo khúc có khúc đệm, PR-AUC, recall@FPR 1%, CI bootstrap theo lượt, đối chứng âm, biến thể chưa thấy, 3 phạm vi âm; `--save-model` đóng gói mô hình A+B cho Bước 5 |
 | `run_collector.sh` | Chạy cả quy trình trên máy thu |
+
+## Đóng gói mô hình cho Bước 5 (dịch vụ chấm điểm)
+
+```bash
+python3 ml/evaluate.py --features "results/c4/features_v2/*.csv.gz" \
+        --out results/c4/eval --save-model   # mặc định lưu phạm vi same-user
+```
+
+Ghi `ml/model/bola_detector.joblib` gồm `{model, feature_cols, threshold,
+format, scope, fpr_target, backend}`. Dịch vụ chấm điểm (Bước 5, CHƯA viết) nạp
+lại đúng ba thứ `model` / `feature_cols` / `threshold` để tính điểm trên log
+trực tuyến **giống hệt** lúc huấn luyện. Phạm vi mặc định là `same-user` (phép
+kiểm shortcut của đề cương); nếu phạm vi đó chưa đủ mẫu để đánh giá — như bộ
+49 giờ hiện tại — mô hình **sẽ không được lưu**, đúng với cảnh báo đường tắt ở
+mục dưới. `ml/model/` nằm trong `.gitignore`.
 
 ## Khác bảng đặc trưng Giai đoạn B ở đâu
 
