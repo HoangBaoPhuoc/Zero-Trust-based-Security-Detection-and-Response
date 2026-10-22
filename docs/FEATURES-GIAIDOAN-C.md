@@ -74,6 +74,30 @@ SINH DỮ LIỆU chứ không vì bản chất tấn công).
 6. **Nhịp đều** (F8/F9) — nền N1 đều tăm tắp là đặc trưng giả; §2 bắt buộc nhịp
    ngẫu nhiên.
 
+## §B3 mục 5.2 (2026-10-12) — `brute_force` và `large_response` MIỄN khỏi bài kiểm nhịp
+
+`tests/phaseb_pace_accept.py` khẳng định train(burst)/holdout(slow_drip) khác
+nhau THẬT qua khoảng cách giữa request (ngưỡng burst median<1.0s,
+slow_drip median>5.0s). Hai họ dưới đây KHÔNG giữ trục đó làm trục phân nhóm
+train/holdout riêng của chúng (xem `policy/variant-split.yaml`), nên ngưỡng
+chung không mô tả đúng và bị FAIL mà KHÔNG phải do lỗi script/dữ liệu:
+
+- **`brute_force`**: trục giữ riêng là SỐ USERNAME trong một lượt (`dense`=1
+  vs `spray`=nhiều — xem F-họ brute_force, tham số `mode`). Burst vẫn có
+  round-trip login cố hữu (~1.3–1.6s/lần, không co giãn theo `--gap`) nên
+  median đo được (~1.47s, B2) > ngưỡng 1.0s dù đúng thiết kế.
+- **`large_response`**: trục giữ riêng là SỐ RESPONSE NHỎ CỘNG DỒN
+  (`responses: 12` vs `20`). Đơn vị tấn công là "trên một response", không
+  phải "giữa hai request kề nhau" — slow_drip đo được median (~0.788s, B2)
+  < ngưỡng 5.0s dù mỗi response vẫn rải đúng theo `duration_min`.
+
+Quyết định: giữ nguyên bài kiểm nhịp cho 5 họ còn lại (bola, bfla,
+access_denied_spike, lateral_movement, privilege_escalation — các họ này
+ĐÚNG có nhịp-độ làm trục phân nhóm), và MIỄN hai họ trên khỏi PASS/FAIL nhịp
+(`tests/phaseb_pace_accept.py` đánh dấu `"exempt": true`, không tính vào tỉ lệ
+PASS của cổng). Thống kê khoảng cách request của 2 họ này vẫn được tính và
+lưu lại làm bằng chứng tham khảo, chỉ không dùng để PASS/FAIL.
+
 ## ĐƠN VỊ ĐO — CHỐT (§B1d, không thương lượng lại)
 
 Trộn đơn vị đo là nguồn kết luận sai. Chốt:

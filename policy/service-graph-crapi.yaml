@@ -29,6 +29,14 @@ workloads:
   aws/bff:              { cluster: aws, namespace: crapi, service_account: bff }
   aws/crapi-web:        { cluster: aws, namespace: crapi, service_account: crapi-web }
   aws/crapi-community:  { cluster: aws, namespace: crapi, service_account: crapi-community }
+  # Giai đoạn B §1.1 — CronJob fetch JWKS/OIDC discovery (k8s/crapi/opa-jwks-cronjob.yaml).
+  # Sự cố thật 2026-10-12: job chạy sidecar.istio.io/inject:"false", gọi Keycloak
+  # (PeerAuthentication STRICT, k8s/identity/keycloak-mesh-policies.yaml) bằng
+  # plaintext curl → Envoy phía Keycloak từ chối handshake → fetch luôn fail →
+  # ConfigMap opa-jwks-data KHÔNG BAO GIỜ được tạo → data.kc_oidc.jwks_raw rỗng
+  # → valid_jwt luôn false → MỌI request có token qua bff bị OPA chặn 403 (toàn
+  # hệ thống, không riêng seed). Cần sidecar + SPIFFE thật để qua STRICT mTLS.
+  aws/opa-jwks-fetcher: { cluster: aws, namespace: crapi, service_account: opa-jwks-fetcher }
   aws/crapi-workshop:   { cluster: aws, namespace: crapi, service_account: crapi-workshop }
   aws/mongodb:          { cluster: aws, namespace: crapi, app_label: mongodb, spiffe: false }
   aws/redis:            { cluster: aws, namespace: crapi, app_label: redis, spiffe: false }
@@ -150,6 +158,20 @@ edges:
       - { method: POST, paths: ["/identity/api/auth/verify"] }
       - { method: GET,  paths: ["/identity/health_check"] }
 
+  # ── Giai đoạn B §1b: seed-job (victim claim xe) → identity, cùng cluster
+  # openstack. Job chạy 1 lần (workloads.openstack/crapi-seed, spire_only) gọi
+  # trực tiếp identity (không qua bff) để claim xe demo: login là public_path
+  # (không cần ACL), nhưng vehicles/resend_email/add_vehicle KHÔNG public →
+  # thiếu edge này khiến OPA chặn 100% (default allow:=false), bất kể mTLS/SVID
+  # hợp lệ — sự cố thật 2026-10-12 (seed job 0/15 victim có xe, "Nghiệm thu
+  # LIVE" của §1b chưa từng chạy trước đó nên lỗ hổng ACL chưa lộ ra).
+  - from: openstack/crapi-seed
+    to: openstack/crapi-identity
+    rules:
+      - { method: GET,  paths: ["/identity/api/v2/vehicle/vehicles"] }
+      - { method: POST, paths: ["/identity/api/v2/vehicle/resend_email", "/identity/api/v2/vehicle/add_vehicle"] }
+    l4_ports: [8080, 15006]
+
   # ── Hạ tầng (L4 thuần, không qua OPA service_acl) ────────────────────────
   - { from: aws/bff,             to: aws/redis,             l4_only: true, l4_ports: [6379] }
   - { from: aws/crapi-community, to: aws/mongodb,           l4_only: true, l4_ports: [27017] }
@@ -175,6 +197,15 @@ edges:
       - { method: GET,  paths: ["/realms", "/resources", "/js"] }
       - { method: POST, paths: ["/realms"] }
   - from: aws/opa
+    to: openstack/keycloak
+    cross_cluster: true
+    l4_ports: [30091]
+    rules:
+      - { method: GET, paths: ["/realms"] }
+  # Giai đoạn B §1.1 — CronJob fetch JWKS/discovery (thay cho opa http.send ở
+  # trên, chạy định kỳ ngoài đường quyết định). Cần sidecar + SPIFFE thật để
+  # qua STRICT mTLS (sự cố 2026-10-12, xem workloads: aws/opa-jwks-fetcher).
+  - from: aws/opa-jwks-fetcher
     to: openstack/keycloak
     cross_cluster: true
     l4_ports: [30091]
@@ -254,7 +285,7 @@ netpol_baseline:
       # policy per-destination riêng (aws-pod-bff/-crapi-community/-crapi-web/
       # -crapi-workshop/-mongodb/-opa/-redis/-waf, sinh từ edge service-graph)
       # — xoá rule catch-all này không mất traffic hợp lệ nào, chỉ đóng đúng
-      # lỗ đã tìm thấy. Xem AUDIT-THUC-THI.md.
+      # lỗ đã tìm thấy. Xem baocao-hatang/AUDIT-THUC-THI.md.
     egress:
       - to_ns: kube-system
         ports: [{ port: 53, protocol: UDP }, { port: 53, protocol: TCP }]
@@ -268,6 +299,19 @@ netpol_baseline:
       - to_ns: istio-system
         ports: [15012]
         comment: "istio-proxy -> istiod (CA + xDS)"
+      # Giai đoạn B §1.1 — opa-jwks-fetcher cần `kubectl` ghi ConfigMap opa-jwks-data
+      # (RBAC Role, k8s/crapi/opa-jwks-cronjob.yaml). kube-router THẬT SỰ enforce
+      # NetworkPolicy namespace-scoped (xem comment "bien MOI" phía trên). Verify
+      # sống 2026-10-12: rule ipBlock khớp VIP Service (10.43.0.1:443) KHÔNG đủ —
+      # kube-router áp netpol filter SAU khi kube-proxy đã DNAT đích thật về IP
+      # node thật (10.10.1.10:6443 ở đây) → rule phải khớp CIDR node thật (port
+      # 6443), không phải VIP ClusterIP; để cả 2 cho chắc (VIP không hại gì).
+      - to_cidrs: ["10.43.0.1/32"]
+        ports: [443]
+        comment: "opa-jwks-fetcher -> kube-apiserver VIP (kubectl apply configmap)"
+      - to_cidrs: ["10.10.1.0/24"]
+        ports: [6443]
+        comment: "opa-jwks-fetcher -> kube-apiserver node thật (VIP bị DNAT trước khi netpol filter chạy)"
   openstack:
     ingress:
       - from_cidrs: [10.10.1.0/24, 10.10.0.0/24, 10.200.0.0/24, 10.42.0.0/16, 192.168.101.0/24]
@@ -277,7 +321,7 @@ netpol_baseline:
         # (đăng ký thêm edge keycloak->opa ở dưới, sinh ra os-pod-opa) dựa vào
         # rule podSelector — bản 2026-09-19 kết luận "0% hiệu lực vì node thiếu
         # ipset": KẾT LUẬN ĐÓ SAI (đã đo lại 2026-09-26: k3s tự có ipset, policy
-        # podSelector chạy đúng; AUDIT-THUC-THI.md §3.1). Thêm 9191 thẳng vào
+        # podSelector chạy đúng; baocao-hatang/AUDIT-THUC-THI.md §3.1). Thêm 9191 thẳng vào
         # baseline này vẫn là fix đúng (cổng ext_authz phải nằm trong danh sách
         # cho phép của baseline). Verify sống: sau khi thêm, keycloak -> opa:9191
         # (ext_authz) hết cx_connect_fail, decision log xuất hiện lại.

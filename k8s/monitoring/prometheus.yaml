@@ -25,7 +25,7 @@ data:
       # không expose Prometheus metrics; các workload crAPI chỉ quan sát qua
       # istio access log/OPA decision log ở Loki. Muốn có metrics của bff thì phải
       # thêm instrumentation vào bff trước rồi mới khai lại job (xem
-      # HAN-CHE-VA-HUONG-PHAT-TRIEN.md).
+      # baocao-hatang/HAN-CHE-VA-HUONG-PHAT-TRIEN.md).
 
       # Loki internal metrics
       - job_name: loki

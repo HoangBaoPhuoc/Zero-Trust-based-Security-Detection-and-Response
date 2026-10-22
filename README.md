@@ -1,77 +1,88 @@
-# ZTLab — Zero Trust Security Detection & Response
+# Phát hiện và Phản ứng Sự cố An ninh dựa trên Kiến trúc Zero Trust cho Hệ thống Microservices Đa đám mây
 
-ZTLab là một **testbed thực nghiệm** hiện thực hoá các nguyên lý Zero Trust Architecture (NIST SP 800-207) trên một hệ microservices triển khai thật trên hai cloud (AWS + OpenStack), thay vì mô phỏng trên giấy hay chạy trên một cụm đơn lẻ. **Ứng dụng mục tiêu là [OWASP crAPI](https://github.com/OWASP/crAPI)** (Completely Ridiculous API — một ứng dụng cố tình chứa lỗ hổng để học API security). Luồng vận hành: user đăng nhập qua Keycloak OIDC/PKCE tại **BFF** (điểm vào duy nhất, sau WAF ModSecurity/CRS DetectionOnly), qua Traefik với **client-certificate mTLS bắt buộc** (Device CA riêng, posture nhúng trong cert) — BFF mint token crAPI-native + forward token Keycloak; mọi hop service-to-service bị Envoy sidecar + OPA ext_authz chặn trước khi tới đích, xác thực bằng SVID do SPIRE cấp; `crapi-identity` + toàn bộ dữ liệu nằm ở OpenStack, các service tiêu thụ ở AWS, nối nhau qua mTLS + WireGuard. Log từ cả hai cloud đổ về PLG Stack (Promtail → Loki → Grafana); khi Grafana phát hiện mẫu tấn công đã định nghĩa, **`incident-analyzer`** đóng gói bằng chứng (log OPA/Envoy/BFF/WAF quanh thời điểm cảnh báo) + chấm điểm ưu tiên rồi gửi email cho admin — **không tự thực thi hành động nào trên cluster** (SOAR execution đã bị bỏ — quyết định A4, xem `HE-THONG-CHI-TIET.md` §7.3).
+**Zero-Trust-based Security Detection and Response for Multi-Cloud Microservices**
 
-**Cần nói rõ ngay từ đầu:** (1) đây không phải sản phẩm bảo mật cắm-là-chạy — policy OPA, alert Grafana, rule WAF viết cứng cho đúng tập endpoint/service của hệ này. (2) **crAPI giữ NGUYÊN các lỗ hổng tầng ứng dụng** (BOLA, BFLA, JWT confusion, SSRF, mass assignment…) — đó là chủ đích. Đóng góp của ZTLab là **lớp Zero-Trust + phát hiện/phân tích bao quanh**: chặn lateral movement, privilege escalation qua network, credential replay, ép step-up, và phát hiện → đóng gói bằng chứng khi lỗ hổng app bị khai thác. Xem chi tiết đầy đủ ở **`HE-THONG-CHI-TIET.md`**.
+Khoá luận tốt nghiệp — Trường Đại học Công nghệ Thông tin, ĐHQG-HCM
 
 ---
 
-## Nguyên lý Zero Trust & phạm vi đóng góp
+## Tóm tắt
 
-### Vì sao Zero Trust — cho vấn đề gì, không phải "bảo mật" chung chung
+Kiến trúc microservices làm tăng mạnh bề mặt giao tiếp nội bộ (east–west) giữa các dịch vụ. Trong mô hình bảo mật dựa trên vành đai (perimeter-based), một dịch vụ đã nằm "bên trong" ranh giới mạng được mặc nhiên tin cậy, nên khi một dịch vụ bị chiếm quyền, kẻ tấn công có thể di chuyển ngang (lateral movement) mà không bị kiểm soát. Khoá luận hiện thực hoá các nguyên lý của **Kiến trúc Zero Trust theo NIST SP 800-207** trên một hệ microservices thật, triển khai **lai giữa hai đám mây (AWS và OpenStack)**, và xây dựng lớp **phát hiện – đóng gói bằng chứng** dựa trên log của chính các điểm thực thi chính sách.
 
-Zero Trust là một tập nguyên lý rất rộng (identity, network, device, data, application, analytics...) — nói "áp Zero Trust để bảo mật hơn" là một câu gần như vô nghĩa, vì bất kỳ kiểm soát bảo mật nào (WAF, IDS, mã hoá, patch quản lý...) cũng "bảo mật hơn". Câu hỏi cần trả lời cụ thể hơn: **Zero Trust giải quyết đúng loại lỗ hổng nào mà các mô hình khác về cấu trúc không giải quyết được?**
+Hệ thống sử dụng **SPIFFE/SPIRE** để cấp danh tính mật mã cho từng workload, **Istio/Envoy** làm điểm thực thi chính sách (PEP), **Open Policy Agent (OPA)** làm điểm quyết định chính sách (PDP) đánh giá từng request, **Keycloak** (OIDC/PKCE, step-up OTP) cho danh tính người dùng, chứng chỉ thiết bị (mTLS phía client) cho tư thế thiết bị, và **PLG Stack** (Promtail–Loki–Grafana) cùng dịch vụ `incident-analyzer` cho phát hiện và phân tích sự cố. Ứng dụng mục tiêu là **[OWASP crAPI](https://github.com/OWASP/crAPI)** — một ứng dụng microservices cố ý chứa lỗ hổng API.
 
-Mô hình *perimeter-based* (kể cả bản nâng cấp bằng VPC/security group/VPN) đặt giả định: một khi request đã ở "bên trong" ranh giới mạng đã được xác thực (đã qua firewall, đã trong cùng VPC, đã qua VPN), các thực thể bên trong tin tưởng lẫn nhau theo mặc định — trust được cấp theo **vị trí mạng**, không theo **danh tính đã xác minh của từng request**. Với microservices, đây chính là lỗ hổng cấu trúc: nếu một service bị chiếm quyền (dependency độc hại, RCE, credential leak...), kẻ tấn công đã "ở trong ranh giới" và có thể gọi tự do sang service khác — *lateral movement* — mà không kiểm soát nào ở tầng perimeter phát hiện được, vì về bản chất traffic đó chưa từng "vượt biên giới" để bị soi.
+Khoá luận gồm ba giai đoạn: **(A)** xây dựng và kiểm chứng hạ tầng Zero Trust; **(B)** thu thập bộ dữ liệu log có nhãn từ hệ thống đang vận hành dưới tải hợp lệ, nhiễu khó và chiến dịch tấn công; **(C)** xây dựng mô hình học máy/học sâu phát hiện hành vi bất thường trên bộ dữ liệu đó, bổ sung cho bộ luật phát hiện tĩnh.
 
-Zero Trust (cụ thể là NIST SP 800-207) nhắm thẳng vào đúng lỗ hổng này bằng cách bỏ hẳn khái niệm "network location = mức trust", thay bằng **identity verification + policy evaluation cho từng request, kể cả traffic nội bộ (east-west)** — kiến trúc chuẩn cho việc này là một **Policy Decision Point (PDP)** tách biệt (ở đây là OPA) đưa ra quyết định allow/deny, và **Policy Enforcement Point (PEP)** (Envoy sidecar) là nơi thực thi quyết định đó tại chỗ, ngay cạnh workload. ZTLab không cố hiện thực hoá toàn bộ 7 tenet của SP 800-207 dàn trải — phạm vi thu hẹp có chủ đích vào các tenet có thể đo lường được bằng thực nghiệm: tenet 2 (secure communication regardless of location), tenet 3 + 6 (per-session/per-request authorization, enforced before access), và một phần tenet 4 (dynamic policy) — xem bảng ánh xạ đầy đủ bên dưới.
+---
 
-### Vì sao những lựa chọn thiết kế còn lại
+## 1. Đặt vấn đề
 
-Mỗi lựa chọn dưới đây là một điều kiện cần để câu hỏi nghiên cứu ở trên "có ý nghĩa để kiểm chứng", không phải lựa chọn tuỳ ý:
+### 1.1. Bài toán
 
-- **Vì sao microservices, không phải monolith?** Lateral movement — vấn đề cốt lõi Zero Trust nhắm tới — không tồn tại trong một monolith (không có ranh giới mạng nội bộ để "di chuyển" qua). Microservices là điều kiện cần để có một bề mặt service-to-service thật sự cần kiểm chứng: nếu không có nhiều service độc lập gọi nhau qua mạng, câu hỏi "policy per-request có chặn được lateral movement không" không thể đặt ra.
-- **Vì sao OWASP crAPI, không phải app tự viết?** Ba lý do: (1) crAPI là ứng dụng **có thật, có cộng đồng**, nhiều microservice độc lập (identity/community/workshop) gọi nhau qua mạng — bề mặt service-to-service thật sự cần kiểm chứng lateral movement, không phải app đồ chơi; (2) crAPI **cố tình chứa lỗ hổng tầng ứng dụng** (BOLA, BFLA, JWT confusion, SSRF…) → tạo được kịch bản "lỗ hổng app bị khai thác" **thật** để đo lớp phát hiện/phản ứng, thay vì phải tự chèn lỗ hổng giả; (3) crAPI có RBAC tự nhiên (user/mechanic/admin) khớp mô hình phân quyền OPA. Trục "dynamic policy" (tenet 4) ở đây thể hiện bằng **device-trust + device-posture + step-up OTP + RBAC + trạng thái SVID** (không còn trục amount/velocity như app tài chính cũ).
-- **Vì sao hybrid multi-cloud (AWS + OpenStack), không phải một cloud/VPC?** Trong một cloud/VPC duy nhất, security group và IAM sẵn có của nhà cung cấp đã tạo ra một phần ranh giới tin cậy — rất khó tách bạch "cái gì do lớp Zero Trust tự xây tạo ra, cái gì do IAM/SG của cloud provider cho sẵn". Hai cloud có mô hình mạng và IAM khác hẳn nhau (AWS VPC quản lý vs OpenStack tự vận hành) buộc lớp Zero Trust (SPIFFE trust domain dùng chung 1 root CA, WireGuard nối tầng mạng, OPA policy nhất quán) phải tự chịu trách nhiệm toàn bộ việc thiết lập trust xuyên biên giới — cô lập đúng phần đóng góp của kiến trúc đang được kiểm chứng, không lẫn với hạ tầng có sẵn.
-- **Vì sao tự dựng VM + Terraform/Ansible/K3s, không dùng PaaS/SaaS quản lý sẵn (EKS+App Mesh, managed Istio, Auth0/Cognito...)?** Vì câu hỏi nghiên cứu chính là *chi phí vận hành thật của việc thêm lớp Zero Trust là bao nhiêu* — nếu dùng dịch vụ quản lý sẵn, chính phần cần đo (latency OPA eval, chi phí cấp/xoay SVID, độ phức tạp giữ pipeline tái tạo được) sẽ nằm trong control plane đóng của nhà cung cấp, không đo được, không giải thích được. Tự dựng từng lớp (SPIRE server/agent, Envoy sidecar, OPA) khiến mọi thứ minh bạch và đo được. Việc này cũng phản ánh gần hơn với thực tế triển khai của nhiều tổ chức tài chính có ràng buộc chủ quyền dữ liệu/pháp lý buộc phải giữ một phần hạ tầng tự vận hành (private cloud kiểu OpenStack) thay vì toàn bộ trên PaaS công cộng.
-- **Vì sao NIST SP 800-207, không phải Forrester ZTX hay BeyondCorp?** SP 800-207 là chuẩn liên bang Mỹ, trung lập vendor, được CISA và DoD Zero Trust Reference Architecture dẫn chiếu làm nền — khác với các khung thương mại (Forrester ZTX là sản phẩm tư vấn) hay case study riêng của một hãng (BeyondCorp mô tả triển khai nội bộ của Google, không phải chuẩn tổng quát). Quan trọng hơn: SP 800-207 định nghĩa Zero Trust bằng **tenet** (thuộc tính hệ thống phải có) chứ không quy định sản phẩm cụ thể — cho phép kiểm chứng theo kiểu "hệ thống có đạt tenet X hay không" một cách khách quan, thay vì đối chiếu với tiêu chí mơ hồ.
+Zero Trust là một tập nguyên lý rộng; phát biểu "áp dụng Zero Trust để tăng bảo mật" không đủ cụ thể để kiểm chứng. Khoá luận tập trung vào câu hỏi: **Zero Trust giải quyết loại lỗ hổng nào mà mô hình vành đai về mặt cấu trúc không giải quyết được, và chi phí vận hành thực tế của nó là bao nhiêu?**
 
-### Khác gì so với các tính năng Zero Trust có sẵn trên cloud
+Mô hình vành đai (kể cả VPC, security group, VPN) cấp niềm tin theo **vị trí mạng**. NIST SP 800-207 thay thế bằng **xác minh danh tính và đánh giá chính sách cho từng request, kể cả lưu lượng nội bộ**, thông qua một PDP tách biệt và các PEP đặt sát workload.
 
-Cả AWS, GCP, Azure đều bán sản phẩm gắn mác "Zero Trust" — cần nói rõ vì sao dựng riêng thay vì dùng thẳng, nếu không phần lý luận ở trên sẽ bị hiểu nhầm là làm lại thứ đã có sẵn. Điểm khác biệt nằm ở **ranh giới bài toán mà từng loại sản phẩm giải quyết**, không phải mức độ "Zero Trust" nhiều hay ít:
+### 1.2. Mục tiêu
 
-- **ZTNA (Zero Trust Network Access) — AWS Verified Access, GCP BeyondCorp Enterprise, Azure AD Conditional Access:** nhóm sản phẩm này giải quyết bài toán *user-to-app* — thay thế VPN cho người dùng/nhân viên truy cập ứng dụng nội bộ, dựa trên identity provider + device posture. Đây **không phải** bài toán ZTLab nhắm tới. ZTLab tập trung vào *workload-to-workload* (service gọi service, east-west traffic sau khi request đã vào trong cluster) — một lớp hoàn toàn khác, thường do sản phẩm khác của chính cloud đó đảm nhiệm (xem mục tiếp theo), và thường ít được gắn mác "Zero Trust" trong marketing dù về bản chất mới là nơi lateral movement thật sự xảy ra.
-- **Service mesh managed — AWS App Mesh, GCP Anthos Service Mesh (đều dựa trên Envoy/Istio):** đây mới là nhóm gần nhất với những gì ZTLab làm (sidecar proxy, mTLS, policy). Khác biệt chính: các dịch vụ managed này **chạy trong một cloud, gắn với control plane của chính cloud đó** — không có sản phẩm managed nào của AWS mở rộng identity/policy sang một workload đang chạy trên OpenStack. SPIFFE/SPIRE giải quyết đúng khoảng trống này: `trust domain` của SPIFFE là một khái niệm **độc lập với cloud provider**, một workload ở AWS và một workload ở OpenStack xác minh lẫn nhau bằng chứng chỉ ký bởi cùng 1 root CA, không cần gọi lại API của bất kỳ cloud nào để verify.
-- **IAM-based service-to-service auth — AWS IAM roles, resource policies, VPC Lattice:** cách phổ biến để một service AWS gọi service AWS khác "an toàn" là dùng IAM role assumption — nhưng đây là một dạng trust đặt vào **control plane của cloud provider** (STS, IAM), không phải một danh tính cryptographic độc lập, tự-chứng-minh (self-contained) như SPIFFE SVID (X.509 cert, verify được ngay tại chỗ, không cần round-trip gọi ngược lại IAM). Khác biệt này chỉ thật sự quan trọng khi hai bên giao tiếp **không thuộc cùng một control plane** — đúng tình huống hybrid-cloud của ZTLab, không quan trọng nếu chỉ chạy trong 1 AWS account.
-- **Policy-as-code tập trung (OPA/Rego) so với IAM policy JSON rải rác theo từng resource:** IAM policy attach vào từng role/resource riêng lẻ — muốn biết "ai được làm gì" phải tổng hợp từ nhiều nơi. OPA tách hẳn quyết định phân quyền ra một service riêng (Policy Decision Point), một file Rego là nguồn sự thật duy nhất, version-control được, test được độc lập với hạ tầng — gần với triết lý "Policy as Code" hơn là "Infrastructure Configuration".
+1. Hiện thực hoá một kiến trúc Zero Trust trên hệ microservices đa đám mây bằng các thành phần mã nguồn mở, có khả năng tái dựng hoàn toàn từ mã nguồn (Infrastructure as Code).
+2. Kiểm chứng bằng thực nghiệm rằng các chính sách **thật sự được thực thi** trên cụm đang chạy, không chỉ tồn tại trong manifest.
+3. Đo lường chi phí vận hành và chi phí runtime (độ trễ, tài nguyên) của lớp Zero Trust.
+4. Xây dựng bộ dữ liệu log có nhãn thu từ hệ thống thật, làm nền cho mô hình phát hiện bất thường dựa trên học máy.
 
-**Những gì cloud-native ZT làm tốt mà ZTLab không cố làm lại:** device posture/health attestation tích hợp EDR (CrowdStrike, Jamf...), identity federation quy mô doanh nghiệp (SSO hàng chục nghìn user), DDoS/edge protection, và — quan trọng nhất — **vận hành dưới dạng managed service** (không phải tự vá lỗi deploy mỗi lần dựng lại). ZTLab đánh đổi sự tiện lợi đó để lấy khả năng đo lường và tính di động xuyên hạ tầng — một đánh đổi có chủ đích, không phải vì không biết tới các sản phẩm cloud-native.
+### 1.3. Phạm vi và giới hạn
 
-### Zero Trust áp dụng ở lớp nào, và ZTLab có phải "khung giải pháp mới" không
+- Khoá luận **không đề xuất một mô hình Zero Trust mới**; đây là một hiện thực hoá cụ thể của SP 800-207, áp dụng có chọn lọc vào các tenet đo lường được bằng thực nghiệm.
+- Các lỗ hổng tầng ứng dụng của crAPI (BOLA, BFLA, JWT confusion, SSRF, mass assignment…) được **giữ nguyên có chủ đích**. Đóng góp nằm ở lớp Zero Trust và lớp phát hiện bao quanh ứng dụng: chặn di chuyển ngang, leo thang đặc quyền qua mạng, phát lại thông tin xác thực, buộc xác thực bước hai, và phát hiện, đóng gói bằng chứng khi lỗ hổng ứng dụng bị khai thác.
+- Chính sách OPA, luật cảnh báo và luật WAF được viết riêng cho bề mặt tấn công của hệ thống này; chúng không phải sản phẩm có thể áp dụng nguyên trạng cho hệ thống khác.
+- `incident-analyzer` **chỉ phân tích và thông báo**, không tự thực thi hành động khắc phục trên cụm (xem quyết định thiết kế tại `baocao-hatang/HE-THONG-CHI-TIET.md` §7.3).
 
-**Không.** ZTLab không đề xuất một mô hình Zero Trust mới — nó là một **hiện thực hoá cụ thể** của SP 800-207 bằng các thành phần mã nguồn mở sẵn có (SPIFFE/SPIRE, OPA, Envoy, Traefik mTLS, WAF ModSecurity/CRS, Grafana, `incident-analyzer` tự viết), áp dụng có chọn lọc, không đều, lên 7 tenet gốc:
+---
 
-| # | Tenet (NIST SP 800-207) | ZTLab có làm không | Bằng gì |
+## 2. Cơ sở lựa chọn thiết kế
+
+| Lựa chọn | Lý do |
+|---|---|
+| **Microservices** thay vì monolith | Di chuyển ngang chỉ tồn tại khi có nhiều dịch vụ độc lập gọi nhau qua mạng; đây là điều kiện cần để đặt câu hỏi kiểm chứng. |
+| **OWASP crAPI** thay vì ứng dụng tự viết | Ứng dụng có cộng đồng, nhiều microservice thật (identity, community, workshop); chứa sẵn lỗ hổng API để tạo kịch bản khai thác thật; có phân quyền tự nhiên (user, mechanic, admin) phù hợp với RBAC trên OPA. |
+| **Đa đám mây lai (AWS + OpenStack)** | Trong một đám mây đơn, IAM và security group của nhà cung cấp đã tạo một phần ranh giới tin cậy. Hai nền tảng có mô hình mạng và IAM khác nhau buộc lớp Zero Trust (trust domain SPIFFE chung, WireGuard, chính sách OPA thống nhất) tự chịu trách nhiệm thiết lập niềm tin xuyên biên giới, giúp cô lập đúng phần đóng góp cần đo. |
+| **Tự dựng (Terraform, Ansible, K3s)** thay vì dịch vụ quản lý sẵn | Các đại lượng cần đo (độ trễ đánh giá chính sách, chi phí cấp và xoay vòng SVID, độ phức tạp vận hành) nằm trong control plane đóng nếu dùng EKS, App Mesh hay Istio managed. |
+| **NIST SP 800-207** thay vì Forrester ZTX hay BeyondCorp | Chuẩn trung lập nhà cung cấp, định nghĩa Zero Trust bằng các tenet có thể kiểm chứng khách quan; được CISA và DoD Zero Trust Reference Architecture dẫn chiếu. |
+
+**So với các sản phẩm "Zero Trust" của nhà cung cấp đám mây.** Nhóm ZTNA (AWS Verified Access, BeyondCorp Enterprise, Azure Conditional Access) giải quyết bài toán *người dùng → ứng dụng*. Khoá luận tập trung vào bài toán *workload → workload*. Service mesh được quản lý sẵn (App Mesh, Anthos Service Mesh) gắn với control plane của một đám mây và không mở rộng danh tính sang workload trên OpenStack. Xác thực dịch vụ dựa trên IAM đặt niềm tin vào control plane của nhà cung cấp. Ngược lại, SPIFFE SVID là danh tính mật mã tự chứa, xác minh được tại chỗ bằng một root CA chung, độc lập với nhà cung cấp.
+
+---
+
+## 3. Ánh xạ các tenet của NIST SP 800-207
+
+| # | Tenet | Mức độ | Hiện thực |
 |---|---|---|---|
-| 1 | *All data sources and computing services are considered resources* | Một phần | OPA phân biệt `internal_service_request` (có SVID) vs `external_api_request` (không SVID) theo **danh tính đã xác minh** (identity), không theo IP/network location — đúng tinh thần tenet, nhưng vẫn là một dạng phân loại request, không xử lý "mọi resource hoàn toàn như nhau" |
-| 2 | *All communication is secured regardless of network location* | Có | mTLS bắt buộc mọi service-to-service qua Envoy + SPIRE SVID, kể cả cross-cloud qua WireGuard tunnel |
-| 3 | *Access to resources is granted on a per-session basis* | Có | SVID TTL 1 giờ, auto-rotate; mỗi request đi qua OPA ext_authz riêng biệt — không có khái niệm "authenticated once, trusted thereafter" |
-| 4 | *Access determined by dynamic policy* (identity, app, asset, behavioral attributes) | Một phần | OPA dùng role (RBAC crapi-user/mechanic/admin) + trạng thái SVID + **device-posture/device-trust từ client certificate thật** (Device CA, SAN URI định danh + Subject OU posture, Traefik `RequireAndVerifyClientCert`) + **step-up OTP** (`acr=high`) cho hành động nhạy cảm — nhưng chưa có health attestation tích hợp EDR |
-| 5 | *Monitor and measure the integrity/security posture of all assets* | Một phần | `security-scanner-job.yaml` + `posture-agent` CronJob (ns crapi) kiểm tra container posture (uid, Linux capabilities, ảnh unpinned); Gatekeeper admission chặn container vi phạm — nhưng vẫn chủ yếu *phát hiện*, không tự thực thi hành động khắc phục (xem mục "ZTLab đóng góp gì" — SOAR execution đã bị bỏ) |
-| 6 | *Authentication/authorization are dynamic and strictly enforced before access* | Có | Istio CUSTOM AuthorizationPolicy → OPA ext_authz **fail-closed** (OPA lỗi/timeout → 503, không fail-open); xác nhận thật bằng `tests/chaos_opa_failover.sh` |
-| 7 | *Collect information on assets/network state to improve security posture* | Có | PLG Stack + OPA decision log (`decision_id` riêng từng decision) + istio access log (có SVID peer) + BFF audit log + WAF audit log + `incident-analyzer` evidence bundle — dùng để detect, phân tích, điều chỉnh policy |
-
-Diễn giải bảng trên bằng một câu: ZTLab làm tốt các tenet thuộc phạm trù *identity + network + policy enforcement* (2, 3, 6, một phần 4), còn tenet thuộc phạm trù *device/asset posture* (5) mới dừng ở mức thủ công/one-off — đây không phải sơ suất che giấu mà là ranh giới phạm vi có chủ đích của một đồ án quy mô lab, đã nói rõ ở phần "ZTLab đóng góp gì" bên dưới.
-
-Gộp các tenet có liên quan lại thành 5 nhóm nguyên lý thực hành (không phải một danh sách cạnh tranh với bảng 7 tenet ở trên — chỉ là cách trình bày cô đọng hơn cho sơ đồ), ánh xạ sang từng thành phần cụ thể đang chạy:
+| 1 | Mọi nguồn dữ liệu và dịch vụ tính toán là tài nguyên | Một phần | OPA phân loại request theo danh tính đã xác minh (có hoặc không có SVID), không theo IP. |
+| 2 | Mọi giao tiếp được bảo mật bất kể vị trí mạng | Đạt | mTLS bắt buộc cho mọi lưu lượng giữa các dịch vụ qua Envoy và SVID của SPIRE, kể cả xuyên đám mây qua WireGuard. |
+| 3 | Quyền truy cập cấp theo từng phiên | Đạt | SVID có thời hạn 1 giờ, tự xoay vòng; mỗi request được OPA ext_authz đánh giá độc lập. |
+| 4 | Quyền truy cập do chính sách động quyết định | Một phần | OPA kết hợp RBAC, trạng thái SVID, độ tin cậy và tư thế thiết bị từ chứng chỉ client (Device CA), cùng step-up OTP (`acr=high`) cho hành động nhạy cảm. Chưa tích hợp chứng thực sức khoẻ thiết bị từ EDR. |
+| 5 | Giám sát tính toàn vẹn và tư thế an ninh của tài sản | Một phần | `posture-agent` kiểm tra tư thế container; Gatekeeper chặn container vi phạm khi admission. Chủ yếu dừng ở mức phát hiện. |
+| 6 | Xác thực và phân quyền động, thực thi nghiêm ngặt trước khi truy cập | Đạt | Istio CUSTOM AuthorizationPolicy gọi OPA ext_authz ở chế độ fail-closed (OPA lỗi hoặc hết thời gian chờ thì trả 503); kiểm chứng bằng `tests/chaos_opa_failover.sh`. |
+| 7 | Thu thập thông tin để cải thiện tư thế an ninh | Đạt | Log quyết định OPA, access log Istio (kèm SVID), audit log BFF, audit log WAF, gói bằng chứng của `incident-analyzer`. |
 
 ```mermaid
 flowchart LR
     subgraph NT["Nguyên lý Zero Trust (NIST SP 800-207)"]
         direction TB
-        T1["No implicit trust<br/>— mọi kết nối phải xác thực"]
-        T2["Continuous Verification<br/>— per-request, không theo session"]
-        T3["Least Privilege &<br/>Micro-segmentation"]
-        T4["Continuous Monitoring,<br/>Assume Breach"]
-        T5["Short-lived credentials,<br/>tự động rotate"]
+        T1["Không tin cậy mặc định"]
+        T2["Xác minh liên tục theo từng request"]
+        T3["Đặc quyền tối thiểu & phân đoạn vi mô"]
+        T4["Giám sát liên tục, giả định đã bị xâm nhập"]
+        T5["Thông tin xác thực ngắn hạn, tự xoay vòng"]
     end
-    subgraph ZT["Triển khai trong ZTLab"]
+    subgraph ZT["Hiện thực trong hệ thống"]
         direction TB
-        I1["SPIRE SVID X.509 + Envoy mTLS<br/>bắt buộc mọi service-to-service"]
-        I2["OPA ext_authz (Rego)<br/>kiểm JWT + RBAC + SVID mỗi request"]
-        I3["NetworkPolicy theo namespace +<br/>device-cert posture theo hành động"]
-        I4["PLG Stack + incident-analyzer<br/>phát hiện & đóng gói bằng chứng"]
-        I5["SVID TTL 1h, device cert 7 ngày<br/>rotate tự động, zero-downtime"]
+        I1["SPIRE SVID X.509 + Envoy mTLS"]
+        I2["OPA ext_authz: JWT + RBAC + SVID mỗi request"]
+        I3["NetworkPolicy + tư thế thiết bị theo hành động"]
+        I4["PLG Stack + incident-analyzer"]
+        I5["SVID TTL 1 giờ, chứng chỉ thiết bị 7 ngày"]
     end
     T1 --> I1
     T2 --> I2
@@ -80,225 +91,236 @@ flowchart LR
     T5 --> I5
 ```
 
-### ZTLab đóng góp gì — và không đóng góp gì
-
-Cần tách bạch hai loại tuyên bố dễ bị nhầm lẫn với nhau:
-
-1. *"Hệ thống này chặn được N request tấn công trong bài test"* — đây là **kết quả thực nghiệm có thật**, đo được (`tests/crapi_*.sh`, kết quả trong `SAN-SANG-GIAI-DOAN-B.md` và `AUDIT-THUC-THI.md` §6).
-2. *"Hệ thống này làm giảm tấn công / tăng bảo mật"* — đây là một tuyên bố **không có nghĩa** ở phạm vi một lab/testbed đơn lẻ. ZTLab không bảo vệ bất kỳ tài sản thật nào ngoài chính nó; nó không phải một control có thể "lắp vào" một hệ thống khác để hệ thống đó an toàn hơn. Toàn bộ Rego policy (`opa/crapi-policies/`), alert rule Grafana (`plg-stack/grafana/alerting/`), và WAF rule (`k8s/crapi/waf.yaml`) đều viết cứng theo đúng tên endpoint/service/namespace của riêng hệ thống này — di chuyển nguyên trạng sang một codebase khác sẽ không hoạt động, phải viết lại từ đầu theo bề mặt tấn công (attack surface) của hệ thống đích. Chính lần migration finance-app → crAPI (ghi lại trong lịch sử git của dự án) là minh chứng: đổi ứng dụng mục tiêu buộc viết lại toàn bộ `service-graph`, policy, alert rule, script tấn công.
-
-Vậy giá trị thực của dự án nằm ở đâu, nếu không phải "giảm tấn công"? Ba điểm, xếp theo mức độ chắc chắn giảm dần:
-
-**1. Bằng chứng thực nghiệm về operational feasibility — và về cái giá thật của nó.** Đóng góp **không phải** "ZTLab là một hệ thống chạy được" — một artifact chạy được không phải kết quả nghiên cứu, và pipeline này **không** tự chạy trơn tru qua các lần destroy/redeploy: mỗi lần dựng lại từ số 0 đều lộ ra lỗi mới chỉ xuất hiện ở đường fresh-deploy (SSH host-key sau khi VM đổi IP, `docker save` ảnh multi-arch hỏng khi `ctr import`, DNS/WireGuard chết vì uplink drop UDP → SPIRE/mТLS sập dây chuyền — xem `HE-THONG-CHI-TIET.md` §10.2). Đóng góp thật nằm ở **quá trình lặp lại thực nghiệm đó**: lắp SPIFFE/SPIRE + OPA (PDP) + Istio/Envoy (PEP) + PLG/incident-analyzer (vòng lặp detect–analyze) thành một pipeline xuyên hai cloud có mô hình mạng/IAM khác hẳn nhau, rồi *đo lại chính xác nó gãy ở đâu và vì sao* — dữ liệu về chi phí kỹ sư thật của Zero Trust mà phần lớn tài liệu SP 800-207 (dừng ở nguyên lý trừu tượng) không đề cập.
-
-**2. Số liệu chi phí runtime.** Câu hỏi "áp Zero Trust thì tốn thêm bao nhiêu mỗi request?" thường chỉ được trả lời định tính. `tests/perf_overhead.py` / `tests/collect_metrics.py` đo cho *chính kiến trúc này*: overhead latency lớp mТLS + OPA ext_authz (per-request), CPU/RAM steady-state của SPIRE/OPA/incident-analyzer. Hữu ích cho người *đang cân nhắc* áp dụng kiến trúc tương tự — không phải bằng chứng "có Zero Trust thì an toàn hơn". *(Các script đo này hiện còn tham chiếu tên service của app cũ — cần cập nhật trước khi chạy lại cho crAPI.)*
-
-**3. Giới hạn của cách tiếp cận — cũng là một phần đóng góp, không phải điểm trừ cần giấu.** Lớp detection dựa hoàn toàn trên rule tĩnh (LogQL ngưỡng cố định) — không học pattern mới, không phân biệt tấn công chậm/rải rác, và **không suy rộng ra ngoài các kịch bản đã định nghĩa**: kỹ thuật không khớp LogQL nào sẽ đi qua không dấu vết. Ngược lại, OPA **có** tự verify chữ ký JWT của người dùng (Keycloak JWKS + OIDC discovery) — khác với bản finance-app trước đây giao việc đó cho tầng ứng dụng. Ghi nhận rõ giới hạn theo-thiết-kế quan trọng hơn quảng bá "chặn 100% trong bài test".
-
-Tóm lại: ZTLab nên được đọc như **một nghiên cứu thực nghiệm về tính khả thi và chi phí vận hành** của Zero Trust Architecture trong bối cảnh microservices đa cloud, kèm bộ số liệu đo được làm minh chứng — chứ không phải một sản phẩm, một bộ policy tái sử dụng được, hay một tuyên bố về hiệu quả phòng thủ trong thực tế sản xuất.
-
 ---
 
-## Kiến trúc
+## 4. Kiến trúc hệ thống
 
 ```mermaid
 flowchart LR
-    U(["👤 User<br/>browser + client cert"])
+    U(["Người dùng<br/>trình duyệt + chứng chỉ thiết bị"])
 
-    subgraph AWS["AWS K3s"]
+    subgraph AWS["AWS — K3s"]
         direction TB
-        TR["Traefik<br/>websecure · client-cert mTLS (Device CA)"]
-        WAF["waf<br/>ModSecurity/CRS DetectionOnly"]
-        KC["Keycloak<br/>(OpenStack — xem dưới)"]
-        BFF["bff<br/>edge PEP · token-exchange · device-trust/posture từ cert"]
+        TR["Traefik<br/>mTLS phía client (Device CA)"]
+        WAF["WAF<br/>ModSecurity/CRS (DetectionOnly)"]
+        BFF["BFF<br/>PEP biên · token exchange · tư thế thiết bị"]
         WEB["crapi-web (SPA)"]
-        COM["crapi-community (Go)"]
-        WS["crapi-workshop (Django)"]
-        OPAA["OPA ×3<br/>zta/crapi/authz"]
+        COM["crapi-community"]
+        WS["crapi-workshop"]
+        OPAA["OPA (PDP)"]
         TR --> WAF --> BFF
         BFF --> WEB
         BFF -->|"mTLS SVID + OPA"| COM
         BFF -->|"mTLS SVID + OPA"| WS
     end
 
-    subgraph OS["OpenStack K3s"]
+    subgraph OS["OpenStack — K3s"]
         direction TB
-        ID["crapi-identity (Java)<br/>cấp JWT crAPI"]
-        PG["postgresdb<br/>(DB DUY NHẤT)"]
-        MH["mailhog"]
-        OPAO["OPA ×3<br/>zta/crapi/crosscloud"]
+        KC["Keycloak<br/>OIDC/PKCE, step-up OTP"]
+        ID["crapi-identity"]
+        PG["PostgreSQL"]
+        OPAO["OPA (PDP cross-cloud)"]
         ID --- PG
     end
 
-    subgraph OBS["Observability & Detection"]
+    subgraph OBS["Giám sát & phát hiện"]
         direction TB
         LK["Loki"]
-        GF["Grafana alert rules"]
-        IA["incident-analyzer<br/>evidence bundle + priority score"]
-        EM(["📧 Admin"])
+        GF["Grafana alerting"]
+        IA["incident-analyzer<br/>gói bằng chứng + điểm ưu tiên"]
+        EM(["Quản trị viên"])
         LK --> GF --> IA --> EM
     end
 
-    U -->|"HTTPS + client cert"| TR
-    BFF -->|"WireGuard + mTLS SVID cross-cloud"| ID
-    BFF -.->|"OIDC/PKCE (Keycloak thật ở OpenStack)"| KC
-    COM -->|"/identity/api/auth/verify (mỗi request)"| ID
-    WS -->|"/verify"| ID
+    U -->|"HTTPS + chứng chỉ client"| TR
+    BFF -->|"WireGuard + mTLS SVID"| ID
+    BFF -.->|"OIDC/PKCE"| KC
+    COM -->|"xác thực token"| ID
+    WS -->|"xác thực token"| ID
     AWS -.->|Promtail| LK
     OS -.->|Promtail| LK
 ```
 
-**Stack:**
-- **Identity:** Keycloak OIDC/PKCE (đặt trên OpenStack cùng dịch vụ định danh — Nghị định 53, realm `ztlab`, role crapi-user/mechanic/admin/soc-analyst), SPIFFE/SPIRE X.509 SVID (trust domain `ztlab.local`, TTL 1h, scheme `spiffe://ztlab.local/<cloud>/<svc>`)
-- **Edge/perimeter:** Traefik (websecure, `TLSOption` `RequireAndVerifyClientCert`) → WAF (ModSecurity3 + OWASP CRS, DetectionOnly — đối chứng cho luận điểm BOLA vượt qua chữ ký) → BFF. Device CA riêng (tách khỏi SPIRE root CA); cert client mang định danh (SAN URI) + posture (Subject OU) — `scripts/issue-device-cert.sh`
-- **Mesh:** Istio 1.22.3 — PeerAuth STRICT + DestinationRule custom-SAN mỗi service + CUSTOM AuthorizationPolicy → OPA ext_authz
-- **Policy:** OPA ×2 PDP (AWS `zta/crapi/authz/allow`, OpenStack `zta/crapi/crosscloud/allow`); `service_acl` sinh từ `policy/service-graph-crapi.yaml`
-- **Edge PEP:** BFF (FastAPI) — điểm vào duy nhất, OIDC/PKCE + mint token crAPI RS256 + device-trust/posture (từ client cert đã verify) + audit
-- **Target app:** OWASP crAPI Core (identity/community/workshop/web/mailhog) + Postgres×1 (OpenStack) + Mongo/Redis (AWS)
-- **Observability & detection:** Promtail → Loki → Grafana; Prometheus; `incident-analyzer` (đóng gói bằng chứng + chấm điểm ưu tiên + email — không tự thực thi hành động trên cluster)
+**Luồng xử lý một request.** Người dùng truy cập qua Traefik với chứng chỉ thiết bị bắt buộc (posture được nhúng trong chứng chỉ). Request đi qua WAF (chế độ ghi nhận, làm đối chứng) rồi tới BFF, điểm vào duy nhất. BFF thực hiện đăng nhập OIDC/PKCE với Keycloak và phát hành token tương thích crAPI. Mọi lời gọi giữa các dịch vụ đều đi qua Envoy sidecar với mTLS bằng SVID và được OPA đánh giá trước khi tới đích. Dịch vụ định danh và dữ liệu đặt tại OpenStack; các dịch vụ tiêu thụ đặt tại AWS; hai cụm nối nhau qua WireGuard. Log từ cả hai cụm được gom về Loki. Khi luật cảnh báo trên Grafana khớp, `incident-analyzer` thu thập log liên quan quanh thời điểm cảnh báo, chấm điểm ưu tiên và gửi email cho quản trị viên.
+
+**Thành phần công nghệ**
+
+| Lớp | Thành phần |
+|---|---|
+| Hạ tầng | Terraform (AWS, OpenStack), Ansible, K3s, WireGuard |
+| Danh tính workload | SPIFFE/SPIRE — trust domain `ztlab.local`, SVID X.509 TTL 1 giờ |
+| Danh tính người dùng | Keycloak (realm `ztlab`), OIDC/PKCE, step-up OTP |
+| Tư thế thiết bị | Device CA riêng; chứng chỉ client mang định danh (SAN URI) và tư thế (Subject OU) |
+| Service mesh (PEP) | Istio 1.22.3 — PeerAuthentication STRICT, CUSTOM AuthorizationPolicy |
+| Chính sách (PDP) | Open Policy Agent; ACL dịch vụ sinh tự động từ `policy/service-graph-crapi.yaml` |
+| Biên | Traefik, ModSecurity v3 + OWASP CRS, BFF (FastAPI) |
+| Admission control | OPA Gatekeeper |
+| Giám sát & phát hiện | Promtail, Loki, Grafana, Prometheus, `incident-analyzer` |
+| Ứng dụng mục tiêu | OWASP crAPI (identity, community, workshop, web, mailhog) |
+
+Mô tả chi tiết từng thành phần, cấu hình và sáu luồng hoạt động có tại [`baocao-hatang/HE-THONG-CHI-TIET.md`](baocao-hatang/HE-THONG-CHI-TIET.md). Sơ đồ draw.io gốc nằm trong `docs/diagrams/`.
 
 ---
 
-## Cấu trúc repo
+## 5. Phương pháp thực nghiệm và tiến độ
+
+### Giai đoạn A — Hạ tầng Zero Trust (đã hoàn thành)
+
+- Dựng toàn bộ hệ thống từ trạng thái trống bằng một lệnh và lặp lại nhiều vòng destroy/redeploy để phát hiện các lỗi chỉ xuất hiện khi triển khai mới.
+- **Kiểm toán thực thi:** xác minh trên cụm đang chạy rằng từng AuthorizationPolicy, NetworkPolicy, constraint Gatekeeper, luật WAF và chín luật cảnh báo thực sự có hiệu lực.
+- Kịch bản tấn công thật (bảng dưới) xác nhận mã từ chối trả về từ đúng điểm thực thi và log tương ứng xuất hiện trong Loki.
+- Kết quả: [`baocao-hatang/SAN-SANG-GIAI-DOAN-B.md`](baocao-hatang/SAN-SANG-GIAI-DOAN-B.md), [`baocao-hatang/AUDIT-THUC-THI.md`](baocao-hatang/AUDIT-THUC-THI.md).
+
+| Kịch bản | Cơ chế được kiểm chứng | Phân loại |
+|---|---|---|
+| `crapi_lateral_movement.sh` | Dịch vụ có SVID hợp lệ gọi dịch vụ ngoài ACL, bị OPA từ chối | ATT&CK T1021 |
+| `crapi_bfla.sh` | Người dùng thường ghi vào endpoint quản trị, bị BFF và OPA từ chối | OWASP API5:2023 |
+| `crapi_step_up.sh` | Hành động nhạy cảm khi phiên chưa xác thực bước hai, trả `401 step_up_required` | — |
+| `crapi_access_denied.sh` | Gọi nội bộ không có SVID; thiết bị không tuân thủ thực hiện thao tác ghi | ATT&CK T1078 |
+| `crapi_brute_force.sh` | Đăng nhập sai liên tiếp trên Keycloak | ATT&CK T1110 |
+| `crapi_bola.sh` | Đối chứng BOLA: WAF không phát hiện, chỉ lớp ZTA xử lý được | OWASP API1:2023 |
+| `crapi_sqli_waf.sh` | Đối chứng SQLi: CRS phát hiện và ghi nhận | — |
+| `chaos_opa_failover.sh`, `chaos_spire_failover.sh` | Hành vi fail-closed của PDP; SVID cache khi SPIRE server ngừng | — |
+
+### Giai đoạn B — Thu thập dữ liệu có nhãn (đã hoàn thành)
+
+- Ba nguồn lưu lượng chạy đồng thời trên cụm thật: **N1** (tải hợp lệ, nhịp ngẫu nhiên), **N2** (nhiễu khó: thử lại, bỏ dở step-up, sai vai trò, hết phiên, suy giảm tư thế thiết bị) và **A** (chiến dịch tấn công nhiều biến thể).
+- Nhãn được gán ngoại tuyến từ nhật ký chạy `runs.jsonl` theo cặp (thực thể, khoảng thời gian), không chèn marker vào lưu lượng, nhằm tránh rò rỉ nhãn.
+- Danh sách đặc trưng được chốt trước khi thu: [`docs/FEATURES-GIAIDOAN-C.md`](docs/FEATURES-GIAIDOAN-C.md).
+- Kết quả: 51,3 giờ dữ liệu hợp lệ (mục tiêu ban đầu 150 giờ); hơn 160 lượt chiến dịch tấn công. Mọi bất thường trong quá trình thu đều được ghi nguyên trạng tại [`baocao-ml-dl/BAOCAO-THU-DULIEU-B.md`](baocao-ml-dl/BAOCAO-THU-DULIEU-B.md).
+
+### Giai đoạn C — Mô hình phát hiện bất thường (đang thực hiện)
+
+Huấn luyện và đánh giá mô hình học máy/học sâu trên các cửa sổ đặc trưng thu ở giai đoạn B, đối chứng với bộ luật phát hiện tĩnh hiện có. Bộ luật tĩnh dùng ngưỡng LogQL cố định nên không phát hiện được kỹ thuật nằm ngoài các kịch bản đã định nghĩa.
+
+---
+
+## 6. Đóng góp và hạn chế
+
+**Đóng góp**
+
+1. **Bằng chứng thực nghiệm về tính khả thi vận hành:** ghép SPIFFE/SPIRE, OPA, Istio/Envoy và vòng phát hiện–phân tích thành một pipeline xuyên hai đám mây có mô hình mạng khác nhau, đồng thời ghi lại chính xác pipeline gãy ở đâu và vì sao qua các lần tái dựng. Đây là chi phí kỹ thuật mà phần lớn tài liệu về SP 800-207 không đề cập.
+2. **Phát hiện về phân đoạn mạng:** phân đoạn theo địa chỉ IP/cổng (L4) không biểu diễn được ràng buộc "dịch vụ nào được gọi dịch vụ nào" giữa các pod cùng namespace, trong khi phân đoạn theo danh tính workload (L7) làm được ([`baocao-hatang/PHAT-HIEN-PHAN-DOAN-L4.md`](baocao-hatang/PHAT-HIEN-PHAN-DOAN-L4.md)).
+3. **Số liệu chi phí runtime** của lớp mTLS và OPA ext_authz trên chính kiến trúc này.
+4. **Bộ dữ liệu log có nhãn** thu từ hệ thống Zero Trust thật, có nhiễu khó và quy trình gán nhãn chống rò rỉ.
+
+**Hạn chế.** Các hạn chế được phân tích đầy đủ (hiện tượng, nguyên nhân, thực nghiệm loại trừ, hướng khắc phục) tại [`baocao-hatang/HAN-CHE-VA-HUONG-PHAT-TRIEN.md`](baocao-hatang/HAN-CHE-VA-HUONG-PHAT-TRIEN.md). Có thể kể đến: chưa có SPIFFE federation nên OPA cross-cloud không nhận được danh tính nguồn; tư thế thiết bị chưa tích hợp EDR; lớp phát hiện hiện dựa hoàn toàn trên luật tĩnh.
+
+---
+
+## 7. Cấu trúc thư mục
 
 ```
-terraform/          Provisioning AWS + OpenStack (IaC)
-ansible/            Inventory + playbooks (baseline, k3s, wireguard, promtail)
-k8s/crapi/          Manifest ứng dụng crAPI + BFF + OPA + mesh policy + NetworkPolicy
-k8s/{istio,keycloak,identity,gatekeeper,vault,plg-stack,monitoring,security-monitoring,rbac,dns}/
-opa/crapi-policies/ Rego: zta_crapi (authz AWS), crosscloud_crapi (OpenStack), service_acl (generated)
-policy/             service-graph-crapi.yaml — nguồn sự thật cho service_acl + NetworkPolicy
-spire/              SPIRE server/agent config + K8s manifest + root CA
-services/           bff (edge PEP) + incident-analyzer (Dockerfile chung)
-deploy/vendor/crapi-keys/  khoá JWT công khai của crAPI (bff mint bằng khoá này)
-deploy/vendor/device-ca/   Device CA cho client-cert mTLS (A3) — key không commit, .gitignore
-scripts/            deploy-all, deploy-app, deploy-crapi, deploy-security-stack, destroy-all,
-                    ensure-spire-entries, gen-rego-acl, gen-networkpolicy, k8s-tunnel, open-admin-uis,
-                    sync-app-images, issue-device-cert (phát hành client cert theo posture)
-tests/              crapi_*.sh (kịch bản tấn công) + crapi_run_all + lib/ + chaos_*.sh + test_service_graph_consistency
-legacy/             Cấu hình Envoy/SPIRE trước khi migrate sang Istio — tham chiếu lịch sử, KHÔNG áp dụng
-HE-THONG-CHI-TIET.md  Tài liệu hệ thống đầy đủ (kiến trúc/cấu hình/module/flow)
-SAN-SANG-GIAI-DOAN-B.md  Bàn giao đóng sổ hạ tầng: trạng thái cuối từng hạng mục + số liệu chốt
-HAN-CHE-VA-HUONG-PHAT-TRIEN.md  Hạn chế (H1–H18) + hướng phát triển
-DEPLOY.md           Quy trình triển khai + vận hành hàng ngày
+terraform/          Cấp phát hạ tầng AWS và OpenStack
+ansible/            Inventory và playbook (baseline, K3s, WireGuard, Promtail)
+k8s/                Manifest Kubernetes: crAPI, BFF, OPA, Istio, Keycloak, Gatekeeper, PLG, giám sát
+opa/                Chính sách Rego (authz AWS, crosscloud OpenStack, service ACL sinh tự động)
+policy/             Service graph — nguồn sự thật duy nhất cho ACL và NetworkPolicy
+spire/              Cấu hình SPIRE server/agent và root CA
+services/           BFF và incident-analyzer
+scripts/            Triển khai, gỡ bỏ, sinh chính sách, sao lưu/khôi phục, kiểm tra sức khoẻ
+tests/              Kịch bản tấn công, chaos test, đo hiệu năng, công cụ thu dữ liệu giai đoạn B
+ml-dataset/         Công cụ sinh dữ liệu mẫu cho học máy
+docs/               Danh sách đặc trưng, bảng service graph sinh tự động, sơ đồ kiến trúc
+baocao-hatang/      Báo cáo giai đoạn A: hệ thống, triển khai, kiểm toán, hạn chế
+baocao-ml-dl/       Báo cáo giai đoạn B: cổng nghiệm thu, gán nhãn, thu dữ liệu
+legacy/             Cấu hình trước khi chuyển sang Istio (chỉ để tham chiếu)
 ```
 
 ---
 
-## Yêu cầu trước khi deploy
+## 8. Tái lập thực nghiệm
 
-Hướng dẫn cài đặt từng bước thủ công (dùng khi debug hoặc muốn hiểu rõ từng khâu) nằm ở **[DEPLOY.md](DEPLOY.md)**. Phần dưới đây chỉ tóm tắt những gì cần chuẩn bị trước.
+### 8.1. Yêu cầu
 
-**Công cụ** (script `deploy-all.sh` tự cài phần lớn, xem Bước 1 [DEPLOY.md](DEPLOY.md)): Ansible, Docker, kubectl, Terraform, AWS CLI, OpenStack CLI, jq, openssl, socat.
-
-**Tài khoản cloud:** AWS IAM access key (đủ quyền tạo VPC/EC2/security group), tài khoản OpenStack (project + user đã có quota).
-
-**Biến bắt buộc trong `.env`** (copy từ `.env.template`):
+- **Công cụ:** Ansible, Docker, kubectl, Terraform, AWS CLI, OpenStack CLI, jq, openssl, socat. Script triển khai tự cài phần lớn các công cụ này.
+- **Tài khoản:** AWS IAM access key (quyền tạo VPC, EC2, security group); một project OpenStack đủ quota.
+- **Biến môi trường:** sao chép `.env.template` thành `.env` rồi điền:
 
 | Biến | Ý nghĩa |
 |---|---|
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | IAM key để Terraform provision AWS |
-| `AWS_DEFAULT_REGION` | Mặc định `ap-southeast-1` |
-| `OS_AUTH_URL` / `OS_USERNAME` / `OS_PASSWORD` / `OS_PROJECT_NAME` / `OS_REGION_NAME` | Credential OpenStack (Keystone v3) |
-| `KEYCLOAK_ADMIN_PASSWORD` | Mật khẩu admin Keycloak — script tạo secret từ giá trị này lúc deploy |
-| `KEYCLOAK_DB_PASSWORD` | Mật khẩu Postgres nội bộ cho Keycloak |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | Thông tin xác thực AWS (mặc định `ap-southeast-1`) |
+| `OS_AUTH_URL`, `OS_USERNAME`, `OS_PASSWORD`, `OS_PROJECT_NAME`, `OS_REGION_NAME` | Thông tin xác thực OpenStack (Keystone v3) |
+| `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_DB_PASSWORD` | Mật khẩu quản trị và cơ sở dữ liệu Keycloak |
+| `SMTP_PASS` *(tuỳ chọn)* | App password cho Grafana gửi email cảnh báo |
 
-**Biến tuỳ chọn** (có default, chỉ cần đổi nếu muốn hành vi khác):
-
-| Biến | Default | Khi nào cần đổi |
-|---|---|---|
-| `SMTP_PASS` | rỗng | Mật khẩu app-password cho Gmail relay của Grafana (`grafana-smtp-secret`) — không đặt thì Grafana vẫn khởi động nhưng không gửi được mail alert thật, chỉ có bundle qua MailHog (`incident-analyzer`) |
-
-> Một vài biến trong `.env.template` (`AWS_GATEWAY_PRIVATE_KEY`, `OS_GATEWAY_PRIVATE_KEY`, `SPIRE_JOIN_TOKEN`, `GRAFANA_ADMIN_PASSWORD`, `TERRAFORM_STATE_BUCKET`, `TERRAFORM_LOCK_TABLE`) hiện **không script nào đọc** — WireGuard/SPIRE tự sinh key lúc deploy, mật khẩu Grafana đang hardcode trong `k8s/plg-stack/grafana.yaml`. Khỏi cần điền các biến này.
-
----
-
-## Bắt đầu nhanh
+### 8.2. Triển khai và chạy thực nghiệm
 
 ```bash
-bash scripts/deploy-all.sh             # dựng hạ tầng + deploy toàn bộ từ số 0 (Bước 1→14, xem DEPLOY.md)
-bash scripts/destroy-all.sh            # gỡ hạ tầng
-
-bash scripts/k8s-tunnel.sh up all      # mở tunnel tới 2 cluster
-bash scripts/open-admin-uis.sh         # mở toàn bộ port-forward (tự-restart)
-bash scripts/health-check.sh           # kiểm tra sức khoẻ (kỳ vọng FAIL=0)
-bash tests/crapi_run_all.sh            # chạy các kịch bản tấn công → Grafana → incident-analyzer
+bash scripts/deploy-all.sh          # dựng hạ tầng và triển khai toàn bộ từ trạng thái trống
+bash scripts/k8s-tunnel.sh up all   # mở tunnel tới hai cụm
+bash scripts/open-admin-uis.sh      # port-forward các giao diện quản trị
+bash scripts/health-check.sh        # kiểm tra sức khoẻ (kỳ vọng FAIL=0)
+bash tests/crapi_run_all.sh         # chạy các kịch bản tấn công
+bash scripts/destroy-all.sh         # gỡ toàn bộ hạ tầng
 ```
 
----
+Hướng dẫn từng bước và vận hành hằng ngày: [`baocao-hatang/DEPLOY.md`](baocao-hatang/DEPLOY.md).
 
-## URLs khi đang chạy (qua `open-admin-uis.sh`)
+### 8.3. Giao diện và tài khoản thử nghiệm
 
-| Service | URL | Credential |
+> Các thông tin dưới đây chỉ dùng cho môi trường thực nghiệm cô lập, không dùng cho môi trường sản xuất.
+
+| Dịch vụ | Địa chỉ | Ghi chú |
 |---|---|---|
-| **crAPI (qua WAF→BFF, HTTP, debug)** | http://localhost:18081/login | testuser01 / Test1234! (Keycloak) |
-| **crAPI (Traefik, client-cert mTLS thật — A3)** | https://crapi.ztlab.local:18443/login | cần client cert: `scripts/issue-device-cert.sh <id> compliant`, `--resolve crapi.ztlab.local:18443:127.0.0.1` |
-| Keycloak Admin | http://localhost:8180 | admin / ztlab-admin-2026 |
-| Grafana | http://localhost:3000 | admin / ZTALab2026! |
-| Incident Analyzer | http://localhost:8091/evidence | — |
-| Prometheus | http://localhost:9090 | — |
-| Loki | http://localhost:13100 | — |
-| MailHog (mail OTP/reset, crAPI) | http://localhost:8025 | — |
-| MailHog (evidence email, SOC) | http://localhost:8026 | — |
+| crAPI qua Traefik (mTLS client thật) | https://crapi.ztlab.local:18443/login | Cần chứng chỉ thiết bị: `scripts/issue-device-cert.sh <id> compliant` |
+| crAPI qua WAF → BFF (gỡ lỗi) | http://localhost:18081/login | Không yêu cầu chứng chỉ |
+| Keycloak | http://localhost:8180 | `admin` / `ztlab-admin-2026` |
+| Grafana | http://localhost:3000 | `admin` / `ZTALab2026!` |
+| incident-analyzer | http://localhost:8091/evidence | Danh sách gói bằng chứng |
+| Prometheus / Loki | http://localhost:9090 · http://localhost:13100 | — |
+| MailHog (crAPI / SOC) | http://localhost:8025 · http://localhost:8026 | Email OTP và email bằng chứng |
 
-> **Đăng nhập:** cổng `18081` (HTTP, không cert) dùng để debug nhanh; cổng `18443` là đường thật đi qua Traefik + client-cert mTLS (A3). KHÔNG bấm nút Login trong SPA crAPI (form gốc của crAPI không dùng được — BFF chặn `/identity/*` khi chưa có phiên).
-
----
-
-## Tài khoản demo (Keycloak realm `ztlab`)
-
-| User (username hoặc `<user>@ztlab.local`) | Password | Realm role |
+| Người dùng (realm `ztlab`) | Mật khẩu | Vai trò |
 |---|---|---|
 | `testuser01`, `testuser02` | `Test1234!` | crapi-user |
 | `merchant01` | `Test1234!` | crapi-mechanic, crapi-user |
 | `analyst01` | `Test1234!` | soc-analyst |
-| `demoadmin` | `DemoAdmin2026!` | crapi-admin + mechanic + user + soc-analyst |
-| `stepup-demo` | `StepupDemo123!` | crapi-user (demo enroll OTP step-up) |
+| `demoadmin` | `DemoAdmin2026!` | crapi-admin, crapi-mechanic, crapi-user, soc-analyst |
+| `stepup-demo` | `StepupDemo123!` | crapi-user (đăng ký OTP step-up) |
 
-User crAPI gốc (`adam007@example.com`…) chỉ nằm trong Postgres của crAPI, KHÔNG có trong Keycloak → là dữ liệu nạn nhân cho BOLA, không login qua BFF được.
+Không đăng nhập bằng form gốc của crAPI: BFF chặn `/identity/*` khi chưa có phiên. Người dùng gốc của crAPI (`adam007@example.com`…) chỉ tồn tại trong PostgreSQL, đóng vai trò dữ liệu nạn nhân cho kịch bản BOLA.
 
----
+### 8.4. Truy vấn log
 
-## Kịch bản tấn công (Zero-Trust enforcement + detection → evidence)
-
-`tests/crapi_*.sh` — **tấn công thật**: `kubectl exec` vào pod / chạy luồng Keycloak OIDC qua Traefik (client-cert mTLS thật, A3), rồi assert mã 401/403 từ **đúng điểm enforcement thật** (OPA ext_authz / BFF), và xác nhận log vào Loki.
-
-| Script | Cơ chế Zero-Trust nghiệm thu | ATT&CK | Alert rule |
-|---|---|---|---|
-| `crapi_lateral_movement.sh` | `crapi-community` (SVID hợp lệ) gọi `crapi-workshop` ngoài `service_acl` → OPA deny | T1021 | `lateral-movement-alert.yml` |
-| `crapi_bfla.sh` | `crapi-user` GHI vào endpoint admin/management → BFF `_rbac_ok` + OPA `role_permits_action` deny; audit `rbac_denied` | API5:2023 | `bfla-alert.yml` |
-| `crapi_step_up.sh` | Hành động nhạy cảm (đặt hàng, đổi mật khẩu) với phiên `acr=1` → `401 step_up_required` | — | — |
-| `crapi_access_denied.sh` | (1) Gọi nội mesh không SVID hợp lệ → OPA fail-closed deny. (2) Cert thiết bị `posture:non-compliant` (A3, Device CA) GHI → OPA deny | T1078 | `access-denied-alert.yml` |
-| `crapi_brute_force.sh` | 15× Keycloak login sai → `LOGIN_ERROR` | T1110 | `brute-force-alert.yml` |
-| `crapi_bola.sh` | Đối chứng BOLA (A2): request vượt quyền không chứa payload injection nào → WAF/CRS **không bắt được gì**, chỉ ZTA (OPA+RBAC) mới xử lý | API1:2023 | — |
-| `crapi_sqli_waf.sh` | Đối chứng SQLi (A2): CRS **bắt được** trong `waf-audit`, request vẫn đi tiếp (DetectionOnly) | — | — |
-| `crapi_run_all.sh` | Chạy các kịch bản chính + hướng dẫn kiểm Grafana/evidence | | |
-
-Ngoài ra: `tests/chaos_opa_failover.sh` (OPA down → fail-closed 503), `tests/chaos_spire_failover.sh` (spire-server down → SVID cache vẫn hoạt động), `tests/test_service_graph_consistency.py` (`service_acl` = nguồn sự thật).
-
-> **crAPI giữ nguyên lỗ hổng tầng app** (BOLA `/identity/api/v2/vehicle/{id}/location`, BFLA, JWT confusion…) — Zero-Trust không vá tầng app, chỉ chặn lateral movement / privilege-escalation-qua-network / credential-replay, ép step-up, và phát hiện → đóng gói bằng chứng (`incident-analyzer`) khi lỗ hổng bị khai thác.
-
----
-
-## Xem log hệ thống
-
-| Log | Lệnh / query | Ý nghĩa |
+| Nguồn | Truy vấn Loki | Trường chính |
 |---|---|---|
-| OPA decision | `{job="opa-decisions"}` (Loki) hoặc `kubectl logs -n crapi deploy/opa-server` | `opa_result` true/false, `source_principal`, `request_path` |
-| Istio access | `{job="envoy-access", namespace="crapi"}` | `svid` (SPIFFE peer), `method`, `path`, `response_code`, `bytes_sent` |
-| BFF audit | `{job="bff-audit"}` | `event` (user_login / rbac_denied / step_up_required / device_trust_denied), `username`, `roles`, `acr` |
-| WAF audit | `{job="waf-audit"}` | ModSecurity/CRS JSON audit (rule matched, anomaly score) — DetectionOnly, không chặn |
-| Evidence bundles | `curl http://localhost:8091/evidence` | `attack_type`, `mitre`, `priority_score`, `email_sent` (đóng gói bằng chứng, không có hành động thực thi) |
-| SPIRE agent | `kubectl logs -n spire daemonset/spire-agent` | node attestation, SVID cấp/renew |
-| Health | `bash scripts/health-check.sh` | tổng hợp PASS/WARN/FAIL |
+| Quyết định OPA | `{job="opa-decisions"}` | `opa_result`, `source_principal`, `request_path` |
+| Access log Istio | `{job="envoy-access", namespace="crapi"}` | `svid`, `method`, `path`, `response_code` |
+| Audit BFF | `{job="bff-audit"}` | `event`, `sid`, `username`, `roles`, `acr` |
+| Audit WAF | `{job="waf-audit"}` | luật CRS khớp, anomaly score |
 
 ---
 
-## Tài liệu
+## 9. Tài liệu
 
-- **`HE-THONG-CHI-TIET.md`** — kiến trúc, cấu hình, module, 6 luồng hoạt động, bảng cấu hình nhanh, runbook khôi phục.
-- **`DEPLOY.md`** — quy trình triển khai từng bước + vận hành hàng ngày (redeploy code, health check).
-- **`SAN-SANG-GIAI-DOAN-B.md`** — bàn giao đóng sổ giai đoạn hạ tầng (2026-10-04): GO/NO-GO, bảng trạng thái cuối, số liệu chốt, rủi ro còn hở.
-- **`HAN-CHE-VA-HUONG-PHAT-TRIEN.md`** — hạn chế có chủ đích và hướng khắc phục (H1–H18).
-- **`AUDIT-THUC-THI.md`** — bằng chứng thực thi sống của từng chính sách (AuthorizationPolicy, NetworkPolicy, Gatekeeper, WAF, 9 alert rule).
-- **`PHAT-HIEN-PHAN-DOAN-L4.md`** — phát hiện: phân đoạn theo IP (L4) không biểu diễn nổi ràng buộc mà phân đoạn theo danh tính (L7) biểu diễn được.
+**Giai đoạn A — Hạ tầng** (`baocao-hatang/`)
+
+| Tài liệu | Nội dung |
+|---|---|
+| [HE-THONG-CHI-TIET.md](baocao-hatang/HE-THONG-CHI-TIET.md) | Kiến trúc, cấu hình, module, sáu luồng hoạt động, runbook khôi phục |
+| [DEPLOY.md](baocao-hatang/DEPLOY.md) | Quy trình triển khai từng bước và vận hành |
+| [AUDIT-THUC-THI.md](baocao-hatang/AUDIT-THUC-THI.md) | Bằng chứng thực thi của từng chính sách trên cụm đang chạy |
+| [SAN-SANG-GIAI-DOAN-B.md](baocao-hatang/SAN-SANG-GIAI-DOAN-B.md) | Biên bản đóng giai đoạn hạ tầng: trạng thái cuối, số liệu chốt |
+| [PHAT-HIEN-PHAN-DOAN-L4.md](baocao-hatang/PHAT-HIEN-PHAN-DOAN-L4.md) | Phát hiện về giới hạn của phân đoạn L4 so với L7 |
+| [HAN-CHE-VA-HUONG-PHAT-TRIEN.md](baocao-hatang/HAN-CHE-VA-HUONG-PHAT-TRIEN.md) | Hạn chế và hướng phát triển |
+
+**Giai đoạn B — Dữ liệu** (`baocao-ml-dl/`)
+
+| Tài liệu | Nội dung |
+|---|---|
+| [BAOCAO-CONG-2GIO.md](baocao-ml-dl/BAOCAO-CONG-2GIO.md) | Cổng nghiệm thu 2 giờ trước đợt thu dữ liệu |
+| [BAOCAO-SUA-GANNHAN-C1.md](baocao-ml-dl/BAOCAO-SUA-GANNHAN-C1.md) | Sửa lỗi gán nhãn cho các họ tấn công |
+| [BAOCAO-THU-DULIEU-B.md](baocao-ml-dl/BAOCAO-THU-DULIEU-B.md) | Nhật ký và kết quả đợt thu dữ liệu |
+
+---
+
+## Tài liệu tham khảo
+
+1. S. Rose, O. Borchert, S. Mitchell, S. Connelly, *Zero Trust Architecture*, NIST Special Publication 800-207, 2020.
+2. SPIFFE — Secure Production Identity Framework for Everyone. https://spiffe.io
+3. Open Policy Agent. https://www.openpolicyagent.org
+4. Istio Service Mesh. https://istio.io
+5. OWASP crAPI — Completely Ridiculous API. https://github.com/OWASP/crAPI
+6. OWASP API Security Top 10 (2023). https://owasp.org/API-Security/
+7. MITRE ATT&CK. https://attack.mitre.org

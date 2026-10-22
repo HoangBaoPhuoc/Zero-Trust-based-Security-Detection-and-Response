@@ -63,7 +63,12 @@ fi
 for i in $(seq 1 40); do openstack token issue -f value -c id >/dev/null 2>&1 && break; sleep 15; done
 openstack token issue -f value -c id >/dev/null 2>&1 || { log "Keystone không trả lời sau 10 phút"; exit 1; }
 probe="aio-preflight-$(date +%s)"
-flavor="$(openstack flavor list -f value -c Name | grep -m1 -E '^(nano-plus|m1.tiny|m1.small|m1.medium)$' || true)"
+# Flavor phải có ổ đĩa ≥ 5 GB: image ubuntu-22.04 có kích thước ảo ~2.2 GB. Bản cũ dùng `grep -m1` lấy flavor
+# xuất hiện ĐẦU TIÊN trong danh sách (không theo thứ tự ưu tiên trong regex) → trúng m1.tiny (đĩa 1 GB) →
+# nova từ chối "flavor's disk is too small" → VM thử ERROR → báo nhầm "control-plane hỏng" (sự cố 2026-10-11).
+# Chọn flavor đủ đĩa có RAM nhỏ nhất trong nhóm nano-plus/m1.small/m1.medium.
+flavor="$(openstack flavor list -f value -c Name -c RAM -c Disk \
+  | awk '$1 ~ /^(nano-plus|m1\.small|m1\.medium)$/ && $3 >= 5 {print $2, $1}' | sort -n | head -1 | cut -d' ' -f2 || true)"
 image="$(openstack image list -f value -c Name | grep -m1 -E '^ubuntu-22.04$' || true)"
 if [[ -z "$flavor" || -z "$image" ]]; then log "chưa có flavor/image (bước 6–7 sẽ tạo) — bỏ qua phép thử VM"; exit 0; fi
 [[ -n "$OSC" ]] || { log "CẢNH BÁO: không có ~/kolla-venv/bin/openstack — bỏ qua phép thử VM"; exit 0; }

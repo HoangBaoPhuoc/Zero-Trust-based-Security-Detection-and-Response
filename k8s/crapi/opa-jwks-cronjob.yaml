@@ -15,8 +15,17 @@
 # Egress đã mở sẵn cho mọi pod ns crapi (aws-allow-list.yaml): ipBlock
 # 192.168.101.0/24:30091 (keycloak-openstack selectorless → NodePort → WG),
 # kube-system:53 (DNS), API server (đã chứng minh qua posture-agent dùng kubectl).
-# Không bật sidecar (như posture-agent): job ngắn, fetch JWKS là endpoint OIDC
-# công khai qua L4, tránh race sidecar-readiness.
+#
+# SỬA 2026-10-12 (sự cố thật): BẢN CŨ chạy sidecar.istio.io/inject:"false" với
+# lý do "endpoint OIDC công khai qua L4" — SAI: Keycloak có PeerAuthentication
+# STRICT (k8s/identity/keycloak-mesh-policies.yaml) + AuthorizationPolicy CUSTOM
+# opa-ext-authz (keycloak-opa-authz) áp cho MỌI traffic bất kể vào qua NodePort
+# hay ClusterIP — plaintext curl không qua được handshake mTLS, job fail mọi
+# lần, ConfigMap opa-jwks-data KHÔNG BAO GIỜ được tạo → data.kc_oidc.jwks_raw
+# rỗng → valid_jwt luôn false → OPA chặn 403 MỌI request có token qua bff trên
+# toàn hệ thống (không riêng seed-job). Sửa: bật sidecar + SPIFFE thật
+# (aws/opa-jwks-fetcher, policy/service-graph-crapi.yaml) để qua STRICT mTLS +
+# service_acl, giống mẫu posture-agent/kc-admin-setup.
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -68,11 +77,21 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 60
+      activeDeadlineSeconds: 90
       template:
         metadata:
           annotations:
-            sidecar.istio.io/inject: "false"  # job ngắn, fetch OIDC công khai qua L4
+            spiffe.io/spiffeid: "spiffe://ztlab.local/aws/opa-jwks-fetcher"
+            sidecar.istio.io/inject: "true"
+            sidecar.istio.io/userVolume: '[{"name":"spire-workload-socket","hostPath":{"path":"/run/spire/sockets/agent.sock","type":"Socket"}}]'
+            sidecar.istio.io/userVolumeMount: '[{"name":"spire-workload-socket","mountPath":"/var/run/secrets/workload-spiffe-uds/socket"}]'
+            # Job cũng gọi `kubectl` để ghi ConfigMap opa-jwks-data (RBAC Role ở
+            # trên) — apiserver KHÔNG trong mesh (không có SVID/sidecar riêng),
+            # Envoy chặn outbound tới nó theo mặc định → "connection reset by
+            # peer" khi kubectl validate OpenAPI (sự cố thật 2026-10-12, cùng lý
+            # do posture-agent-cronjob.yaml tránh hẳn sidecar). Loại trừ IP
+            # apiserver khỏi traffic capture — vẫn giữ sidecar cho hop Keycloak.
+            traffic.sidecar.istio.io/excludeOutboundIPRanges: "10.43.0.1/32"
         spec:
           serviceAccountName: opa-jwks-fetcher
           restartPolicy: Never
@@ -93,6 +112,20 @@ spec:
               args:
                 - |
                   set -uo pipefail
+                  # Có sidecar → istio-proxy chạy vô hạn, Job không bao giờ
+                  # Complete nếu fetcher không tự tắt nó — trap đảm bảo gọi
+                  # quitquitquit ở MỌI đường thoát (cả nhánh lỗi JWKS trống),
+                  # không chỉ nhánh thành công cuối script.
+                  trap 'curl -sf -m 5 -X POST http://localhost:15020/quitquitquit >/dev/null 2>&1 || true' EXIT
+
+                  # Sidecar istio-proxy cần vài giây để nhận SVID từ SPIRE agent
+                  # rồi mới proxy được mTLS ra ngoài — gọi ngay sau khi container
+                  # fetcher start có thể rơi vào lúc sidecar chưa sẵn sàng (cùng
+                  # loại race đã gặp ở kc-crapi-setup, scripts/deploy-crapi.sh).
+                  for i in $(seq 1 6); do
+                    curl -sf -m 3 http://localhost:15021/healthz/ready >/dev/null 2>&1 && break
+                    sleep 5
+                  done
 
                   # Fetch JWKS + discovery. KHÔNG ghi đè ConfigMap nếu fetch lỗi
                   # — giữ data cũ để OPA tiếp tục verify (fail-safe, không để một
@@ -119,8 +152,25 @@ spec:
                   TMP="$(mktemp -d)"
                   printf '%s' "$DATA_JSON" > "$TMP/data.json"
 
-                  kubectl -n crapi create configmap opa-jwks-data \
-                    --from-file=data.json="$TMP/data.json" \
-                    --dry-run=client -o yaml | kubectl -n crapi apply -f -
+                  # `set -uo pipefail` (không `-e`) KHÔNG bắt được lỗi của
+                  # `kubectl apply` cuối pipe nếu `kubectl create --dry-run`
+                  # vẫn thành công — sự cố thật 2026-10-12: API server reset
+                  # kết nối giữa lúc apply (VM tải cao), script in "cập nhật"
+                  # rồi exit 0 dù ConfigMap KHÔNG được ghi. Retry 3 lần + kiểm
+                  # exit code thật của `apply`, không suy ra từ lệnh cuối.
+                  applied=0
+                  for i in 1 2 3; do
+                    if kubectl -n crapi create configmap opa-jwks-data \
+                         --from-file=data.json="$TMP/data.json" \
+                         --dry-run=client -o yaml | kubectl -n crapi apply -f -; then
+                      applied=1; break
+                    fi
+                    echo "[opa-jwks-fetcher] apply ConfigMap lỗi (lần $i/3) — thử lại sau 3s"
+                    sleep 3
+                  done
+                  if [ "$applied" -ne 1 ]; then
+                    echo "[opa-jwks-fetcher] apply ConfigMap THẤT BẠI sau 3 lần — giữ ConfigMap cũ, thoát lỗi"
+                    exit 1
+                  fi
 
                   echo "[opa-jwks-fetcher] cập nhật opa-jwks-data: issuer=${ISSUER} keys=$(echo "$JWKS_RAW" | jq '.keys | length')"

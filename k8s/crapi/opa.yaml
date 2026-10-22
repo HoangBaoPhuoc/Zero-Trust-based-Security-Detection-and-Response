@@ -186,7 +186,7 @@ spec:
 # đã bắt tay xong), KHÔNG gọi ra ngoài → không có vòng lặp logic với chính
 # PDP (khác action: CUSTOM/ext_authz). Danh sách principals KHÔNG suy từ
 # service-graph-crapi.yaml (graph có 1 edge sai — aws/crapi-web -> aws/opa —
-# không khớp traffic thật, xem AUDIT-THUC-THI.md Phần 2) mà đo TRỰC TIẾP
+# không khớp traffic thật, xem baocao-hatang/AUDIT-THUC-THI.md Phần 2) mà đo TRỰC TIẾP
 # trên Loki job=envoy-access, path="/envoy.service.auth.v3.Authorization/Check",
 # đối chiếu source_ip -> pod thật (2026-09-18): bff/waf/crapi-community/
 # crapi-workshop (AWS) + crapi-identity/keycloak (OpenStack — keycloak có

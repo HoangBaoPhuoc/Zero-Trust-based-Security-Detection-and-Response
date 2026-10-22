@@ -32,6 +32,15 @@ ADMIN_PATHS=(/workshop/api/management/users/all /identity/api/v2/admin/videos/1 
 READS=(/identity/api/v2/user/dashboard /workshop/api/shop/products /community/api/v2/community/posts/recent)
 NONCOMPLIANT_CERT="$CA_DIR/issued/test-noncompliant/device.crt"
 NONCOMPLIANT_KEY="$CA_DIR/issued/test-noncompliant/device.key"
+# §B1f sự cố thật 2026-10-12: noise_posture_degraded() trả cert bằng
+# `unset CRAPI_CLIENT_CERT CRAPI_CLIENT_KEY` rồi gọi lại crapi_curl_tls_opts()
+# — biến KHÔNG có fallback sau khi unset (khác lúc source lần đầu, default
+# `${VAR:-...}` chỉ áp dụng 1 lần) → "unbound variable" (set -u) mọi lần gọi
+# SAU ĐÓ trong suốt khúc N2 còn lại → TLS=() rỗng → mọi request từ đây không
+# còn --cacert/--cert/--key/--resolve, coi như N2 câm lặng phần còn lại 3h.
+# Giữ hằng số để GÁN LẠI compliant, không unset.
+COMPLIANT_CERT="$CA_DIR/issued/test-compliant/device.crt"
+COMPLIANT_KEY="$CA_DIR/issued/test-compliant/device.key"
 
 rand()      { echo $(( $1 + RANDOM % ($2 - $1 + 1) )); }      # rand <min> <max>
 rand_sleep(){ sleep "$(python3 -c "import random;print(round(random.uniform($1,$2),2))")"; }
@@ -100,7 +109,7 @@ noise_posture_degraded() {
     mapfile -t TLS < <(CRAPI_CLIENT_CERT="$NONCOMPLIANT_CERT" CRAPI_CLIENT_KEY="$NONCOMPLIANT_KEY" crapi_curl_tls_opts)
   # dùng cùng biến môi trường cho login + call (crapi_curl_tls_opts đọc tại gọi)
   export CRAPI_CLIENT_CERT="$NONCOMPLIANT_CERT" CRAPI_CLIENT_KEY="$NONCOMPLIANT_KEY"
-  jar="$(login_user testuser01)" || { unset CRAPI_CLIENT_CERT CRAPI_CLIENT_KEY; mapfile -t TLS < <(crapi_curl_tls_opts); return 0; }
+  jar="$(login_user testuser01)" || { export CRAPI_CLIENT_CERT="$COMPLIANT_CERT" CRAPI_CLIENT_KEY="$COMPLIANT_KEY"; mapfile -t TLS < <(crapi_curl_tls_opts); return 0; }
   req posture_degraded "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null
   rand_sleep 1 3
   writes="$(rand 1 3)"
@@ -109,7 +118,8 @@ noise_posture_degraded() {
     rand_sleep 2 5
   done
   rm -f "$jar"
-  unset CRAPI_CLIENT_CERT CRAPI_CLIENT_KEY; mapfile -t TLS < <(crapi_curl_tls_opts)   # trả cert compliant
+  export CRAPI_CLIENT_CERT="$COMPLIANT_CERT" CRAPI_CLIENT_KEY="$COMPLIANT_KEY"
+  mapfile -t TLS < <(crapi_curl_tls_opts)   # trả cert compliant
 }
 
 # 4) stepup_abandoned — login KHÔNG step-up, chạm hành động nhạy cảm → step_up_required,

@@ -47,3 +47,4 @@ terraform/aws/keycloak-saml-metadata.xml
 
 # Bản chụp diff/tfstate cục bộ theo từng vòng — không đưa lên repo
 snapshots/
+

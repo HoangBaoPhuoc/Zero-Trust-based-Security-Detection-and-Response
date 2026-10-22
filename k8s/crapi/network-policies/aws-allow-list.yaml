@@ -91,7 +91,17 @@ spec:
             matchLabels: { kubernetes.io/metadata.name: istio-system }
       ports:
         - { port: 15012, protocol: TCP }
-    # cross-cloud -> openstack (aws/bff->openstack/crapi-identity, aws/bff->openstack/keycloak, aws/crapi-community->openstack/crapi-identity, aws/crapi-community->openstack/postgresdb, aws/crapi-workshop->openstack/crapi-identity, aws/crapi-workshop->openstack/postgresdb, aws/opa->openstack/keycloak)
+    # opa-jwks-fetcher -> kube-apiserver VIP (kubectl apply configmap)
+    - to:
+        - ipBlock: { cidr: 10.43.0.1/32 }
+      ports:
+        - { port: 443, protocol: TCP }
+    # opa-jwks-fetcher -> kube-apiserver node thật (VIP bị DNAT trước khi netpol filter chạy)
+    - to:
+        - ipBlock: { cidr: 10.10.1.0/24 }
+      ports:
+        - { port: 6443, protocol: TCP }
+    # cross-cloud -> openstack (aws/bff->openstack/crapi-identity, aws/bff->openstack/keycloak, aws/crapi-community->openstack/crapi-identity, aws/crapi-community->openstack/postgresdb, aws/crapi-workshop->openstack/crapi-identity, aws/crapi-workshop->openstack/postgresdb, aws/opa->openstack/keycloak, aws/opa-jwks-fetcher->openstack/keycloak)
     - to:
         - ipBlock: { cidr: 192.168.101.0/24 }
       ports:

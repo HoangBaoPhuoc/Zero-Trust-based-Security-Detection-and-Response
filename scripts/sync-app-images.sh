@@ -229,7 +229,7 @@ restart_financial_deployments() {
   # đồng thời -> cx_connect_fail không tự phục hồi). Xác nhận sống lại
   # 2026-09-19: root cause là lỗi nền tảng iptables-legacy/nf_tables của
   # network-policy controller nhúng trong k3s (kube-router) — CÙNG họ lỗi đã
-  # ghi ở AUDIT-THUC-THI.md §3.2, nhưng nặng hơn: có lúc chặn nhầm cả traffic
+  # ghi ở baocao-hatang/AUDIT-THUC-THI.md §3.2, nhưng nặng hơn: có lúc chặn nhầm cả traffic
   # HỢP LỆ (không chỉ "không chặn được traffic trái phép"), không tự phục hồi
   # bằng xoá/tạo lại 1 pod hay resync NetworkPolicy — SSH xác nhận tận iptables
   # trên node. Không vá được lỗi nền tảng đó (ngoài phạm vi hợp lý), nên giảm

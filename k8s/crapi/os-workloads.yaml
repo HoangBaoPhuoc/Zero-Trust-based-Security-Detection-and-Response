@@ -60,6 +60,13 @@ spec:
             - name: jwt-key-secret
               mountPath: /app/keys
               readOnly: true
+          # Java Spring mất ~86-105 s để mở cổng 8080 trên VM Azure (KVM lồng); liveness (30 s + 3×20 s = 90 s)
+          # kill pod ngay trước khi nó kịp lên → CrashLoop → crapi-community/workshop (AWS) 503 "Identity not
+          # healthy" (sự cố 2026-10-11). startupProbe chặn liveness/readiness cho tới khi cổng mở (tối đa 10 phút).
+          startupProbe:
+            tcpSocket: { port: 8080 }
+            periodSeconds: 10
+            failureThreshold: 60
           readinessProbe:
             tcpSocket: { port: 8080 }
             initialDelaySeconds: 20

@@ -15,8 +15,17 @@ from collections import Counter
 
 
 Q = ('{job="opa-decisions"} |= "decision_id" | json srv="metrics.timer_server_handler_ns", '
-     'hs="metrics.timer_rego_builtin_http_send_ns", dst="input.attributes.destination.principal", res="result" '
-     '| line_format "{{.srv}} {{.hs}} {{.dst}} {{.res}}"')
+     'hs="metrics.timer_rego_builtin_http_send_ns", dst="input.attributes.destination.principal", res="result", '
+     'src="input.attributes.source.principal" '
+     # §B2 mục 2 sự cố thật: `hs` THƯỜNG RỖNG (timer chỉ xuất hiện khi http.send
+     # thực sự chạy — nay hiếm/không còn). line_format phân tách bằng KHOẢNG
+     # TRẮNG + line.split() (gộp khoảng trắng liên tiếp) làm field rỗng biến
+     # mất, lệch TOÀN BỘ cột phía sau 1 vị trí — dst đọc nhầm thành hs, res đọc
+     # nhầm thành dst, v.v. "0% http.send tail" ở lần đo trước CÓ THỂ là do bug
+     # này (hs luôn bị đọc lệch thành field khác, numeric parse fail → mặc định
+     # 0), KHÔNG PHẢI bằng chứng thật. Dùng "|" (không xuất hiện trong dữ liệu)
+     # để split() giữ đúng field rỗng ở vị trí của nó.
+     '| line_format "{{.srv}}|{{.hs}}|{{.dst}}|{{.res}}|{{.src}}"')
 
 
 def fetch(loki, start, end, window=300):
@@ -57,25 +66,52 @@ def main():
     rows = fetch(a.loki, a.start, a.end)
     per = {}
     for ts, line, st in rows:
-        f = line.split()
+        f = line.split("|")
         # Loki in số ns lớn ở dạng mũ (vd 1.2e+07) — parse float, không isdigit (bản đầu loại mất ~3/4 mẫu)
         def num(x):
             try:
                 return float(x)
             except ValueError:
                 return None
-        if len(f) < 3 or num(f[0]) is None:
+        if len(f) < 4 or num(f[0]) is None:
             continue
         key = st.get("cloud", "?")
         per.setdefault(key, []).append({
             "ms": num(f[0]) / 1e6, "http_send_ms": (num(f[1]) or 0) / 1e6,
-            "dst": f[2].rsplit("/", 1)[-1], "allow": f[3:4] == ["true"]})
+            "dst": f[2].rsplit("/", 1)[-1], "allow": f[3:4] == ["true"],
+            "src": f[4] if len(f) > 4 else ""})
+
+    def stats_block(xs):
+        v = sorted(x["ms"] for x in xs)
+        n = len(v)
+        if n == 0:
+            return {"n": 0}
+        p99 = pct(v, 99)
+        tail = [x for x in xs if x["ms"] >= p99]
+        return {
+            "n": n, "p50_ms": round(pct(v, 50), 3), "p95_ms": round(pct(v, 95), 3), "p99_ms": round(p99, 3),
+            "max_ms": round(v[-1], 3), "mean_ms": round(statistics.mean(v), 3),
+            "samples_at_or_above_p99": len(tail),
+            "tail_http_send_share": round(sum(1 for x in tail if x["http_send_ms"] > 1) / max(1, len(tail)), 3),
+            "http_send_nonzero_count": sum(1 for x in xs if x["http_send_ms"] > 0),
+        }
+
     report = {"window": [a.start, a.end], "method": __doc__.strip().splitlines()[0], "clouds": {}}
     for cloud, xs in sorted(per.items()):
         v = sorted(x["ms"] for x in xs)
         n = len(v)
         p99 = pct(v, 99)
         tail = [x for x in xs if x["ms"] >= p99]
+        # §B2 mục 2: allow=true KHÔNG đồng nghĩa "verify JWT thành công" — hop
+        # service-to-service (keycloak_gate "not startswith aws/bff") cũng allow
+        # mà không cần valid_jwt. Chỉ hop source=aws/bff MỚI bắt buộc valid_jwt
+        # khi allow=true (xem opa/crapi-policies/zta_crapi.rego keycloak_gate).
+        # Lọc theo src để tránh trộn 2 quần thể khác nhau (vốn là nguồn nhầm lẫn
+        # của phép đo lần 1 2026-10-12: p99=2.41ms có thể là của NHÁNH TỪ CHỐI
+        # NHANH do data.kc_oidc rỗng, không phải của verify RS256 thành công).
+        bff_xs = [x for x in xs if x["src"].endswith("/aws/bff")]
+        verified_ok = [x for x in bff_xs if x["allow"]]
+        verified_denied = [x for x in bff_xs if not x["allow"]]
         report["clouds"][cloud] = {
             "n": n, "p50_ms": round(pct(v, 50), 3), "p95_ms": round(pct(v, 95), 3), "p99_ms": round(p99, 3),
             "max_ms": round(v[-1], 3), "mean_ms": round(statistics.mean(v), 3),
@@ -84,10 +120,19 @@ def main():
             "tail_by_dst": Counter(x["dst"] for x in tail).most_common(5),
             "allow_ratio": round(sum(1 for x in xs if x["allow"]) / n, 4),
             "histogram_ms_0.25": dict(sorted(Counter(round(int(x // 0.25) * 0.25, 2) for x in v).items())),
+            "bff_hop_verify_success": stats_block(verified_ok),
+            "bff_hop_verify_denied": stats_block(verified_denied),
         }
         r = report["clouds"][cloud]
         print(f"{cloud:10} n={n:6}  p50={r['p50_ms']:.2f}  p95={r['p95_ms']:.2f}  p99={r['p99_ms']:.2f}  max={r['max_ms']:.2f} ms"
               f"  (p99 từ {len(tail)} mẫu; đuôi có http.send>1ms: {r['tail_http_send_share']:.0%})")
+        vo, vd = r["bff_hop_verify_success"], r["bff_hop_verify_denied"]
+        if vo.get("n"):
+            print(f"  hop bff (valid_jwt=true, allow=true): n={vo['n']}  p50={vo['p50_ms']:.2f}  p95={vo['p95_ms']:.2f}  p99={vo['p99_ms']:.2f} ms"
+                  f"  http_send_nonzero={vo['http_send_nonzero_count']}")
+        if vd.get("n"):
+            print(f"  hop bff (allow=false, từ chối):       n={vd['n']}  p50={vd['p50_ms']:.2f}  p95={vd['p95_ms']:.2f}  p99={vd['p99_ms']:.2f} ms"
+                  f"  http_send_nonzero={vd['http_send_nonzero_count']}")
     json.dump(report, open(a.output, "w"), ensure_ascii=False, indent=1)
     return 0 if per else 1
 
