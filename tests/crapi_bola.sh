@@ -21,22 +21,27 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/lib/crapi_common.sh"
 crapi_preflight
 
-J="$(crapi_login testuser01 'Test1234!')"
+# Giai đoạn C: kẻ tấn công do orchestrator chỉ định (luân phiên qua
+# CRAPI_ATTACKER_POOL); mặc định testuser01 khi chạy tay 1 lượt. Nhãn lượt
+# (target_entity trong runs.jsonl) phải TRÙNG tài khoản đăng nhập ở đây —
+# crapi_campaign_phaseb.sh đặt cả TARGET_ENTITY lẫn CRAPI_ATTACKER = cùng user.
+ATTACKER_USER="${CRAPI_ATTACKER:-testuser01}"
+J="$(crapi_login "$ATTACKER_USER" 'Test1234!')"
 trap 'rm -f "$J"' EXIT
-log "Đăng nhập testuser01 (crapi-user, token hợp lệ, thiết bị browser)"
+log "Đăng nhập $ATTACKER_USER (crapi-user, token hợp lệ, thiết bị browser)"
 
 # Lấy vehicle của chính mình (nếu có) để có 1 UUID thật, rồi thử các UUID khác.
 declare -a _tls_opts; mapfile -t _tls_opts < <(crapi_curl_tls_opts)
 own_json="$(curl -s -A "$BROWSER_UA" "${_tls_opts[@]}" -b "$J" --max-time 20 "$BFF_URL/identity/api/v2/vehicle/vehicles" || true)"
 own_uuid="$(printf '%s' "$own_json" | grep -oE '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' | head -1)"
-log "vehicle của testuser01: ${own_uuid:-<none>}"
+log "vehicle của $ATTACKER_USER: ${own_uuid:-<none>}"
 
 # Đóng sổ 2026-10-04 — SỬA LỖI CÔNG CỤ: các bản trước thử UUID "đoán" (649acfac-…0001…) và coi MỌI mã từ app
 # (kể cả 404) là "BOLA tới được". Log 2026-09-13, 2026-09-26 và lần đầu 2026-10-04 đều 404 → chưa vòng nào đo trên
 # một vụ BOLA THÀNH CÔNG; số "CRS = 0 trên BOLA" trước đây là CRS = 0 trên request 404. Nay đi đúng chuỗi BOLA của
 # crAPI: (1) lộ vehicleid của người khác qua community/posts (trường author.vehicleid), (2) đọc
 # vehicle/{id}/location của họ. Chỉ tính là BOLA khi trả 200 VÀ email chủ xe ≠ kẻ tấn công.
-ATTACKER_EMAIL="testuser01@ztlab.local"
+ATTACKER_EMAIL="${ATTACKER_USER}@ztlab.local"
 VICTIMS="${VP_VICTIMS:-${VICTIMS:-0}}"
 
 # §B5 mục 1 (2026-10-13): khúc 1 của đợt 150h cho thấy quét cố định (31 trang ×

@@ -30,7 +30,7 @@ SPRAY_USERS=(testuser01 merchant01 stepup-demo ghost01 ghost02 ghost03 ghost04 o
 SPRAY_PASS="${SPRAY_PASS:-Winter2026!}"
 log "Brute force Keycloak — MODE=$MODE ATTEMPTS=$ATTEMPTS PACE=${PACE:-burst}"
 
-fail_count=0
+fail_count=0 ; err5xx=0
 declare -a _tls_opts; mapfile -t _tls_opts < <(crapi_curl_tls_opts)
 for i in $(seq 1 "$ATTEMPTS"); do
   [[ $i -gt 1 ]] && crapi_pace_sleep "$i" "$ATTEMPTS"
@@ -44,15 +44,26 @@ for i in $(seq 1 "$ATTEMPTS"); do
   action="$(printf '%s' "$page" | grep -oE 'action="[^"]+"' | head -1 | sed -E 's/^action="//;s/"$//;s/&amp;/\&/g')"
   code="$(curl -s -A "$UA" "${_tls_opts[@]}" -c "$jar" -b "$jar" -L -o /dev/null -w '%{http_code}' \
     --data-urlencode "username=$user" --data-urlencode "password=$pass" "$action")"
-  # login sai → Keycloak render lại trang login (200) hoặc 401; KHÔNG có
-  # /auth/callback?code=. Coi là "fail" nếu không đăng nhập được.
-  [[ "$code" != "302" ]] && fail_count=$((fail_count + 1))
+  # §B6 (sửa 2026-10): 503/5xx = Keycloak QUÁ TẢI/HỎNG, KHÔNG phải một lần đăng
+  # nhập bị từ chối. Bản cũ đếm mọi mã ≠302 là "fail" → khi Keycloak trả 503,
+  # fail_count vẫn đủ cao, assertion dưới PASS, lượt ghi status=attack dù cuộc
+  # tấn công KHÔNG diễn ra (báo cáo đợt 150h §3 mục 6). Nay tách riêng 5xx và
+  # abort nếu quá nhiều — một lần từ chối hợp lệ là 200 (render lại form lỗi)
+  # hoặc 401, không bao giờ là 5xx.
+  if [[ "$code" =~ ^5[0-9][0-9]$ ]]; then
+    err5xx=$((err5xx + 1))
+  elif [[ "$code" != "302" ]]; then
+    fail_count=$((fail_count + 1))
+  fi
   rm -f "$jar"
   printf '.'
 done
 echo
-log "$fail_count/$ATTEMPTS lần đăng nhập bị từ chối (mật khẩu sai)"
-[[ $fail_count -ge $(( ATTEMPTS - 2 )) ]] || fail "quá nhiều lần 'thành công' với mật khẩu sai — kiểm tra luồng Keycloak"
+log "$fail_count/$ATTEMPTS lần đăng nhập bị từ chối (mật khẩu sai) · $err5xx lần Keycloak trả 5xx"
+# Keycloak hỏng quá nửa số lần thử → cuộc brute-force không thực sự xảy ra: abort
+# (exit≠0 → crapi_run_campaign.sh ghi status=aborted, KHÔNG tính vào lượt tấn công).
+[[ $err5xx -gt $(( ATTEMPTS / 2 )) ]] && fail "Keycloak trả 5xx $err5xx/$ATTEMPTS lần — dịch vụ quá tải/hỏng, cuộc brute-force KHÔNG diễn ra (không ghi là attack)"
+[[ $fail_count -ge $(( ATTEMPTS - 2 - err5xx )) ]] || fail "quá nhiều lần 'thành công' với mật khẩu sai — kiểm tra luồng Keycloak"
 
 # xác nhận đăng nhập ĐÚNG vẫn được (không bị Keycloak lockout vĩnh viễn)
 sleep 2

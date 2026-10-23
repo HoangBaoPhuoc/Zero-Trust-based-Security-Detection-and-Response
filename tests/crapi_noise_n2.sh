@@ -26,6 +26,15 @@ OUT="$REPO_ROOT/results/${RESULTS_ROUND:-phaseb}/n2"; mkdir -p "$OUT"
 TAG="n2_$(date +%Y%m%d%H%M%S)"; REQLOG="$OUT/$TAG.requests.tsv"
 ALL_TYPES=(role_mismatch session_expired posture_degraded stepup_abandoned client_retry)
 IFS=',' read -ra NOISE_TYPES <<<"${NOISE_TYPES:-$(IFS=,; echo "${ALL_TYPES[*]}")}"
+# Giai đoạn C (sửa đường tắt entity): rải nhiễu N2 qua NHIỀU user thay vì dồn
+# testuser01 — để deny LÀNH TÍNH cũng xuất hiện trên các tài khoản kẻ tấn công
+# (testuser02, merchant01), nhờ đó mô hình không học "entity X + deny = tấn
+# công". Gồm pool kẻ tấn công (crapi_common.sh) + merchant01. Mỗi phiên nhiễu
+# chọn 1 user; pick_n2_user đặt $_N2_USER (KHÔNG chạy trong subshell để biến
+# truyền được tới record_run), các hàm noise_* dùng lại $_N2_USER.
+read -r -a N2_USER_POOL <<<"${N2_USER_POOL:-${CRAPI_ATTACKER_POOL[*]}}"
+_N2_USER="testuser01"
+pick_n2_user(){ _N2_USER="${N2_USER_POOL[RANDOM % ${#N2_USER_POOL[@]}]}"; }
 DRY=0; [[ "${1:-}" == "--dry-run" ]] && DRY=1
 
 ADMIN_PATHS=(/workshop/api/management/users/all /identity/api/v2/admin/videos/1 /workshop/api/shop/orders/all)
@@ -73,7 +82,7 @@ login_user() { crapi_login "$1" 'Test1234!' 2>/dev/null; }
 # 1) role_mismatch — user thường gọi path admin 1–3 lần RẢI RÁC (không liên tiếp)
 #    xen hành vi bình thường. Deny vì RBAC, không phải ý định.
 noise_role_mismatch() {
-  local jar hits; jar="$(login_user testuser01)" || return 0
+  local jar hits; pick_n2_user; jar="$(login_user "$_N2_USER")" || return 0
   hits="$(rand 1 3)"
   for ((h=0; h<hits; h++)); do
     req role_mismatch "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null
@@ -88,7 +97,7 @@ noise_role_mismatch() {
 # 2) session_expired — vài hành động, phiên "hết hạn" (xoá cookie-jar), nhận 401
 #    trên 1–4 hành động; CÓ/KHÔNG đăng nhập lại (tham số hoá, không luôn 1×401→login).
 noise_session_expired() {
-  local jar acts recover; jar="$(login_user testuser01)" || return 0
+  local jar acts recover; pick_n2_user; jar="$(login_user "$_N2_USER")" || return 0
   req session_expired "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null
   rand_sleep 1 3
   : > "$jar"                               # phiên "hết" — cookie bay
@@ -96,7 +105,7 @@ noise_session_expired() {
   for ((a=0; a<acts; a++)); do req session_expired "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null; rand_sleep 1 5; done
   recover="$(( RANDOM % 2 ))"              # 50% khôi phục, 50% bỏ
   if [[ "$recover" == "1" ]]; then
-    rm -f "$jar"; jar="$(login_user testuser01)" || return 0
+    rm -f "$jar"; jar="$(login_user "$_N2_USER")" || return 0
     req session_expired "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null
   fi
   rm -f "$jar"
@@ -109,7 +118,7 @@ noise_posture_degraded() {
     mapfile -t TLS < <(CRAPI_CLIENT_CERT="$NONCOMPLIANT_CERT" CRAPI_CLIENT_KEY="$NONCOMPLIANT_KEY" crapi_curl_tls_opts)
   # dùng cùng biến môi trường cho login + call (crapi_curl_tls_opts đọc tại gọi)
   export CRAPI_CLIENT_CERT="$NONCOMPLIANT_CERT" CRAPI_CLIENT_KEY="$NONCOMPLIANT_KEY"
-  jar="$(login_user testuser01)" || { export CRAPI_CLIENT_CERT="$COMPLIANT_CERT" CRAPI_CLIENT_KEY="$COMPLIANT_KEY"; mapfile -t TLS < <(crapi_curl_tls_opts); return 0; }
+  pick_n2_user; jar="$(login_user "$_N2_USER")" || { export CRAPI_CLIENT_CERT="$COMPLIANT_CERT" CRAPI_CLIENT_KEY="$COMPLIANT_KEY"; mapfile -t TLS < <(crapi_curl_tls_opts); return 0; }
   req posture_degraded "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null
   rand_sleep 1 3
   writes="$(rand 1 3)"
@@ -125,7 +134,7 @@ noise_posture_degraded() {
 # 4) stepup_abandoned — login KHÔNG step-up, chạm hành động nhạy cảm → step_up_required,
 #    KHÔNG step-up, chuyển việc khác.
 noise_stepup_abandoned() {
-  local jar; jar="$(login_user testuser01)" || return 0
+  local jar; pick_n2_user; jar="$(login_user "$_N2_USER")" || return 0
   req stepup_abandoned "$jar" GET "${READS[RANDOM % ${#READS[@]}]}" >/dev/null
   rand_sleep 1 3
   req stepup_abandoned "$jar" POST /workshop/api/shop/orders '{"product_id":1,"quantity":1}' >/dev/null   # step_up_required
@@ -137,7 +146,7 @@ noise_stepup_abandoned() {
 
 # 5) client_retry — retry 3–8 lần một request bị từ chối, giãn cách KHÔNG đều.
 noise_client_retry() {
-  local jar tries path; jar="$(login_user testuser01)" || return 0
+  local jar tries path; pick_n2_user; jar="$(login_user "$_N2_USER")" || return 0
   path="${ADMIN_PATHS[RANDOM % ${#ADMIN_PATHS[@]}]}"   # bị RBAC deny
   tries="$(rand 3 8)"
   for ((t=0; t<tries; t++)); do req client_retry "$jar" GET "$path" >/dev/null; rand_sleep 0.5 6; done
@@ -158,7 +167,9 @@ while [[ $(date +%s) -lt $HARD_END ]]; do
     client_retry)     noise_client_retry ;;
   esac
   t1="$(date -u -d '+1 second' +%Y-%m-%dT%H:%M:%SZ)"   # +1s như §4/H18
-  record_run "$nt" "testuser01" "$t0" "$t1"
+  # entity = user đã chọn cho phiên nhiễu này (pick_n2_user đặt $_N2_USER trong
+  # hàm noise_*, chạy ở shell hiện tại nên biến truyền được tới đây).
+  record_run "$nt" "$_N2_USER" "$t0" "$t1"
   DONE[$nt]=$(( ${DONE[$nt]:-0} + 1 ))
   rand_sleep 3 12
 done

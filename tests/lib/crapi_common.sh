@@ -59,6 +59,17 @@ crapi_curl_tls_opts() {
     --resolve "${CRAPI_HOST}:${_BFF_TUNNEL_PORT}:127.0.0.1"
 }
 
+# ── Giai đoạn C (sửa đường tắt entity) — POOL TÀI KHOẢN TẤN CÔNG ─────────────
+# Bản thu cũ chạy MỌI lượt BOLA bằng testuser01. Trong phạm vi đánh giá
+# "same-user" của đề cương (chỉ các entity TỪNG là kẻ tấn công), testuser01 gần
+# như không có cửa sổ benign riêng → mô hình học CÁCH NHẬN RA entity thay vì
+# hành vi (ml/README.md, ml/evaluate.py prepare()). Nay luân phiên kẻ tấn công
+# qua pool này (crapi_campaign_phaseb.sh đặt CRAPI_ATTACKER mỗi lượt), và
+# crapi_load_n1.sh cho CẢ pool này lưu lượng nền → same-user có đủ cửa sổ âm.
+# Mọi tài khoản là crapi-user thật đã seed (seed-job.yaml, password Test1234!).
+# Ghi đè bằng env: CRAPI_ATTACKER_POOL="u1 u2 u3".
+read -r -a CRAPI_ATTACKER_POOL <<<"${CRAPI_ATTACKER_POOL:-testuser01 testuser02 merchant01}"
+
 _SC="${SCENARIO:-crapi}"
 log()  { printf '[%s] %s\n'       "$_SC" "$*"; }
 pass() { printf '[%s] PASS: %s\n' "$_SC" "$*"; }

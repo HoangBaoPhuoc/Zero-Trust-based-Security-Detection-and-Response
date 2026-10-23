@@ -110,8 +110,19 @@ PY
 
 [[ ${#VARIANTS[@]} -gt 0 ]] || { echo "Không có biến thể khớp --groups=$SEL_GROUPS --families=${FAMILIES:-*}" >&2; exit 1; }
 
+# Giai đoạn C (sửa đường tắt entity): luân phiên kẻ tấn công BOLA qua pool —
+# giữ ĐỒNG BỘ với CRAPI_ATTACKER_POOL trong tests/lib/crapi_common.sh. CHỈ áp
+# cho họ bola: chỉ crapi_bola.sh đọc CRAPI_ATTACKER và đăng nhập bằng tài khoản
+# đó; các họ khác vẫn đăng nhập testuser01 trong script của chúng, nên đặt
+# CRAPI_ATTACKER cho chúng sẽ khiến target_entity (nhãn) LỆCH với entity thật
+# trong log → gán nhãn sai. BOLA là mục tiêu ML của đề cương; các họ khác bị
+# ml/evaluate.py prepare() loại khỏi tập đánh giá nên không cần luân phiên.
+read -r -a ATTACKER_POOL <<<"${CRAPI_ATTACKER_POOL:-testuser01 testuser02 merchant01}"
+bola_run_idx=0
+
 RUNS_FILE_EFF="${RUNS_FILE:-$HERE/runs.jsonl}"
 echo "[campaign] ${#VARIANTS[@]} biến thể × repeat=$REPEAT, gap=${GAP}s, groups=$SEL_GROUPS"
+echo "[campaign] pool kẻ tấn công BOLA (luân phiên): ${ATTACKER_POOL[*]}"
 echo "[campaign] runs.jsonl: $RUNS_FILE_EFF"
 
 # §B1f: nền N1 phải CÒN SỐNG suốt chiến dịch (tấn công XEN trong nền). Theo dõi
@@ -157,6 +168,13 @@ for ((i=1; i<=REPEAT; i++)); do
     # và DURATION_MIN nếu params có duration_min.
     declare -a ENVV=()
     ENVV+=("SCENARIO=${family}" "VARIANT_GROUP=${group}:${vid}" "CLASS=attack" "PACE=${pace}")
+    # Luân phiên kẻ tấn công cho BOLA (xem chú thích ở đầu file). TARGET_ENTITY
+    # và CRAPI_ATTACKER đặt CÙNG tài khoản để nhãn trùng entity đăng nhập thật.
+    if [[ "$family" == "bola" ]]; then
+      atk="${ATTACKER_POOL[$(( bola_run_idx % ${#ATTACKER_POOL[@]} ))]}"
+      bola_run_idx=$((bola_run_idx + 1))
+      ENVV+=("TARGET_ENTITY=$atk" "CRAPI_ATTACKER=$atk")
+    fi
     while IFS=$'\t' read -r k v; do
       [[ -z "$k" ]] && continue
       KU="VP_$(echo "$k" | tr '[:lower:]' '[:upper:]')"
