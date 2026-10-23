@@ -192,6 +192,12 @@ Nguyên tắc:
   cửa sổ 10 phút không chứa cả lượt train lẫn holdout (rò ranh giới).
 - Bộ thu chia khúc `tests/collect_chunked.py` tự đánh dấu khúc `gap` khi tunnel
   đứt — **không cộng khúc `gap` vào tổng giờ**.
+- **MỚI — cổng chất lượng:** `collect_chunked.py` nay còn đánh trạng thái
+  `low_quality` (không cộng giờ) khi luồng bff-audit câm (< `--min-bff-lines`,
+  mặc 50) hoặc non-200 envoy quá cao (> `--max-non200-pct`, mặc 20%). Đây là
+  cái bắt các khúc kiểu c0014/c0015/c0016 (bff≈0) và c0017 (non-200 43,6%) mà
+  bản cũ đánh `valid` oan. Fail-open: query lỗi thì không đánh rớt. Xem cột
+  `status` và `quality` trong sổ cái; chỉ `valid` mới dùng.
 - Mục tiêu đề cương: **≥150 giờ nền** + **≥100 lượt tấn công độc lập**.
 
 Sau mỗi vài khúc, chạy `inspect` (mục 4.1) để bắt sớm sự cố JWT/entity thay vì
@@ -218,14 +224,25 @@ python3 ml/features_v2.py inspect --chunk "$(ls -d results/b4/chunks/c0001-* | h
 > cookie phiên BFF (mặc định của `crapi_bola.sh` hiện tại) thì `cookie%` cao là
 > đúng, `jwt=0%` không sao.
 
-### 4.2 Chạy cả quy trình
+### 4.2 Lọc runs.jsonl trước khi gán nhãn (MỚI)
+
+`runs.jsonl` lẫn bản chạy thử + lượt thuộc khúc hỏng. Lọc còn lượt dùng được
+(nằm trong khúc `valid` của sổ cái) trước khi build:
 
 ```bash
-bash ml/run_collector.sh        # selftest → inspect → build (lâu) → evaluate
-# hoặc chỉ định khúc:  CHUNKS="c0001 c0002 ..." bash ml/run_collector.sh
+python3 tests/filter_runs.py --runs tests/runs.jsonl \
+    --ledger results/b4/chunks/<tag>.ledger.jsonl --out tests/runs.filtered.jsonl
+# xem báo cáo bỏ/giữ; rồi dùng tests/runs.filtered.jsonl cho bước build/evaluate.
 ```
 
-### 4.3 Đánh giá + đóng gói mô hình cho Bước 5
+### 4.3 Chạy cả quy trình
+
+```bash
+RUNS=tests/runs.filtered.jsonl bash ml/run_collector.sh   # selftest → inspect → build → evaluate
+# hoặc chỉ định khúc:  CHUNKS="c0001 c0002 ..." RUNS=tests/runs.filtered.jsonl bash ml/run_collector.sh
+```
+
+### 4.4 Đánh giá + đóng gói mô hình cho Bước 5
 
 ```bash
 python3 ml/evaluate.py --features "results/c4/features_v2/*.csv.gz" \
@@ -233,7 +250,7 @@ python3 ml/evaluate.py --features "results/c4/features_v2/*.csv.gz" \
 cat results/c4/eval/eval_report.md
 ```
 
-### 4.4 Tiêu chí ĐẠT (đề cương mục 7 — đọc trong `eval_report.md`)
+### 4.5 Tiêu chí ĐẠT (đề cương mục 7 — đọc trong `eval_report.md`)
 
 | Tiêu chí | Ngưỡng |
 |---|---|
