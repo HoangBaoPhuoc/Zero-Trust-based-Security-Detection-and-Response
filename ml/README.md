@@ -8,7 +8,23 @@ dùng recall theo cửa sổ 5 phút tại FPR 1%).
 |---|---|
 | `features_v2.py` | Log thô Giai đoạn B → bảng đặc trưng: cửa sổ 300 s trượt 60 s, nhóm A/B theo đề cương, nhãn theo lượt |
 | `evaluate.py` | Baseline / A / A+B (XGBoost), chia theo khúc có khúc đệm, PR-AUC, recall@FPR 1%, CI bootstrap theo lượt, đối chứng âm, biến thể chưa thấy, 3 phạm vi âm; `--save-model` đóng gói mô hình A+B cho Bước 5 |
+| `score.py` | **Bước 5** — dịch vụ chấm điểm rủi ro shadow mode: kéo log gần nhất từ Loki → featurize bằng `features_v2` → nạp mô hình → ghi nhật ký shadow (tùy chọn phát cảnh báo) |
 | `run_collector.sh` | Chạy cả quy trình trên máy thu |
+
+## Bước 5 — chấm điểm rủi ro (shadow mode)
+
+```bash
+python3 ml/score.py selftest                          # kiểm phần chấm điểm, không cần Loki
+python3 ml/score.py once --loki http://localhost:13100 # một chu kỳ, xác thực trên VM
+python3 ml/score.py loop --loki http://localhost:13100 --interval 60
+```
+
+Chạy SONG SONG, chỉ đọc log sau khi đã ghi → không nằm trên đường xử lý đồng bộ,
+không làm tăng độ trễ giao dịch (ràng buộc đề cương mục 7). Mặc định **shadow**
+(chỉ ghi `results/c4/shadow/shadow_scores.jsonl` để đo false positive thực tế).
+`--post` phát cảnh báo tới incident-analyzer — còn TẠM: cần endpoint tạo evidence
+cho cảnh báo do ML phát hiện (xem `HUONG-DAN-TIEP-THEO-VM.md` §5). Cần mô hình
+đã đóng gói (`evaluate.py --save-model`) trước.
 
 ## Đóng gói mô hình cho Bước 5 (dịch vụ chấm điểm)
 

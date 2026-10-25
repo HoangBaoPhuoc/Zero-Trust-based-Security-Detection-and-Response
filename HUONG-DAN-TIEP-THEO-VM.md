@@ -271,8 +271,17 @@ cat results/c4/eval/eval_report.md
 
 ## 5. GIAI ĐOẠN 4 — Bước 5 đề cương (dịch vụ chấm điểm shadow mode)
 
-Làm SAU khi mục 4 đạt. **CHƯA viết — cần thiết kế.** Yêu cầu đề cương (mục 6
-Bước 5, mục 7 "Ảnh hưởng vận hành"):
+Làm SAU khi mục 4 đạt. **Khung đã có ở `ml/score.py`** — cần xác thực trên VM
+(có Loki sống) và chốt phần phát cảnh báo. Chạy:
+
+```bash
+python3 ml/score.py selftest                           # kiểm chấm điểm (không cần Loki)
+python3 ml/score.py once --loki http://localhost:13100 # XÁC THỰC một chu kỳ trên VM trước
+python3 ml/score.py loop --loki http://localhost:13100 --interval 60   # shadow liên tục
+```
+
+Mặc định **shadow** (chỉ ghi `results/c4/shadow/shadow_scores.jsonl`). Yêu cầu
+đề cương (mục 6 Bước 5, mục 7 "Ảnh hưởng vận hành"):
 
 - Dịch vụ chấm điểm chạy **song song, không chặn giao dịch** (không nằm trên
   đường xử lý đồng bộ).
@@ -280,14 +289,15 @@ Bước 5, mục 7 "Ảnh hưởng vận hành"):
   **chính `ml/features_v2.py`** (phải giống hệt lúc train) → nạp
   `ml/model/bola_detector.joblib` → chấm điểm → cửa sổ vượt ngưỡng thì phát
   cảnh báo kèm mức ưu tiên.
-- Dùng endpoint có sẵn `POST /evidence/{id}/risk-score` của
-  `services/incident-analyzer` (có thể cần thêm endpoint tạo evidence mới cho
-  cảnh báo do ML phát hiện mà chưa có bằng chứng từ rule Grafana).
+- `--post` của `ml/score.py` gọi `POST /evidence/{id}/risk-score` của
+  `services/incident-analyzer` — nhưng endpoint đó gắn điểm vào MỘT evidence ĐÃ
+  CÓ; cảnh báo do ML tự phát hiện (chưa có evidence) **cần thêm endpoint tạo
+  evidence mới**. Đây là phần CÒN LẠI phải code sau khi chốt thiết kế.
 - Chạy **shadow mode** một thời gian để đo false positive thực tế; đo và báo
   cáo **độ trễ phụ trội** riêng.
 
-Trước khi code Bước 5, hỏi lại người hướng dẫn về: đặt service ở cloud nào,
-có thêm endpoint tạo evidence không, cơ chế gửi cảnh báo (email/incident).
+Cần chốt với người hướng dẫn trước khi hoàn thiện `--post`: đặt service ở cloud
+nào, thêm endpoint tạo evidence ra sao, cơ chế gửi cảnh báo (email/incident).
 
 ---
 
