@@ -4,9 +4,11 @@
 > `ztlab-os`** (nơi có cụm k8s, Loki, log thô). Mục tiêu: xác thực các sửa đổi
 > vừa đẩy lên, rồi thu lại dữ liệu sạch cho mô hình BOLA theo đề cương KLTN.
 >
-> Cập nhật: 2026-10-23. Nhánh: `master`. Hai commit liên quan:
-> `82746423` (đóng gói mô hình + khung SV2) và `b2ae6d61` (sửa đường tắt entity
-> + lỗi 503). `git log --oneline -3` phải thấy hai commit này ở trên cùng.
+> Cập nhật: 2026-10-25. Nhánh: `feat/phase-c-fixes` (chưa merge vào `master` —
+> sau khi merge PR thì dùng `master`). Các commit liên quan (nhận theo tiêu đề,
+> mã hash có thể đổi khi rebase/merge): "đóng gói mô hình cho Bước 5 + khôi phục
+> khung SV2", "sửa đường tắt entity trong kịch bản thu + lỗi 503 brute_force",
+> "cổng chất lượng khúc + lọc runs.jsonl", "khung dịch vụ chấm điểm rủi ro".
 
 ---
 
@@ -21,7 +23,7 @@
 - **Gán nhãn offline** từ `tests/runs.jsonl` theo `(entity, [t_start, t_end])` —
   KHÔNG tiêm marker vào traffic.
 
-### Tại sao phải thu lại (lỗi đã sửa ở commit `b2ae6d61`)
+### Tại sao phải thu lại (lỗi đã sửa ở commit "sửa đường tắt entity…")
 
 Bộ dữ liệu cũ (~49 giờ) **dính lỗi đường tắt (shortcut learning)**: mọi lượt
 BOLA đều chạy bằng `testuser01`, nên mô hình học "nhận ra `testuser01`" thay vì
@@ -38,7 +40,7 @@ lại.** Các sửa đổi ở commit này CHỈ có tác dụng cho đợt thu 
 | `tests/crapi_noise_n2.sh` | Nhiễu N2 rải qua pool, `record_run` ghi đúng entity. |
 | `tests/crapi_brute_force.sh` | 503/5xx của Keycloak → **abort**, không ghi `status=attack`. |
 
-Và commit `82746423`: `ml/evaluate.py --save-model` đóng gói mô hình A+B (+ cột
+Và commit "đóng gói mô hình cho Bước 5": `ml/evaluate.py --save-model` đóng gói mô hình A+B (+ cột
 đặc trưng + ngưỡng FPR 1%) ra `ml/model/bola_detector.joblib` cho Bước 5.
 
 ---
@@ -49,8 +51,8 @@ Chạy trên VM. **Dừng ngay nếu một bước thất bại**, đừng chạ
 
 ```bash
 cd ~/Zero-Trust-based-Security-Detection-and-Response   # đường dẫn repo trên VM
-git fetch origin && git checkout master && git pull --ff-only origin master
-git log --oneline -3            # phải thấy b2ae6d61 và 82746423
+git fetch origin && git checkout feat/phase-c-fixes && git pull --ff-only origin feat/phase-c-fixes
+git log --oneline -6            # phải thấy các commit "Giai đoạn C" nêu ở đầu file
 ```
 
 ### 1.1 Cụm và cross-cloud sống
@@ -198,6 +200,8 @@ Nguyên tắc:
   cái bắt các khúc kiểu c0014/c0015/c0016 (bff≈0) và c0017 (non-200 43,6%) mà
   bản cũ đánh `valid` oan. Fail-open: query lỗi thì không đánh rớt. Xem cột
   `status` và `quality` trong sổ cái; chỉ `valid` mới dùng.
+  `phaseb_collect_loop.sh` **dừng ngay** khi gặp khúc `low_quality` (đổi bằng
+  `LOWQ_STREAK_MAX=n`) — kiểm WireGuard/bff-audit rồi mới chạy tiếp.
 - Mục tiêu đề cương: **≥150 giờ nền** + **≥100 lượt tấn công độc lập**.
 
 Sau mỗi vài khúc, chạy `inspect` (mục 4.1) để bắt sớm sự cố JWT/entity thay vì

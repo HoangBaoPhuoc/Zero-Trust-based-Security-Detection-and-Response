@@ -34,8 +34,13 @@ def iso_to_epoch(s: str) -> float:
 
 
 def valid_windows(ledger_paths: list[str]) -> list[tuple[float, float, str]]:
-    """[(t_start, t_end, chunk_id)] của các khúc status=valid trong các sổ cái."""
-    wins = []
+    """[(t_start, t_end, chunk_id)] của các khúc status=valid trong các sổ cái.
+
+    Gộp mọi bản ghi theo chunk_id, bản ghi SAU ghi đè bản trước (giống
+    phaseb_collect_loop.sh và collect_chunked.py --report): khúc collect_chunked
+    đánh `valid` nhưng phaseb_chunk_postprocess.sh hạ xuống `aborted` (export
+    rỗng) phải bị loại, không được giữ theo bản `end` đầu tiên."""
+    by = {}
     for p in ledger_paths:
         for line in open(p):
             line = line.strip()
@@ -45,8 +50,11 @@ def valid_windows(ledger_paths: list[str]) -> list[tuple[float, float, str]]:
                 r = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if r.get("event") == "end" and r.get("status") == "valid":
-                wins.append((float(r["t_start"]), float(r["t_end"]), r.get("chunk_id", "?")))
+            if "chunk_id" not in r or "event" not in r:
+                continue
+            by.setdefault(r["chunk_id"], {}).update({k: v for k, v in r.items() if k != "event"})
+    wins = [(float(c["t_start"]), float(c["t_end"]), cid) for cid, c in by.items()
+            if c.get("status") == "valid"]
     return sorted(wins)
 
 
