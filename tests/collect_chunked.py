@@ -10,7 +10,11 @@ trong một vòng, nên đợt thu phải sống sót qua sự cố thay vì gi�
     - ``valid``   — pipeline log của CẢ HAI cloud liên tục suốt ``[t_start, t_end]``;
     - ``gap``     — có khoảng > ``--max-gap`` giây (mặc định 60) không liên tục ở ít nhất một cloud;
     - ``aborted`` — khúc bị gián đoạn (Ctrl-C/SIGTERM, workload chết, bộ thu chết giữa khúc).
-  Chỉ ``valid`` được cộng vào tổng giờ.
+    - ``low_quality`` — pipeline liên tục NHƯNG dữ liệu không dùng được: bff-audit câm
+      (< ``--min-bff-lines``) hoặc non-200 envoy quá cao (> ``--max-non200-pct``). Bắt
+      các khúc như c0014/c0015/c0016 (bff≈0) và c0017 (non-200 43,6%) mà trước đây
+      bị đánh ``valid`` oan. Fail-open: query lỗi → không đánh rớt. Tắt: ``--no-quality-gate``.
+  Chỉ ``valid`` được cộng vào tổng giờ (``gap``/``aborted``/``low_quality`` không tính).
 * Hai tiêu chí khoảng trống, vì một mình hậu kiểm là KHÔNG đủ:
     1. **Độ tươi (trực tiếp, mỗi ``--probe-interval`` s):** Loki có dòng log mới của từng cloud
        trong ``--fresh-window`` giây gần nhất không. Cần vì Promtail giữ batch và GỬI BÙ khi đường
@@ -162,6 +166,18 @@ class Loki:
         for r in d["data"]["result"]:
             out[r["metric"].get("cloud", "?")] = int(float(r["value"][1]))
         return out
+
+    def count(self, inner, t_end):
+        """sum(count_over_time(<inner>)) tại t_end. <inner> gồm cả selector,
+        line-filter và [range]. Trả None nếu không hỏi được (fail-open: bên gọi
+        coi None là 'không đủ bằng chứng để đánh rớt')."""
+        try:
+            d = self._get("/loki/api/v1/query",
+                          {"query": f"sum(count_over_time({inner}))", "time": f"{int(t_end)}000000000"})
+            r = d["data"]["result"]
+            return int(float(r[0]["value"][1])) if r else 0
+        except Exception:
+            return None
 
     def bucket_gaps(self, cloud, t0, t1, bucket_s, max_gap_s):
         """Các khoảng rỗng liên tiếp > max_gap_s (giây) của một cloud trong [t0, t1]."""
@@ -320,10 +336,40 @@ def run_chunk(ledger, loki, args, seq):
                     [f"{c} thiếu log {int(g[1] - g[0])}s" for c in CLOUDS for g in posthoc[c]["gaps"]])
             else:
                 status = "valid"
+
+    # ── CỔNG CHẤT LƯỢNG (Giai đoạn C, 2026-10) ───────────────────────────────
+    # Tính liên tục pipeline (ở trên) KHÔNG bằng dữ liệu DÙNG ĐƯỢC: review đợt
+    # 150h ghi c0014/c0015 (bff=0), c0016 (bff=5), c0017 (non-200 43,6%) vẫn bị
+    # đánh "valid" vì log pipeline liên tục. Thêm hai kiểm chất lượng, trạng
+    # thái mới `low_quality` (KHÔNG cộng giờ, tách khỏi `gap` để minh bạch):
+    #   (a) luồng bff-audit đủ dòng — nếu câm thì không tính được đặc trưng theo
+    #       phiên (sid), khúc vô dụng cho ML;
+    #   (b) tỉ lệ non-200 envoy — bắt lưu lượng hỏng nặng như c0017.
+    # FAIL-OPEN: query lỗi (None) hoặc không có mẫu → KHÔNG đánh rớt (một truy
+    # vấn sai không được phép làm hỏng cả đợt thu). Tắt hẳn bằng --no-quality-gate.
+    quality = {}
+    if status == "valid" and not args.no_quality_gate:
+        w = int(t_end - t_start)
+        bff = loki.count(f'{args.bff_selector} [{w}s]', t_end)
+        etot = loki.count(f'{args.envoy_selector} [{w}s]', t_end)
+        enon = loki.count(f'{args.envoy_selector} |~ `{args.non200_regex}` [{w}s]', t_end)
+        quality = {"bff": bff, "envoy_total": etot, "envoy_non200": enon}
+        qbad = []
+        if bff is not None and bff < args.min_bff_lines:
+            qbad.append(f"bff-audit chỉ {bff} dòng (< {args.min_bff_lines}) — pipeline BFF câm, "
+                        f"đặc trưng theo phiên không tính được")
+        if etot and etot > 0 and enon is not None:
+            pct = round(100.0 * enon / etot, 2)
+            quality["non200_pct"] = pct
+            if pct > args.max_non200_pct:
+                qbad.append(f"non-200 envoy {pct}% (> {args.max_non200_pct}%) — lưu lượng hỏng nặng")
+        if qbad:
+            status, reason = "low_quality", "; ".join(qbad)
+
     hours = round((t_end - t_start) / 3600, 4) if status == "valid" else 0.0
     rec = {"event": "end", "chunk_id": chunk_id, "t_start": t_start, "t_end": t_end,
            "t_start_iso": iso(t_start), "t_end_iso": iso(t_end), "cloud": "+".join(CLOUDS),
-           "status": status, "hours": hours, "reason": reason,
+           "status": status, "hours": hours, "reason": reason, "quality": quality,
            "fresh_violations": fresh_violations, "probe_blind": blind, "posthoc": posthoc,
            "params": {"max_gap": args.max_gap, "fresh_window": args.fresh_window, "bucket": args.bucket}}
     ledger.append(rec)
@@ -362,6 +408,17 @@ def main():
                      help="§B6 mục 3.1: giây nghỉ giữa các lần thử hậu kiểm")
     ap.add_argument("--pause", type=float, default=10, help="nghỉ giữa hai khúc (s)")
     ap.add_argument("--precondition-timeout", type=float, default=1800)
+    # Cổng chất lượng (Giai đoạn C) — trạng thái low_quality, fail-open.
+    ap.add_argument("--no-quality-gate", action="store_true",
+                     help="tắt kiểm chất lượng (bff câm / non-200 cao); chỉ còn kiểm liên tục pipeline")
+    ap.add_argument("--min-bff-lines", type=int, default=50,
+                     help="số dòng bff-audit tối thiểu trong khúc; dưới mức → low_quality (bắt c0014/15/16)")
+    ap.add_argument("--max-non200-pct", type=float, default=20.0,
+                     help="trần %% non-200 envoy; vượt → low_quality (bắt c0017 43,6%%). Thô: gồm cả deny tấn công nên để cao, chỉ bắt hỏng nặng")
+    ap.add_argument("--bff-selector", default='{job="bff-audit"}', help="selector LogQL luồng BFF audit")
+    ap.add_argument("--envoy-selector", default='{job="envoy-access"}', help="selector LogQL luồng Envoy access")
+    ap.add_argument("--non200-regex", default='response_code"?[:=] ?"?[45][0-9][0-9]',
+                     help="regex đếm dòng envoy non-200; nếu không khớp định dạng log → đếm 0 → fail-open (không đánh rớt)")
     ap.add_argument("--report", action="store_true")
     ap.add_argument("workload", nargs=argparse.REMAINDER, help="-- <lệnh sinh tải chạy suốt mỗi khúc>")
     args = ap.parse_args()

@@ -228,7 +228,12 @@ run_session() { # <profile> <deadline_epoch>
         vu="${VICTIM_POOL[RANDOM % ${#VICTIM_POOL[@]}]}"
         jar="$(crapi_login "$vu" 'Test1234!' 2>/dev/null)" || jar="$(crapi_login testuser01 'Test1234!' 2>/dev/null)" || return 0
       else
-        jar="$(crapi_login testuser01 'Test1234!' 2>/dev/null)" || return 0
+        # Giai đoạn C (sửa đường tắt entity): các phiên viewer còn lại rải qua
+        # POOL kẻ tấn công (testuser01, testuser02, merchant01) thay vì luôn
+        # testuser01 — để testuser02/merchant01 CÓ cửa sổ benign, nhờ đó phạm vi
+        # same-user của đề cương đủ mẫu âm để đánh giá (xem crapi_common.sh).
+        bu="${CRAPI_ATTACKER_POOL[RANDOM % ${#CRAPI_ATTACKER_POOL[@]}]}"
+        jar="$(crapi_login "$bu" 'Test1234!' 2>/dev/null)" || jar="$(crapi_login testuser01 'Test1234!' 2>/dev/null)" || return 0
       fi ;;
   esac
   local own_uuid; own_uuid="$(get_own_vehicle "$jar")"   # §B1c: uuid xe của mình (nếu có)

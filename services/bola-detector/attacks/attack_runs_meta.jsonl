@@ -1,0 +1,4 @@
+{"attack_run_id": "891f1094-3a5b-4fc7-a08a-5eed5b5ff99e", "attack_class": "BOLA", "start_ts": 1789225682.1106763, "end_ts": 1789225688.2436507, "is_test_only_variant": false}
+{"attack_run_id": "14551f98-0931-4fe2-a0d8-205dd10d12e4", "attack_class": "BFLA", "start_ts": 1789225717.0488102, "end_ts": 1789225717.101383, "is_test_only_variant": false}
+{"attack_run_id": "0133024c-adab-437e-b3b2-9a605a52e9a3", "attack_class": "BOLA", "start_ts": 1789226066.148765, "end_ts": 1789226072.337129, "is_test_only_variant": true, "variant": "random_order_random_delay"}
+{"attack_run_id": "615848a8-a5f6-4d9a-8557-a4a30792835a", "attack_class": "BOLA", "start_ts": 1789226088.5149407, "end_ts": 1789226092.8284528, "is_test_only_variant": true, "variant": "mixed_with_valid_traffic"}

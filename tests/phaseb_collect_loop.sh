@@ -22,9 +22,15 @@ RESULTS_ROUND="${RESULTS_ROUND:-b4}"
 GAP_STREAK_MAX=3
 ABORT_STREAK_MAX=1   # §C2 mục 2.4: bff=0 → khúc vô dụng hoàn toàn (build_sid_map rỗng), dừng ngay
 ABORTED_RATIO_MAX=0.20
+# Giai đoạn C: collect_chunked.py đánh `low_quality` khi bff-audit câm (bff≈0,
+# kiểu c0014/c0015 — WireGuard đứt) hoặc non-200 quá cao. Export của khúc như
+# vậy KHÔNG rỗng (envoy vẫn có log) nên ABORT_STREAK_MAX ở trên không bắt được
+# — phải đếm riêng, nếu không vòng thu sẽ thu mãi khúc hỏng mà không cộng giờ.
+LOWQ_STREAK_MAX="${LOWQ_STREAK_MAX:-1}"
 
 gap_streak=0
 aborted_streak=0
+lowq_streak=0
 chunks_done=0
 
 log() { echo "[collect-loop] $(date -u +%FT%TZ) $*"; }
@@ -136,6 +142,16 @@ PY
     continue   # khúc gap: không export/featurize (không có dữ liệu hợp lệ)
   fi
   gap_streak=0
+
+  if [[ "$STATUS" == "low_quality" ]]; then
+    lowq_streak=$((lowq_streak+1))
+    log "⚠ low_quality liên tiếp=$lowq_streak/$LOWQ_STREAK_MAX (xem cột reason/quality trong $RUNS_FILE)"
+    if [[ "$lowq_streak" -ge "$LOWQ_STREAK_MAX" ]]; then
+      log "KHÚC LOW_QUALITY — dừng, báo người dùng (kiểm WireGuard/bff-audit trước khi chạy tiếp)."; exit 1
+    fi
+    continue   # khúc low_quality: không export/featurize (dữ liệu không dùng được)
+  fi
+  lowq_streak=0
 
   log "hậu kỳ (export .gz → kiểm không rỗng → featurize 60/300/600)..."
   if ! bash tests/phaseb_chunk_postprocess.sh "$CID"; then
